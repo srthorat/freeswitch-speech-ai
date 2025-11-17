@@ -445,6 +445,547 @@ For full API documentation, see: `modules/mod_deepgram_transcribe/README.md`
 
 ---
 
+## Configuration Guide for mod_deepgram_transcribe
+
+### Method 1: Environment Variables (Container-Wide)
+
+Set Deepgram API key and default configuration when starting the container:
+
+```bash
+docker run -d --name fs \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  -e DEEPGRAM_API_KEY=your-deepgram-api-key-here \
+  -e DEEPGRAM_SPEECH_MODEL=phonecall \
+  -e DEEPGRAM_SPEECH_TIER=nova \
+  srt2011/freeswitch-mod-deepgram-transcribe:latest
+```
+
+**Note**: Environment variables set at container level apply to ALL calls. For per-call configuration, use dialplan or fs_cli methods below.
+
+---
+
+### Method 2: Dialplan Configuration (Automatic Transcription)
+
+Add to `/usr/local/freeswitch/conf/dialplan/default.xml` or create a new file in `/usr/local/freeswitch/conf/dialplan/default/`:
+
+#### Basic Transcription on All Inbound Calls
+
+```xml
+<!-- File: /usr/local/freeswitch/conf/dialplan/default/01_deepgram_auto_transcribe.xml -->
+<include>
+  <extension name="auto_transcribe_inbound" continue="true">
+    <condition field="destination_number" expression="^(1\d{3})$">
+      <!-- Set Deepgram API credentials -->
+      <action application="set" data="DEEPGRAM_API_KEY=your-api-key-here"/>
+
+      <!-- Configure transcription model -->
+      <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+      <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+
+      <!-- Enable features -->
+      <action application="set" data="DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION=true"/>
+      <action application="set" data="DEEPGRAM_SPEECH_NUMERALS=true"/>
+
+      <!-- Start transcription with interim results -->
+      <action application="uuid_deepgram_transcribe" data="start en-US interim"/>
+    </condition>
+  </extension>
+</include>
+```
+
+**Note**: `continue="true"` allows the call to proceed to other extensions after starting transcription.
+
+#### Advanced: Speaker Diarization + NER + Keyword Boosting
+
+```xml
+<extension name="sales_call_transcribe" continue="true">
+  <condition field="destination_number" expression="^(2\d{3})$">
+    <!-- API Key -->
+    <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+
+    <!-- Use meeting model with Nova-2 tier for best accuracy -->
+    <action application="set" data="DEEPGRAM_SPEECH_MODEL=meeting"/>
+    <action application="set" data="DEEPGRAM_SPEECH_TIER=nova-2"/>
+
+    <!-- Enable speaker diarization (identify different speakers) -->
+    <action application="set" data="DEEPGRAM_SPEECH_DIARIZE=true"/>
+
+    <!-- Enable Named Entity Recognition -->
+    <action application="set" data="DEEPGRAM_SPEECH_NER=true"/>
+
+    <!-- Boost important sales keywords (intensity 1-10) -->
+    <action application="set" data="DEEPGRAM_SPEECH_KEYWORDS=pricing:5,discount:4,payment:3,contract:3"/>
+
+    <!-- Enable automatic punctuation and numeral conversion -->
+    <action application="set" data="DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION=true"/>
+    <action application="set" data="DEEPGRAM_SPEECH_NUMERALS=true"/>
+
+    <!-- Get 3 alternative transcription hypotheses -->
+    <action application="set" data="DEEPGRAM_SPEECH_ALTERNATIVES=3"/>
+
+    <!-- Start transcription -->
+    <action application="uuid_deepgram_transcribe" data="start en-US interim"/>
+  </condition>
+</extension>
+```
+
+#### PCI Compliance: Redact Sensitive Information
+
+```xml
+<extension name="payment_call_transcribe" continue="true">
+  <condition field="destination_number" expression="^(3\d{3})$">
+    <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+    <action application="set" data="DEEPGRAM_SPEECH_MODEL=finance"/>
+    <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+
+    <!-- Redact PCI data, SSN, and all numbers -->
+    <action application="set" data="DEEPGRAM_SPEECH_REDACT=pci,ssn,numbers"/>
+
+    <!-- Enable profanity filter -->
+    <action application="set" data="DEEPGRAM_SPEECH_PROFANITY_FILTER=true"/>
+
+    <!-- Start transcription -->
+    <action application="uuid_deepgram_transcribe" data="start en-US interim"/>
+  </condition>
+</extension>
+```
+
+#### Custom Model for Specific Domain
+
+```xml
+<extension name="medical_transcribe" continue="true">
+  <condition field="destination_number" expression="^(4\d{3})$">
+    <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+
+    <!-- Use medical model -->
+    <action application="set" data="DEEPGRAM_SPEECH_MODEL=medical"/>
+    <action application="set" data="DEEPGRAM_SPEECH_TIER=enhanced"/>
+
+    <!-- Or use your custom trained model -->
+    <!-- <action application="set" data="DEEPGRAM_SPEECH_CUSTOM_MODEL=your-model-id"/> -->
+
+    <!-- Boost medical terminology -->
+    <action application="set" data="DEEPGRAM_SPEECH_KEYWORDS=diagnosis:5,prescription:4,symptoms:3"/>
+
+    <!-- Enable NER for medical entities -->
+    <action application="set" data="DEEPGRAM_SPEECH_NER=true"/>
+
+    <!-- Start transcription -->
+    <action application="uuid_deepgram_transcribe" data="start en-US interim"/>
+  </condition>
+</extension>
+```
+
+#### Search for Keywords in Transcript
+
+```xml
+<extension name="compliance_monitoring" continue="true">
+  <condition field="destination_number" expression="^(5\d{3})$">
+    <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+    <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+
+    <!-- Search for compliance keywords in transcript -->
+    <action application="set" data="DEEPGRAM_SPEECH_SEARCH=cancel,refund,complaint,lawsuit"/>
+
+    <!-- Tag for tracking/organization -->
+    <action application="set" data="DEEPGRAM_SPEECH_TAG=compliance-call"/>
+
+    <!-- Start transcription -->
+    <action application="uuid_deepgram_transcribe" data="start en-US interim"/>
+  </condition>
+</extension>
+```
+
+#### Voice Activity Detection (VAD) Configuration
+
+```xml
+<extension name="vad_transcribe" continue="true">
+  <condition field="destination_number" expression="^(6\d{3})$">
+    <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+    <action application="set" data="DEEPGRAM_SPEECH_MODEL=voicemail"/>
+
+    <!-- Set endpointing: wait 2000ms of silence before detecting end of speech -->
+    <action application="set" data="DEEPGRAM_SPEECH_ENDPOINTING=2000"/>
+
+    <!-- VAD turnoff: wait 1000ms before turning off voice activity detection -->
+    <action application="set" data="DEEPGRAM_SPEECH_VAD_TURNOFF=1000"/>
+
+    <!-- Start transcription -->
+    <action application="uuid_deepgram_transcribe" data="start en-US interim"/>
+  </condition>
+</extension>
+```
+
+#### Apply Dialplan Changes
+
+After editing dialplan files:
+
+```bash
+# Inside container
+docker exec -it fs fs_cli -x "reloadxml"
+
+# Or from fs_cli
+freeswitch@internal> reloadxml
+```
+
+---
+
+### Method 3: fs_cli Commands (Manual Per-Call Control)
+
+Control transcription manually for specific calls using fs_cli:
+
+#### Start Transcription on Active Call
+
+```bash
+# Enter fs_cli
+docker exec -it fs fs_cli
+
+# Show active calls to get UUID
+freeswitch@internal> show channels
+
+# Set variables for a specific call
+freeswitch@internal> uuid_setvar <call-uuid> DEEPGRAM_API_KEY your-api-key
+freeswitch@internal> uuid_setvar <call-uuid> DEEPGRAM_SPEECH_MODEL phonecall
+freeswitch@internal> uuid_setvar <call-uuid> DEEPGRAM_SPEECH_TIER nova
+freeswitch@internal> uuid_setvar <call-uuid> DEEPGRAM_SPEECH_DIARIZE true
+freeswitch@internal> uuid_setvar <call-uuid> DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION true
+
+# Start transcription with interim results
+freeswitch@internal> uuid_deepgram_transcribe <call-uuid> start en-US interim
+
+# Stop transcription
+freeswitch@internal> uuid_deepgram_transcribe <call-uuid> stop
+```
+
+#### One-liner from Shell
+
+```bash
+# Start transcription
+docker exec -it fs fs_cli -x "uuid_setvar <uuid> DEEPGRAM_API_KEY your-key"
+docker exec -it fs fs_cli -x "uuid_setvar <uuid> DEEPGRAM_SPEECH_MODEL phonecall"
+docker exec -it fs fs_cli -x "uuid_deepgram_transcribe <uuid> start en-US interim"
+
+# Stop transcription
+docker exec -it fs fs_cli -x "uuid_deepgram_transcribe <uuid> stop"
+```
+
+---
+
+### Method 4: FreeSWITCH Service Configuration (Supervised/Systemd)
+
+#### Option A: Docker Compose with Environment Variables
+
+Create `docker-compose.yml`:
+
+```yaml
+version: '3.8'
+
+services:
+  freeswitch:
+    image: srt2011/freeswitch-mod-deepgram-transcribe:latest
+    container_name: freeswitch-transcribe
+    restart: unless-stopped
+
+    # Network ports
+    ports:
+      - "5060:5060/tcp"
+      - "5060:5060/udp"
+      - "5080:5080/tcp"
+      - "5080:5080/udp"
+      - "8021:8021/tcp"
+      - "16384-16484:16384-16484/udp"
+
+    # Deepgram configuration
+    environment:
+      # Required: Deepgram API Key
+      DEEPGRAM_API_KEY: "${DEEPGRAM_API_KEY}"
+
+      # Optional: Default transcription settings
+      DEEPGRAM_SPEECH_MODEL: "phonecall"
+      DEEPGRAM_SPEECH_TIER: "nova"
+      DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION: "true"
+      DEEPGRAM_SPEECH_NUMERALS: "true"
+
+      # FreeSWITCH settings
+      FREESWITCH_LOG_LEVEL: "INFO"
+
+    # Persist data
+    volumes:
+      - ./conf:/usr/local/freeswitch/conf
+      - ./logs:/usr/local/freeswitch/log
+      - ./recordings:/usr/local/freeswitch/recordings
+      - ./storage:/usr/local/freeswitch/storage
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "fs_cli", "-x", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Web UI for monitoring
+  freeswitch-ui:
+    image: nginx:alpine
+    container_name: freeswitch-ui
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./web:/usr/share/nginx/html
+```
+
+Create `.env` file:
+
+```bash
+# .env file - DO NOT commit to git
+DEEPGRAM_API_KEY=your-actual-deepgram-api-key-here
+```
+
+Start service:
+
+```bash
+# Start in background
+docker-compose up -d
+
+# View logs
+docker-compose logs -f freeswitch
+
+# Stop service
+docker-compose down
+```
+
+#### Option B: Systemd Service (Linux Host)
+
+Create `/etc/systemd/system/freeswitch-deepgram.service`:
+
+```ini
+[Unit]
+Description=FreeSWITCH with Deepgram Transcription
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10s
+TimeoutStartSec=0
+
+# Load environment from file
+EnvironmentFile=/etc/freeswitch/deepgram.env
+
+# Docker run command
+ExecStartPre=-/usr/bin/docker stop freeswitch-transcribe
+ExecStartPre=-/usr/bin/docker rm freeswitch-transcribe
+
+ExecStart=/usr/bin/docker run --rm \
+  --name freeswitch-transcribe \
+  -p 5060:5060/tcp \
+  -p 5060:5060/udp \
+  -p 5080:5080/tcp \
+  -p 5080:5080/udp \
+  -p 8021:8021/tcp \
+  -p 16384-16484:16384-16484/udp \
+  -e DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY} \
+  -e DEEPGRAM_SPEECH_MODEL=${DEEPGRAM_SPEECH_MODEL} \
+  -e DEEPGRAM_SPEECH_TIER=${DEEPGRAM_SPEECH_TIER} \
+  -v /var/lib/freeswitch/conf:/usr/local/freeswitch/conf \
+  -v /var/lib/freeswitch/logs:/usr/local/freeswitch/log \
+  srt2011/freeswitch-mod-deepgram-transcribe:latest
+
+ExecStop=/usr/bin/docker stop freeswitch-transcribe
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Create environment file `/etc/freeswitch/deepgram.env`:
+
+```bash
+DEEPGRAM_API_KEY=your-deepgram-api-key-here
+DEEPGRAM_SPEECH_MODEL=phonecall
+DEEPGRAM_SPEECH_TIER=nova
+```
+
+Enable and start service:
+
+```bash
+# Reload systemd
+sudo systemctl daemon-reload
+
+# Enable service (start on boot)
+sudo systemctl enable freeswitch-deepgram
+
+# Start service
+sudo systemctl start freeswitch-deepgram
+
+# Check status
+sudo systemctl status freeswitch-deepgram
+
+# View logs
+sudo journalctl -u freeswitch-deepgram -f
+
+# Restart service
+sudo systemctl restart freeswitch-deepgram
+
+# Stop service
+sudo systemctl stop freeswitch-deepgram
+```
+
+---
+
+### Deepgram Feature Configuration Reference
+
+#### All Available Channel Variables
+
+| Variable | Values | Example | Description |
+|----------|--------|---------|-------------|
+| `DEEPGRAM_API_KEY` | string | `abc123...` | **Required**: Your Deepgram API key |
+| `DEEPGRAM_SPEECH_MODEL` | general, meeting, phonecall, voicemail, finance, conversationalai, video, medical, custom | `phonecall` | Model optimized for use case |
+| `DEEPGRAM_SPEECH_TIER` | base, enhanced, nova, nova-2 | `nova` | Model tier (accuracy vs speed) |
+| `DEEPGRAM_SPEECH_CUSTOM_MODEL` | string | `my-model-id` | Custom trained model ID |
+| `DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION` | true/false | `true` | Add punctuation automatically |
+| `DEEPGRAM_SPEECH_PROFANITY_FILTER` | true/false | `true` | Filter profanity from output |
+| `DEEPGRAM_SPEECH_REDACT` | pci, ssn, numbers (comma-separated) | `pci,ssn` | Redact sensitive information |
+| `DEEPGRAM_SPEECH_DIARIZE` | true/false | `true` | Enable speaker identification |
+| `DEEPGRAM_SPEECH_DIARIZE_VERSION` | string | `latest` | Diarization model version |
+| `DEEPGRAM_SPEECH_NER` | true/false | `true` | Named Entity Recognition |
+| `DEEPGRAM_SPEECH_ALTERNATIVES` | 1-10 | `3` | Number of transcript alternatives |
+| `DEEPGRAM_SPEECH_NUMERALS` | true/false | `true` | Convert spoken numbers to digits |
+| `DEEPGRAM_SPEECH_SEARCH` | comma-separated keywords | `cancel,refund` | Search for keywords |
+| `DEEPGRAM_SPEECH_KEYWORDS` | word:intensity pairs | `VoIP:3,SIP:2` | Boost keyword recognition |
+| `DEEPGRAM_SPEECH_REPLACE` | find:replace pairs | `um:,uh:` | Replace words in transcript |
+| `DEEPGRAM_SPEECH_TAG` | string | `sales-call` | Custom tag for organization |
+| `DEEPGRAM_SPEECH_ENDPOINTING` | milliseconds | `2000` | Silence duration to detect end |
+| `DEEPGRAM_SPEECH_VAD_TURNOFF` | milliseconds | `1000` | VAD turnoff delay |
+
+#### Language Codes
+
+Common language codes for the `start` command:
+
+- English: `en-US`, `en-GB`, `en-AU`, `en-IN`
+- Spanish: `es`, `es-419`
+- French: `fr`, `fr-CA`
+- German: `de`
+- Portuguese: `pt-BR`
+- Italian: `it`
+- Japanese: `ja`
+- Chinese: `zh`, `zh-CN`
+
+For complete list: [Deepgram Language Support](https://developers.deepgram.com/docs/language)
+
+---
+
+### Complete Example: Production Dialplan
+
+Comprehensive dialplan with validation and error handling:
+
+```xml
+<!-- File: /usr/local/freeswitch/conf/dialplan/default/deepgram_production.xml -->
+<include>
+  <!-- Auto-transcribe all inbound calls with validation -->
+  <extension name="deepgram_production_transcribe" continue="true">
+    <condition field="destination_number" expression="^(1\d{3}|2\d{3}|3\d{3})$">
+
+      <!-- Step 1: Validate API key is set -->
+      <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+      <action application="log" data="INFO Deepgram API Key Status: ${DEEPGRAM_API_KEY:+SET:NOT_SET}"/>
+
+      <!-- Step 2: Configure model based on destination -->
+      <action application="set" data="DEEPGRAM_SPEECH_MODEL=${cond(${destination_number} =~ /^1/ ? phonecall : ${cond(${destination_number} =~ /^2/ ? meeting : finance)})}"/>
+
+      <!-- Step 3: Set tier based on business hours -->
+      <action application="set" data="DEEPGRAM_SPEECH_TIER=${cond(${strftime(%w)} =~ /^[1-5]$/ && ${strftime(%H)} >= 09 && ${strftime(%H)} < 17 ? nova : base)}"/>
+
+      <!-- Step 4: Enable core features -->
+      <action application="set" data="DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION=true"/>
+      <action application="set" data="DEEPGRAM_SPEECH_NUMERALS=true"/>
+      <action application="set" data="DEEPGRAM_SPEECH_DIARIZE=true"/>
+
+      <!-- Step 5: Conditional NER for sales calls -->
+      <action application="set" data="DEEPGRAM_SPEECH_NER=${cond(${destination_number} =~ /^2/ ? true : false)}"/>
+
+      <!-- Step 6: PCI redaction for payment lines -->
+      <action application="set" data="DEEPGRAM_SPEECH_REDACT=${cond(${destination_number} =~ /^3/ ? pci,ssn : none)}"/>
+
+      <!-- Step 7: Tag calls for tracking -->
+      <action application="set" data="DEEPGRAM_SPEECH_TAG=prod-${destination_number}-${strftime(%Y%m%d)}"/>
+
+      <!-- Step 8: Start transcription with error handling -->
+      <action application="uuid_deepgram_transcribe" data="start en-US interim"/>
+      <action application="log" data="NOTICE Deepgram transcription started for ${uuid}"/>
+
+    </condition>
+  </extension>
+
+  <!-- Event handler to log transcription results -->
+  <extension name="deepgram_event_handler">
+    <condition field="${Event-Name}" expression="^CUSTOM$"/>
+    <condition field="${Event-Subclass}" expression="^deepgram_transcribe::transcription$">
+      <action application="log" data="INFO Transcription: ${Event-Body}"/>
+      <!-- Add your custom handling here: write to database, trigger webhook, etc. -->
+    </condition>
+  </extension>
+
+</include>
+```
+
+#### Validation Script
+
+Create validation script to test configuration before deploying:
+
+```bash
+#!/bin/bash
+# File: validate-deepgram-config.sh
+
+echo "=== Deepgram Configuration Validation ==="
+
+# Check 1: API Key
+if docker exec fs sh -c 'test -n "$DEEPGRAM_API_KEY"'; then
+  echo "✅ DEEPGRAM_API_KEY is set"
+else
+  echo "❌ DEEPGRAM_API_KEY is NOT set"
+  exit 1
+fi
+
+# Check 2: Module loaded
+if docker exec fs fs_cli -x "show modules" | grep -q "mod_deepgram_transcribe"; then
+  echo "✅ mod_deepgram_transcribe is loaded"
+else
+  echo "❌ mod_deepgram_transcribe is NOT loaded"
+  exit 1
+fi
+
+# Check 3: Dialplan syntax
+if docker exec fs fs_cli -x "reloadxml" | grep -q "SUCCESS"; then
+  echo "✅ Dialplan XML is valid"
+else
+  echo "❌ Dialplan XML has errors"
+  exit 1
+fi
+
+# Check 4: Network connectivity to Deepgram
+if docker exec fs curl -s -o /dev/null -w "%{http_code}" https://api.deepgram.com | grep -q "200\|401"; then
+  echo "✅ Can reach Deepgram API endpoints"
+else
+  echo "❌ Cannot reach Deepgram API endpoints"
+  exit 1
+fi
+
+echo ""
+echo "=== All validation checks passed! ==="
+```
+
+Run validation:
+
+```bash
+chmod +x validate-deepgram-config.sh
+./validate-deepgram-config.sh
+```
+
+---
+
 ## Build Process
 
 ### mod_audio_fork (Base Image Approach - RECOMMENDED)
