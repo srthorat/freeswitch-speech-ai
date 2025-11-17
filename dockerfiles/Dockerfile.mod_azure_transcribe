@@ -27,7 +27,6 @@
 # ============================================================================
 
 ARG BASE_IMAGE=srt2011/freeswitch-mod-deepgram-transcribe:latest
-ARG AZURE_SPEECH_SDK_VERSION=1.38.0
 
 # ============================================================================
 # Builder Stage: Compile mod_azure_transcribe with Azure SDK
@@ -35,7 +34,6 @@ ARG AZURE_SPEECH_SDK_VERSION=1.38.0
 FROM ${BASE_IMAGE} AS builder
 
 ARG BUILD_CPUS=4
-ARG AZURE_SPEECH_SDK_VERSION=1.38.0
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
@@ -52,19 +50,22 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 # Download and install Microsoft Azure Cognitive Services Speech SDK
 WORKDIR /tmp
 RUN echo "=========================================" \
-    && echo "Downloading Azure Speech SDK ${AZURE_SPEECH_SDK_VERSION}..." \
+    && echo "Downloading Azure Speech SDK (latest)..." \
     && echo "=========================================" \
     && wget -q -O SpeechSDK-Linux.tar.gz \
         https://aka.ms/csspeech/linuxbinary \
     && echo "Extracting Azure Speech SDK..." \
+    && tar -xzf SpeechSDK-Linux.tar.gz -C /tmp \
+    && SDK_DIR=$(ls -d /tmp/SpeechSDK-Linux-* | head -1) \
+    && SDK_VERSION=$(basename $SDK_DIR | sed 's/SpeechSDK-Linux-//') \
+    && echo "Found Azure Speech SDK version: $SDK_VERSION" \
     && mkdir -p /usr/local/include/MicrosoftSpeechSDK \
     && mkdir -p /usr/local/lib/MicrosoftSpeechSDK \
-    && tar -xzf SpeechSDK-Linux.tar.gz -C /tmp \
-    && cp -r /tmp/SpeechSDK-Linux-${AZURE_SPEECH_SDK_VERSION}/include/* /usr/local/include/MicrosoftSpeechSDK/ \
-    && cp -r /tmp/SpeechSDK-Linux-${AZURE_SPEECH_SDK_VERSION}/lib/x64/* /usr/local/lib/MicrosoftSpeechSDK/ \
+    && cp -r $SDK_DIR/include/* /usr/local/include/MicrosoftSpeechSDK/ \
+    && cp -r $SDK_DIR/lib/x64/* /usr/local/lib/MicrosoftSpeechSDK/ \
     && ldconfig \
     && rm -rf /tmp/SpeechSDK-Linux* \
-    && echo "✅ Azure Speech SDK ${AZURE_SPEECH_SDK_VERSION} installed"
+    && echo "✅ Azure Speech SDK $SDK_VERSION installed"
 
 # Verify Azure SDK installation
 RUN echo "=========================================" \
@@ -171,8 +172,7 @@ RUN echo "=========================================" \
 # Labels
 LABEL maintainer="FreeSWITCH Speech AI"
 LABEL description="FreeSWITCH 1.10.11 with mod_audio_fork, mod_deepgram_transcribe, and mod_azure_transcribe"
-LABEL base.image="${BASE_IMAGE}"
-LABEL azure.sdk.version="${AZURE_SPEECH_SDK_VERSION}"
+LABEL azure.sdk.version="latest"
 
 # Expose FreeSWITCH ports
 EXPOSE 5060/tcp 5060/udp 5080/tcp 5080/udp 8021/tcp

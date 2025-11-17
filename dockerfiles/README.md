@@ -993,7 +993,7 @@ chmod +x validate-deepgram-config.sh
 **Base Image**: `srt2011/freeswitch-mod-deepgram-transcribe:latest` (includes FreeSWITCH + mod_audio_fork + mod_deepgram_transcribe)
 
 **Dependencies Built**:
-- Microsoft Azure Cognitive Services Speech SDK 1.38.0
+- Microsoft Azure Cognitive Services Speech SDK (latest - auto-detected)
 - ALSA sound library (libasound2)
 
 **Build Time**:

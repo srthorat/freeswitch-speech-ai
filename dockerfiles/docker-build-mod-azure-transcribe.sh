@@ -32,7 +32,6 @@ set -e
 # Configuration
 IMAGE_NAME=${1:-freeswitch-mod-azure-transcribe:latest}
 BASE_IMAGE="srt2011/freeswitch-mod-deepgram-transcribe:latest"
-AZURE_SPEECH_SDK_VERSION="1.38.0"
 
 # Platform detection
 PLATFORM="linux/amd64"
@@ -59,7 +58,7 @@ echo ""
 echo "Configuration:"
 echo "  📦 Base Image:         ${BASE_IMAGE}"
 echo "  🏷️  Target Image:       ${IMAGE_NAME}"
-echo "  🔧 Azure SDK Version:  ${AZURE_SPEECH_SDK_VERSION}"
+echo "  🔧 Azure SDK Version:  latest (auto-detected)"
 echo "  🖥️  Platform:           ${PLATFORM}"
 echo "  ⚙️  Build CPUs:         ${BUILD_CPUS}"
 echo "  📂 Build Context:      $(pwd)"
@@ -68,7 +67,7 @@ echo "Build includes:"
 echo "  ✅ mod_audio_fork (from base)"
 echo "  ✅ mod_deepgram_transcribe (from base)"
 echo "  🆕 mod_azure_transcribe (NEW)"
-echo "  🆕 Microsoft Azure Speech SDK ${AZURE_SPEECH_SDK_VERSION}"
+echo "  🆕 Microsoft Azure Speech SDK (latest)"
 echo ""
 echo "⏱️  Estimated build time:"
 echo "  - Intel/AMD64: 15-20 minutes"
@@ -96,7 +95,6 @@ echo "========================================="
 docker build \
     --platform "$PLATFORM" \
     --build-arg BASE_IMAGE="$BASE_IMAGE" \
-    --build-arg AZURE_SPEECH_SDK_VERSION="$AZURE_SPEECH_SDK_VERSION" \
     --build-arg BUILD_CPUS="$BUILD_CPUS" \
     -f dockerfiles/Dockerfile.mod_azure_transcribe \
     -t "$IMAGE_NAME" \
