@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Set library path
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 # ============================================================================
 # Copy mod_deepgram_transcribe source and build it
@@ -165,7 +165,7 @@ RUN ldconfig
 
 # Set environment
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib"
 
 # Labels
 LABEL maintainer="FreeSWITCH mod_deepgram_transcribe"
