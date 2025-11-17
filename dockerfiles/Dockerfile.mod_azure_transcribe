@@ -43,6 +43,7 @@ RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
     libspeexdsp-dev \
     libasound2-dev \
     libssl-dev \
+    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV LD_LIBRARY_PATH=/usr/local/lib
