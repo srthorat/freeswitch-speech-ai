@@ -986,6 +986,177 @@ chmod +x validate-deepgram-config.sh
 
 ---
 
+## mod_azure_transcribe
+
+**File**: `Dockerfile.mod_azure_transcribe`
+**Build Script**: `docker-build-mod-azure-transcribe.sh`
+**Base Image**: `srt2011/freeswitch-mod-deepgram-transcribe:latest` (includes FreeSWITCH + mod_audio_fork + mod_deepgram_transcribe)
+
+**Dependencies Built**:
+- Microsoft Azure Cognitive Services Speech SDK 1.38.0
+- ALSA sound library (libasound2)
+
+**Build Time**:
+- Intel/AMD64: **15-20 minutes** (includes Azure SDK download)
+- Apple Silicon: **25-35 minutes** (with emulation)
+
+**Usage**:
+```bash
+# Build the image (with custom tag)
+./dockerfiles/docker-build-mod-azure-transcribe.sh srt2011/freeswitch-mod-azure-transcribe:latest
+
+# Or use default tag
+./dockerfiles/docker-build-mod-azure-transcribe.sh
+
+# Run FreeSWITCH with Azure credentials
+docker run -d --name fs \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  -e AZURE_SUBSCRIPTION_KEY=your-azure-subscription-key \
+  -e AZURE_REGION=eastus \
+  srt2011/freeswitch-mod-azure-transcribe:latest
+
+# Access fs_cli
+docker exec -it fs fs_cli
+
+# Verify all three modules loaded
+docker exec -it fs fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram|azure'
+```
+
+**Features**:
+- ✅ Builds on mod_deepgram_transcribe image (all modules included)
+- ✅ Real-time streaming transcription via Azure Speech Services
+- ✅ Profanity filtering (masked, removed, raw modes)
+- ✅ Detailed output with N-best alternatives and confidence scores
+- ✅ Signal-to-noise ratio (SNR) reporting
+- ✅ Speech hints for improved domain-specific recognition
+- ✅ Configurable timeout settings
+- ✅ Supports 50+ languages and dialects
+- ✅ Interim and final transcription results
+- ✅ Includes mod_audio_fork AND mod_deepgram_transcribe from base image
+- ✅ Automatic static + runtime validation during build
+
+### Manual Verification for mod_azure_transcribe
+
+After building or pulling the mod_azure_transcribe image, verify it manually:
+
+#### Step 1: Check Module File Exists
+
+```bash
+# Verify mod_azure_transcribe.so exists
+docker run --rm freeswitch-mod-azure-transcribe:latest ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so
+
+# Should show file with size around 100-200 KB
+```
+
+#### Step 2: Check Azure SDK Libraries
+
+```bash
+# Verify Azure Speech SDK is installed
+docker run --rm freeswitch-mod-azure-transcribe:latest ls -lh /usr/local/lib/MicrosoftSpeechSDK/
+
+# Should show libMicrosoft.CognitiveServices.Speech.core.so
+```
+
+#### Step 3: Check Module Dependencies
+
+```bash
+# Verify module is linked with Azure SDK
+docker run --rm freeswitch-mod-azure-transcribe:latest ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so | grep -i microsoft
+
+# Should show: libMicrosoft.CognitiveServices.Speech.core.so => /usr/local/lib/MicrosoftSpeechSDK/...
+```
+
+Check for missing dependencies:
+```bash
+# Run full ldd check
+docker run --rm freeswitch-mod-azure-transcribe:latest ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so
+
+# Should show NO "not found" entries
+```
+
+#### Step 4: Verify Module Loading
+
+```bash
+# Start FreeSWITCH and check module loading
+docker run --rm freeswitch-mod-azure-transcribe:latest bash -c '
+    echo "Starting FreeSWITCH in background..."
+    /usr/local/freeswitch/bin/freeswitch -nc -nf > /dev/null 2>&1 &
+    FS_PID=$!
+
+    echo "Waiting 15 seconds for FreeSWITCH to start..."
+    sleep 15
+
+    echo ""
+    echo "Checking FreeSWITCH log for mod_azure_transcribe..."
+    grep -i "mod_azure_transcribe" /usr/local/freeswitch/log/freeswitch.log || echo "❌ mod_azure_transcribe NOT found in logs"
+
+    kill $FS_PID 2>/dev/null || true
+'
+```
+
+Expected output should include:
+```
+[NOTICE] mod_azure_transcribe.c:XXX Successfully Loaded [mod_azure_transcribe]
+[CONSOLE] switch_loadable_module.c:XXX Adding API Function 'azure_transcribe'
+```
+
+#### Step 5: Verify All Three Modules
+
+```bash
+# Start container and check all modules
+docker run -d --name fs-test freeswitch-mod-azure-transcribe:latest
+sleep 30
+
+# Check all three modules are loaded
+docker exec fs-test fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram|azure'
+
+# Should show all three:
+# api,uuid_audio_fork,mod_audio_fork,...
+# api,uuid_deepgram_transcribe,mod_deepgram_transcribe,...
+# api,azure_transcribe,mod_azure_transcribe,...
+
+# Cleanup
+docker rm -f fs-test
+```
+
+#### Verification Summary
+
+If all checks pass:
+```
+✅ mod_azure_transcribe is installed and loads successfully!
+✅ Bonus: mod_audio_fork is also available!
+✅ Bonus: mod_deepgram_transcribe is also available!
+```
+
+**To start FreeSWITCH with mod_azure_transcribe**:
+```bash
+docker run --rm -it \
+  -e AZURE_SUBSCRIPTION_KEY=your-subscription-key \
+  -e AZURE_REGION=eastus \
+  freeswitch-mod-azure-transcribe:latest \
+  freeswitch -nc -nf
+```
+
+**Example API Usage**:
+```bash
+# In fs_cli or via ESL
+uuid_setvar <call-uuid> AZURE_SUBSCRIPTION_KEY your-subscription-key
+uuid_setvar <call-uuid> AZURE_REGION eastus
+uuid_setvar <call-uuid> AZURE_USE_OUTPUT_FORMAT_DETAILED true
+uuid_setvar <call-uuid> AZURE_PROFANITY_OPTION masked
+
+# Start transcription with interim results
+azure_transcribe <call-uuid> start en-US interim
+
+# Stop transcription
+azure_transcribe <call-uuid> stop
+```
+
+For full API documentation, see: `modules/mod_azure_transcribe/README.md`
+
+---
+
 ## Build Process
 
 ### mod_audio_fork (Base Image Approach - RECOMMENDED)

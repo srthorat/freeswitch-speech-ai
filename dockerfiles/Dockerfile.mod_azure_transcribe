@@ -1,0 +1,186 @@
+# ============================================================================
+# Dockerfile for FreeSWITCH with mod_azure_transcribe
+# ============================================================================
+#
+# This Dockerfile builds mod_azure_transcribe on top of the mod_deepgram_transcribe
+# image, adding Azure Cognitive Services Speech SDK integration.
+#
+# Base image includes:
+#   - FreeSWITCH 1.10.11
+#   - mod_audio_fork (audio streaming)
+#   - mod_deepgram_transcribe (Deepgram real-time transcription)
+#   - libwebsockets (for Deepgram)
+#
+# This image adds:
+#   - Microsoft Azure Cognitive Services Speech SDK
+#   - mod_azure_transcribe (Azure real-time transcription)
+#
+# Build time: 15-20 minutes (includes Azure SDK download and build)
+# Final size: ~1.2 GB (adds Azure SDK ~200MB)
+#
+# Usage:
+#   docker build -f dockerfiles/Dockerfile.mod_azure_transcribe \
+#     -t freeswitch-mod-azure-transcribe:latest .
+#
+# Or use the build script:
+#   ./dockerfiles/docker-build-mod-azure-transcribe.sh
+# ============================================================================
+
+ARG BASE_IMAGE=srt2011/freeswitch-mod-deepgram-transcribe:latest
+ARG AZURE_SPEECH_SDK_VERSION=1.38.0
+
+# ============================================================================
+# Builder Stage: Compile mod_azure_transcribe with Azure SDK
+# ============================================================================
+FROM ${BASE_IMAGE} AS builder
+
+ARG BUILD_CPUS=4
+ARG AZURE_SPEECH_SDK_VERSION=1.38.0
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    build-essential \
+    wget \
+    ca-certificates \
+    libspeexdsp-dev \
+    libasound2-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# Download and install Microsoft Azure Cognitive Services Speech SDK
+WORKDIR /tmp
+RUN echo "=========================================" \
+    && echo "Downloading Azure Speech SDK ${AZURE_SPEECH_SDK_VERSION}..." \
+    && echo "=========================================" \
+    && wget -q -O SpeechSDK-Linux.tar.gz \
+        https://aka.ms/csspeech/linuxbinary \
+    && echo "Extracting Azure Speech SDK..." \
+    && mkdir -p /usr/local/include/MicrosoftSpeechSDK \
+    && mkdir -p /usr/local/lib/MicrosoftSpeechSDK \
+    && tar -xzf SpeechSDK-Linux.tar.gz -C /tmp \
+    && cp -r /tmp/SpeechSDK-Linux-${AZURE_SPEECH_SDK_VERSION}/include/* /usr/local/include/MicrosoftSpeechSDK/ \
+    && cp -r /tmp/SpeechSDK-Linux-${AZURE_SPEECH_SDK_VERSION}/lib/x64/* /usr/local/lib/MicrosoftSpeechSDK/ \
+    && ldconfig \
+    && rm -rf /tmp/SpeechSDK-Linux* \
+    && echo "✅ Azure Speech SDK ${AZURE_SPEECH_SDK_VERSION} installed"
+
+# Verify Azure SDK installation
+RUN echo "=========================================" \
+    && echo "Verifying Azure Speech SDK installation..." \
+    && echo "=========================================" \
+    && ls -lh /usr/local/include/MicrosoftSpeechSDK/ \
+    && ls -lh /usr/local/lib/MicrosoftSpeechSDK/ \
+    && echo ""
+
+# Build mod_azure_transcribe
+WORKDIR /usr/local/src
+COPY ./modules/mod_azure_transcribe /usr/local/src/mod_azure_transcribe
+
+RUN echo "=========================================" \
+    && echo "Building mod_azure_transcribe..." \
+    && echo "=========================================" \
+    && cd /usr/local/src/mod_azure_transcribe \
+    && echo "Compiling mod_azure_transcribe.c..." \
+    && gcc -fPIC -c \
+        -I/usr/local/freeswitch/include/freeswitch \
+        mod_azure_transcribe.c \
+    && echo "Compiling azure_transcribe_glue.cpp (C++14)..." \
+    && g++ -fPIC -c -std=c++14 \
+        -I/usr/local/freeswitch/include/freeswitch \
+        -I/usr/local/include/MicrosoftSpeechSDK/cxx_api \
+        -I/usr/local/include/MicrosoftSpeechSDK/c_api \
+        azure_transcribe_glue.cpp \
+    && echo "Linking mod_azure_transcribe.so..." \
+    && mkdir -p /usr/local/freeswitch/lib/freeswitch/mod \
+    && g++ -shared \
+        -o /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so \
+        mod_azure_transcribe.o \
+        azure_transcribe_glue.o \
+        -L/usr/local/lib/MicrosoftSpeechSDK \
+        -lMicrosoft.CognitiveServices.Speech.core \
+        -lasound \
+        -lpthread \
+        -lssl \
+        -lcrypto \
+        -lz \
+    && echo "✅ mod_azure_transcribe.so built successfully"
+
+# Verify module was built
+RUN echo "=========================================" \
+    && echo "Build Verification..." \
+    && echo "=========================================" \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so \
+    && echo "" \
+    && echo "Checking module dependencies..." \
+    && ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so \
+    && echo ""
+
+# ============================================================================
+# Runtime Stage: Clean image with all three modules
+# ============================================================================
+FROM ${BASE_IMAGE} AS runtime
+
+# Install runtime dependencies for Azure SDK
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    libasound2 \
+    libssl1.1 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib/MicrosoftSpeechSDK
+
+# Copy Azure Speech SDK libraries from builder
+COPY --from=builder /usr/local/lib/MicrosoftSpeechSDK /usr/local/lib/MicrosoftSpeechSDK
+
+# Copy mod_azure_transcribe module from builder
+COPY --from=builder /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so \
+    /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so
+
+# Update library cache
+RUN ldconfig
+
+# Enable mod_azure_transcribe in modules.conf
+RUN sed -i '/<\/modules>/i \    <load module="mod_azure_transcribe"/>' \
+    /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml 2>/dev/null || true
+
+# Runtime validation
+RUN echo "=========================================" \
+    && echo "Runtime Validation..." \
+    && echo "=========================================" \
+    && echo "Checking Azure SDK libraries..." \
+    && ls -lh /usr/local/lib/MicrosoftSpeechSDK/ \
+    && echo "" \
+    && echo "Checking module file..." \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so \
+    && echo "" \
+    && echo "Checking module dependencies..." \
+    && ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so \
+    && echo "" \
+    && echo "Verifying no missing dependencies..." \
+    && ! ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so | grep "not found" \
+    && echo "✅ All dependencies satisfied" \
+    && echo "" \
+    && echo "=========================================" \
+    && echo "Available modules in this image:" \
+    && echo "  ✅ mod_audio_fork (from base)" \
+    && echo "  ✅ mod_deepgram_transcribe (from base)" \
+    && echo "  ✅ mod_azure_transcribe (NEW)" \
+    && echo "========================================="
+
+# Labels
+LABEL maintainer="FreeSWITCH Speech AI"
+LABEL description="FreeSWITCH 1.10.11 with mod_audio_fork, mod_deepgram_transcribe, and mod_azure_transcribe"
+LABEL base.image="${BASE_IMAGE}"
+LABEL azure.sdk.version="${AZURE_SPEECH_SDK_VERSION}"
+
+# Expose FreeSWITCH ports
+EXPOSE 5060/tcp 5060/udp 5080/tcp 5080/udp 8021/tcp
+EXPOSE 16384-16484/udp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD /usr/local/freeswitch/bin/fs_cli -x "status" | grep -q "UP" || exit 1
+
+# Start FreeSWITCH
+CMD ["/usr/local/freeswitch/bin/freeswitch", "-nc", "-nf"]
