@@ -33,6 +33,7 @@ RUN echo "=============================================" \
 # Install build dependencies (minimal - just build tools)
 RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
     build-essential \
+    libspeexdsp-dev \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
