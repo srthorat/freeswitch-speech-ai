@@ -10,9 +10,10 @@
 #   - libwebsockets 4.3.3 (required dependency)
 #
 # This Dockerfile ONLY adds:
+#   - libwebsockets 4.3.3 (rebuilt for dev headers)
 #   - mod_deepgram_transcribe module build
 #
-# Build time: ~5-10 minutes (even faster since libwebsockets is already built)
+# Build time: ~10-15 minutes
 # ============================================================================
 
 ARG BASE_IMAGE=srt2011/freeswitch-mod-audio-fork:latest
@@ -26,19 +27,39 @@ RUN echo "=============================================" \
     && echo "Building mod_deepgram_transcribe" \
     && echo "=============================================" \
     && echo "Base Image: ${BASE_IMAGE}" \
-    && echo "Dependency: libwebsockets (already in base)" \
+    && echo "Dependencies: libwebsockets (rebuilt for headers), speexdsp" \
     && echo "Build CPUs: ${BUILD_CPUS}" \
     && echo "============================================="
 
 # Install build dependencies (minimal - just build tools)
 RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
     build-essential \
+    git \
+    cmake \
+    libssl-dev \
     libspeexdsp-dev \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Set library path
 ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# ============================================================================
+# Build libwebsockets (need headers for compilation)
+# ============================================================================
+ARG LIBWEBSOCKETS_VERSION=4.3.3
+WORKDIR /usr/local/src
+RUN echo "=========================================" \
+    && echo "Building libwebsockets ${LIBWEBSOCKETS_VERSION}..." \
+    && echo "=========================================" \
+    && git clone --depth 1 -b v${LIBWEBSOCKETS_VERSION} https://github.com/warmcat/libwebsockets.git \
+    && cd libwebsockets \
+    && mkdir -p build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && ldconfig \
+    && echo "✅ libwebsockets ${LIBWEBSOCKETS_VERSION} built (headers available for compilation)"
 
 # ============================================================================
 # Copy mod_deepgram_transcribe source and build it
