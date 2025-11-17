@@ -286,6 +286,165 @@ If all checks pass:
 docker run --rm -it freeswitch-mod-audio-fork:latest freeswitch -nc -nf
 ```
 
+---
+
+### mod_deepgram_transcribe
+
+**File**: `Dockerfile.mod_deepgram_transcribe`
+**Build Script**: `docker-build-mod-deepgram-transcribe.sh`
+**Base Image**: `srt2011/freeswitch-mod-audio-fork:latest` (includes FreeSWITCH + libwebsockets)
+
+**Dependencies Built**:
+- None! (libwebsockets already in base image)
+
+**Build Time**:
+- Intel/AMD64: **5-10 minutes** (even faster - no dependencies to build!)
+- Apple Silicon: **10-15 minutes** (with emulation)
+
+**Usage**:
+```bash
+# Build the image (with custom tag)
+./dockerfiles/docker-build-mod-deepgram-transcribe.sh srt2011/freeswitch-mod-deepgram-transcribe:latest
+
+# Or use default tag
+./dockerfiles/docker-build-mod-deepgram-transcribe.sh
+
+# Run FreeSWITCH with Deepgram API key
+docker run -d --name fs \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  -e DEEPGRAM_API_KEY=your-api-key \
+  srt2011/freeswitch-mod-deepgram-transcribe:latest
+
+# Access fs_cli
+docker exec -it fs fs_cli
+
+# Verify both modules loaded (gets mod_audio_fork as bonus!)
+docker exec -it fs fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram'
+```
+
+**Features**:
+- ✅ Builds on mod_audio_fork image (inherits libwebsockets)
+- ✅ Real-time streaming transcription via Deepgram API
+- ✅ Speaker diarization to identify different speakers
+- ✅ Keyword boosting for improved recognition
+- ✅ Named Entity Recognition (NER)
+- ✅ Profanity filtering and redaction (PCI, SSN)
+- ✅ Multiple models (general, phonecall, meeting, voicemail, etc.)
+- ✅ Model tiers (base, enhanced, nova, nova-2)
+- ✅ Interim and final transcription results
+- ✅ Includes mod_audio_fork from base image
+- ✅ Automatic static + runtime validation during build
+
+### Manual Verification for mod_deepgram_transcribe
+
+After building or pulling the mod_deepgram_transcribe image, verify it manually:
+
+#### Step 1: Check Module File Exists
+
+```bash
+# Verify mod_deepgram_transcribe.so exists
+docker run --rm freeswitch-mod-deepgram-transcribe:latest ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so
+
+# Should show file with size around 200-500 KB
+```
+
+#### Step 2: Check Module Dependencies
+
+```bash
+# Verify module is linked with libwebsockets
+docker run --rm freeswitch-mod-deepgram-transcribe:latest ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so | grep -i websockets
+
+# Should show: libwebsockets.so.19 => /usr/local/lib/libwebsockets.so.19
+```
+
+Check for missing dependencies:
+```bash
+# Run full ldd check
+docker run --rm freeswitch-mod-deepgram-transcribe:latest ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so
+
+# Should show NO "not found" entries
+```
+
+#### Step 3: Verify Module Loading
+
+```bash
+# Start FreeSWITCH and check module loading
+docker run --rm freeswitch-mod-deepgram-transcribe:latest bash -c '
+    echo "Starting FreeSWITCH in background..."
+    /usr/local/freeswitch/bin/freeswitch -nc -nf > /dev/null 2>&1 &
+    FS_PID=$!
+
+    echo "Waiting 15 seconds for FreeSWITCH to start..."
+    sleep 15
+
+    echo ""
+    echo "Checking FreeSWITCH log for mod_deepgram_transcribe..."
+    grep -i "mod_deepgram_transcribe" /usr/local/freeswitch/log/freeswitch.log || echo "❌ mod_deepgram_transcribe NOT found in logs"
+
+    kill $FS_PID 2>/dev/null || true
+'
+```
+
+Expected output should include:
+```
+[NOTICE] mod_deepgram_transcribe.c:XXX Successfully Loaded [mod_deepgram_transcribe]
+[NOTICE] switch_loadable_module.c:389 Adding API Function 'uuid_deepgram_transcribe'
+```
+
+#### Step 4: Verify Both Modules (mod_audio_fork + mod_deepgram_transcribe)
+
+```bash
+# Start container and check both modules
+docker run -d --name fs-test freeswitch-mod-deepgram-transcribe:latest
+sleep 30
+
+# Check both modules are loaded
+docker exec fs-test fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram'
+
+# Should show both:
+# api,uuid_audio_fork,mod_audio_fork,...
+# api,uuid_deepgram_transcribe,mod_deepgram_transcribe,...
+
+# Cleanup
+docker rm -f fs-test
+```
+
+#### Verification Summary
+
+If all checks pass:
+```
+✅ mod_deepgram_transcribe is installed and loads successfully!
+✅ Bonus: mod_audio_fork is also available!
+```
+
+**To start FreeSWITCH with mod_deepgram_transcribe**:
+```bash
+docker run --rm -it \
+  -e DEEPGRAM_API_KEY=your-api-key \
+  freeswitch-mod-deepgram-transcribe:latest \
+  freeswitch -nc -nf
+```
+
+**Example API Usage**:
+```bash
+# In fs_cli or via ESL
+uuid_setvar <call-uuid> DEEPGRAM_API_KEY your-api-key
+uuid_setvar <call-uuid> DEEPGRAM_SPEECH_MODEL phonecall
+uuid_setvar <call-uuid> DEEPGRAM_SPEECH_TIER nova
+uuid_setvar <call-uuid> DEEPGRAM_SPEECH_DIARIZE true
+
+# Start transcription with interim results
+uuid_deepgram_transcribe <call-uuid> start en-US interim
+
+# Stop transcription
+uuid_deepgram_transcribe <call-uuid> stop
+```
+
+For full API documentation, see: `modules/mod_deepgram_transcribe/README.md`
+
+---
+
 ## Build Process
 
 ### mod_audio_fork (Base Image Approach - RECOMMENDED)
