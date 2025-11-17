@@ -183,5 +183,4 @@ EXPOSE 16384-16484/udp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD /usr/local/freeswitch/bin/fs_cli -x "status" | grep -q "UP" || exit 1
 
-# Start FreeSWITCH
-CMD ["/usr/local/freeswitch/bin/freeswitch", "-nc", "-nf"]
+# Inherit CMD from base image (supervisord with proper paths)
