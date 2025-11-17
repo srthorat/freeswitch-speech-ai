@@ -1,0 +1,422 @@
+# ============================================================================
+# FreeSWITCH 1.10.x Base Image - Full Build from Source
+# ============================================================================
+#
+# Features:
+# - FreeSWITCH 1.10.11 built from source with ALL standard modules
+# - SIP and WebRTC support enabled
+# - Event socket configured for fs_cli
+# - Basic Linux utilities (ps, netstat, ping, etc.)
+# - Extensions 1000 and 1001 pre-configured
+# - Dialplan configured for inter-extension calling
+# - fs_cli command line interface
+# - Supervisor for process management (systemd alternative for Docker)
+#
+# ============================================================================
+
+# Build arguments
+ARG DEBIAN_VERSION=bullseye-slim
+ARG FREESWITCH_VERSION=v1.10.11
+ARG SPANDSP_VERSION=0d2e6ac
+ARG SOFIA_VERSION=1.13.17
+ARG BUILD_CPUS=8
+
+# ============================================================================
+# Stage 1: Build Dependencies
+# ============================================================================
+FROM debian:${DEBIAN_VERSION} AS builder
+
+ARG FREESWITCH_VERSION
+ARG BUILD_CPUS
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build tools
+    build-essential \
+    cmake \
+    autoconf \
+    automake \
+    libtool \
+    libtool-bin \
+    pkg-config \
+    nasm \
+    git \
+    wget \
+    ca-certificates \
+    # FreeSWITCH core dependencies
+    libssl-dev \
+    libcurl4-openssl-dev \
+    libpcre3-dev \
+    libspeex1 \
+    libspeexdsp-dev \
+    libedit-dev \
+    libtiff-dev \
+    libldns-dev \
+    uuid-dev \
+    # Codecs and media
+    libopus-dev \
+    libsndfile1-dev \
+    libshout3-dev \
+    libmpg123-dev \
+    libmp3lame-dev \
+    # Database
+    libsqlite3-dev \
+    libpq-dev \
+    unixodbc-dev \
+    # SIP dependencies
+    libsofia-sip-ua-dev \
+    # WebRTC dependencies
+    libsrtp2-dev \
+    # Video support (libyuv-dev not available in bullseye)
+    libavformat-dev \
+    libswscale-dev \
+    # XML processing
+    libxml2-dev \
+    # Lua scripting
+    liblua5.2-dev \
+    # Performance
+    libgoogle-perftools-dev \
+    # Utilities
+    python3 \
+    python-is-python3 \
+    zlib1g-dev \
+    libjpeg-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# Stage 1.5: Build spandsp (required dependency)
+# ============================================================================
+FROM builder AS spandsp
+ARG SPANDSP_VERSION
+ARG BUILD_CPUS
+
+WORKDIR /usr/local/src
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+RUN git clone https://github.com/freeswitch/spandsp.git \
+    && cd spandsp \
+    && git checkout ${SPANDSP_VERSION} \
+    && ./bootstrap.sh \
+    && ./configure \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && echo "✅ spandsp installed"
+
+# ============================================================================
+# Stage 1.6: Build sofia-sip (required dependency)
+# ============================================================================
+FROM builder AS sofia-sip
+ARG SOFIA_VERSION
+ARG BUILD_CPUS
+
+WORKDIR /usr/local/src
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+RUN git clone --depth 1 -b v${SOFIA_VERSION} https://github.com/freeswitch/sofia-sip.git \
+    && cd sofia-sip \
+    && ./bootstrap.sh \
+    && ./configure \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && echo "✅ sofia-sip installed"
+
+# ============================================================================
+# Stage 2: Build FreeSWITCH
+# ============================================================================
+FROM builder AS freeswitch-build
+ARG FREESWITCH_VERSION
+ARG BUILD_CPUS
+
+# Copy dependencies from previous stages
+COPY --from=spandsp /usr/local/include/ /usr/local/include/
+COPY --from=spandsp /usr/local/lib/ /usr/local/lib/
+COPY --from=sofia-sip /usr/local/bin/ /usr/local/bin/
+COPY --from=sofia-sip /usr/local/include/ /usr/local/include/
+COPY --from=sofia-sip /usr/local/lib/ /usr/local/lib/
+COPY --from=sofia-sip /usr/local/share/sofia-sip/ /usr/local/share/sofia-sip/
+
+WORKDIR /usr/local/src
+
+# Clone FreeSWITCH source
+RUN git clone -b ${FREESWITCH_VERSION} --depth 1 https://github.com/signalwire/freeswitch.git
+
+WORKDIR /usr/local/src/freeswitch
+
+# Bootstrap FreeSWITCH
+RUN ./bootstrap.sh -j
+
+# Ensure critical modules are enabled in modules.conf
+RUN grep -q "^event_handlers/mod_event_socket$" modules.conf || echo "event_handlers/mod_event_socket" >> modules.conf \
+    && echo "✅ Ensured critical modules are enabled (mod_event_socket)"
+
+# Disable modules that require unavailable dependencies
+# mod_verto requires libks2/libks (WebRTC verto protocol - can skip for base)
+# mod_signalwire requires additional deps
+# Language bindings (python, php, perl, java) - optional for base image
+RUN sed -i 's|^endpoints/mod_verto$|#endpoints/mod_verto|' modules.conf \
+    && sed -i 's|^endpoints/mod_skinny$|#endpoints/mod_skinny|' modules.conf \
+    && sed -i 's|^applications/mod_signalwire$|#applications/mod_signalwire|' modules.conf \
+    && sed -i 's|^applications/mod_av$|#applications/mod_av|' modules.conf \
+    && sed -i 's|^languages/mod_python$|#languages/mod_python|' modules.conf \
+    && sed -i 's|^languages/mod_python3$|#languages/mod_python3|' modules.conf \
+    && sed -i 's|^languages/mod_java$|#languages/mod_java|' modules.conf \
+    && sed -i 's|^languages/mod_perl$|#languages/mod_perl|' modules.conf \
+    && sed -i 's|^languages/mod_php$|#languages/mod_php|' modules.conf \
+    && echo "✅ Disabled optional modules requiring additional dependencies"
+
+# Configure FreeSWITCH with core features (disable language bindings we don't need)
+RUN ./configure \
+    --prefix=/usr/local/freeswitch \
+    --enable-core-pgsql-support \
+    --enable-core-odbc-support \
+    --enable-tcmalloc \
+    --without-python \
+    --without-python3 \
+    --without-java \
+    --without-perl \
+    && echo "✅ FreeSWITCH configured"
+
+# Build FreeSWITCH
+RUN make -j ${BUILD_CPUS} && echo "✅ FreeSWITCH compiled"
+
+# Install FreeSWITCH
+RUN make install && echo "✅ FreeSWITCH installed"
+
+# Install sounds (en-us-callie)
+RUN make cd-sounds-install cd-moh-install && echo "✅ Sounds installed"
+
+# Install sample configuration
+RUN mkdir -p /usr/local/freeswitch/conf \
+    && cp -r /usr/local/src/freeswitch/conf/vanilla/* /usr/local/freeswitch/conf/ \
+    && echo "✅ Sample configuration installed"
+
+# ============================================================================
+# Stage 2: Runtime Image
+# ============================================================================
+FROM debian:${DEBIAN_VERSION} AS runtime
+
+# Install runtime dependencies and utilities
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Core runtime libraries
+    libssl1.1 \
+    libcurl4 \
+    libpcre3 \
+    libspeex1 \
+    libspeexdsp1 \
+    libedit2 \
+    libtiff5 \
+    libldns3 \
+    libuuid1 \
+    # Codecs
+    libopus0 \
+    libsndfile1 \
+    libshout3 \
+    libmpg123-0 \
+    libmp3lame0 \
+    # Database
+    libsqlite3-0 \
+    libpq5 \
+    unixodbc \
+    # SIP
+    libsofia-sip-ua0 \
+    # WebRTC
+    libsrtp2-1 \
+    # Video
+    libavformat58 \
+    libswscale5 \
+    # XML
+    libxml2 \
+    # Lua
+    liblua5.2-0 \
+    # Performance
+    libtcmalloc-minimal4 \
+    # Utilities (as requested)
+    procps \
+    net-tools \
+    iputils-ping \
+    iproute2 \
+    lsof \
+    vim \
+    curl \
+    wget \
+    ca-certificates \
+    # Process management
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy dependencies from build stages
+COPY --from=spandsp /usr/local/lib/ /usr/local/lib/
+COPY --from=sofia-sip /usr/local/bin/ /usr/local/bin/
+COPY --from=sofia-sip /usr/local/lib/ /usr/local/lib/
+COPY --from=sofia-sip /usr/local/share/sofia-sip/ /usr/local/share/sofia-sip/
+
+# Copy FreeSWITCH installation from builder
+COPY --from=freeswitch-build /usr/local/freeswitch /usr/local/freeswitch
+
+# Run ldconfig to update library cache
+RUN ldconfig
+
+### Fix NAT (use local_ip_v4 instead of STUN)
+RUN sed -i 's|value="\$\${external_rtp_ip}"|value="\$\${local_ip_v4}"|' /usr/local/freeswitch/conf/sip_profiles/internal.xml && \
+    sed -i 's|value="\$\${external_sip_ip}"|value="\$\${local_ip_v4}"|'  /usr/local/freeswitch/conf/sip_profiles/internal.xml
+
+
+# Create FreeSWITCH user and group
+RUN groupadd -r freeswitch && useradd -r -g freeswitch freeswitch
+
+# Set ownership
+RUN chown -R freeswitch:freeswitch /usr/local/freeswitch
+
+# Add FreeSWITCH to PATH
+ENV PATH="/usr/local/freeswitch/bin:${PATH}"
+
+# Set library path
+ENV LD_LIBRARY_PATH="/usr/local/freeswitch/lib"
+
+# Configure extensions 1000 and 1001
+RUN cat > /usr/local/freeswitch/conf/directory/default/1000.xml <<'EOF'
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1000"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1000"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+      <variable name="effective_caller_id_number" value="1000"/>
+      <variable name="outbound_caller_id_name" value="FreeSWITCH"/>
+      <variable name="outbound_caller_id_number" value="0000000000"/>
+      <variable name="callgroup" value="techsupport"/>
+    </variables>
+  </user>
+</include>
+EOF
+
+RUN cat > /usr/local/freeswitch/conf/directory/default/1001.xml <<'EOF'
+<include>
+  <user id="1001">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1001"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1001"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1001"/>
+      <variable name="effective_caller_id_number" value="1001"/>
+      <variable name="outbound_caller_id_name" value="FreeSWITCH"/>
+      <variable name="outbound_caller_id_number" value="0000000000"/>
+      <variable name="callgroup" value="techsupport"/>
+    </variables>
+  </user>
+</include>
+EOF
+
+# Fix ownership for new extension files
+RUN chown freeswitch:freeswitch /usr/local/freeswitch/conf/directory/default/1000.xml \
+    && chown freeswitch:freeswitch /usr/local/freeswitch/conf/directory/default/1001.xml
+
+# Configure Event Socket for IPv4 binding (instead of IPv6)
+RUN cat > /usr/local/freeswitch/conf/autoload_configs/event_socket.conf.xml <<'EOF'
+<configuration name="event_socket.conf" description="Socket Client">
+  <settings>
+    <param name="nat-map" value="false"/>
+    <!-- Bind to all IPv4 interfaces for fs_cli access -->
+    <param name="listen-ip" value="0.0.0.0"/>
+    <param name="listen-port" value="8021"/>
+    <param name="password" value="ClueCon"/>
+    <!-- Uncomment to restrict access to loopback only -->
+    <!--<param name="apply-inbound-acl" value="loopback.auto"/>-->
+    <!--<param name="stop-on-bind-error" value="true"/>-->
+  </settings>
+</configuration>
+EOF
+
+RUN chown freeswitch:freeswitch /usr/local/freeswitch/conf/autoload_configs/event_socket.conf.xml
+RUN mkdir -p /usr/local/freeswitch/log /usr/local/freeswitch/db \
+ && chown -R freeswitch:freeswitch /usr/local/freeswitch
+
+# Create supervisor configuration (single-line command!)
+RUN mkdir -p /etc/supervisor/conf.d && cat > /etc/supervisor/conf.d/freeswitch.conf <<'EOF'
+[program:freeswitch]
+command=/usr/local/freeswitch/bin/freeswitch -nonat -nc -nf -conf /usr/local/freeswitch/conf -log /usr/local/freeswitch/log -db /usr/local/freeswitch/db
+autostart=true
+autorestart=true
+user=freeswitch
+stdout_logfile=/var/log/supervisor/freeswitch.log
+stderr_logfile=/var/log/supervisor/freeswitch_err.log
+EOF
+
+# Create entrypoint script
+RUN cat > /entrypoint.sh <<'EOF'
+#!/bin/bash
+set -e
+
+echo "========================================="
+echo "FreeSWITCH 1.10.x Base Image"
+echo "========================================="
+echo ""
+echo " FS Home   : /usr/local/freeswitch"
+echo " Config    : /usr/local/freeswitch/conf"
+echo " Logs      : /usr/local/freeswitch/log"
+echo " DB        : /usr/local/freeswitch/db"
+echo " ESL       : 0.0.0.0:8021 (password: ClueCon)"
+echo " LogLevel  : DEBUG"
+echo ""
+echo "Pre-configured Extensions:"
+echo "  - 1000 (password: 1234)"
+echo "  - 1001 (password: 1234)"
+echo ""
+echo "Available Commands:"
+echo "  - freeswitch  : Start FreeSWITCH"
+echo "  - fs_cli      : FreeSWITCH CLI"
+echo "  - ps, netstat, ping : System utilities"
+echo ""
+echo "Exposed Ports:"
+echo "  - 5060/5061   : SIP"
+echo "  - 5080/5081   : WebSocket SIP"
+echo "  - 8021        : Event Socket (fs_cli)"
+echo "  - 7443        : WebRTC"
+echo "  - 16384-32768 : RTP Media"
+echo ""
+echo "========================================="
+echo ""
+
+# If no command specified, start supervisor
+if [ $# -eq 0 ]; then
+    echo "Starting FreeSWITCH via supervisor..."
+    exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
+else
+    # Execute provided command
+    exec "$@"
+fi
+EOF
+
+RUN chmod +x /entrypoint.sh
+
+# Create supervisor log directory
+RUN mkdir -p /var/log/supervisor
+
+# Expose ports
+# SIP
+EXPOSE 5060/tcp 5060/udp 5080/tcp 5080/udp
+EXPOSE 5061/tcp 5061/udp 5081/tcp 5081/udp
+# Event Socket (fs_cli)
+EXPOSE 8021/tcp
+# WebRTC
+EXPOSE 7443/tcp
+EXPOSE 5066/tcp
+# RTP Media
+EXPOSE 16384-32768/udp
+
+# Volumes
+VOLUME ["/usr/local/freeswitch/conf", "/usr/local/freeswitch/log", "/usr/local/freeswitch/db"]
+
+WORKDIR /usr/local/freeswitch
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []

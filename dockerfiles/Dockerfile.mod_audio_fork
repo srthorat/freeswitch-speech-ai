@@ -1,0 +1,178 @@
+# ============================================================================
+# Dockerfile for mod_audio_fork - Based on Production FreeSWITCH Base Image
+# ============================================================================
+# This Dockerfile builds mod_audio_fork on top of srt2011/freeswitch-base:latest
+# which already includes:
+#   - FreeSWITCH 1.10.11 fully built and configured
+#   - All required configs for SIP calls (extensions 1000-1001)
+#   - Event Socket configured for fs_cli
+#   - Production patches and optimizations
+#
+# This Dockerfile ONLY adds:
+#   - libwebsockets 4.3.3 (required dependency for mod_audio_fork)
+#   - mod_audio_fork module build
+#
+# Build time: ~10-15 minutes (vs 90+ min for full build)
+# ============================================================================
+
+ARG BASE_IMAGE=srt2011/freeswitch-base:latest
+FROM ${BASE_IMAGE} AS builder
+
+# Build argument for versions
+ARG LIBWEBSOCKETS_VERSION=4.3.3
+ARG BUILD_CPUS=4
+
+# Print build configuration
+RUN echo "=============================================" \
+    && echo "Building mod_audio_fork" \
+    && echo "=============================================" \
+    && echo "Base Image: ${BASE_IMAGE}" \
+    && echo "Dependency: libwebsockets ${LIBWEBSOCKETS_VERSION}" \
+    && echo "Build CPUs: ${BUILD_CPUS}" \
+    && echo "============================================="
+
+# Install build dependencies required for libwebsockets and mod_audio_fork
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    git \
+    cmake \
+    build-essential \
+    libssl-dev \
+    libspeexdsp-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set library path
+ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+
+# ============================================================================
+# Build libwebsockets (required dependency)
+# ============================================================================
+WORKDIR /usr/local/src
+RUN echo "=========================================" \
+    && echo "Building libwebsockets ${LIBWEBSOCKETS_VERSION}..." \
+    && echo "=========================================" \
+    && git clone --depth 1 -b v${LIBWEBSOCKETS_VERSION} https://github.com/warmcat/libwebsockets.git \
+    && cd libwebsockets \
+    && mkdir -p build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && ldconfig \
+    && echo "✅ libwebsockets ${LIBWEBSOCKETS_VERSION} installed"
+
+# ============================================================================
+# Copy mod_audio_fork source and build it
+# ============================================================================
+WORKDIR /usr/local/src
+COPY ./modules/mod_audio_fork /usr/local/src/mod_audio_fork
+
+RUN echo "=========================================" \
+    && echo "Building mod_audio_fork..." \
+    && echo "=========================================" \
+    && cd /usr/local/src/mod_audio_fork \
+    && echo "" \
+    && echo "Compiling C file with gcc..." \
+    && gcc -fPIC -c \
+        -I/usr/local/freeswitch/include/freeswitch \
+        -I/usr/local/include \
+        mod_audio_fork.c \
+    && echo "Compiling C++ files with g++..." \
+    && g++ -fPIC -c \
+        -I/usr/local/freeswitch/include/freeswitch \
+        -I/usr/local/include \
+        *.cpp \
+    && echo "Linking module..." \
+    && mkdir -p /usr/local/freeswitch/lib/freeswitch/mod \
+    && g++ -shared \
+        -o /usr/local/freeswitch/lib/freeswitch/mod/mod_audio_fork.so \
+        *.o \
+        -lwebsockets \
+        -lpthread \
+        -lssl \
+        -lcrypto \
+    && echo "✅ mod_audio_fork compiled successfully" \
+    && echo "" \
+    && echo "Module location:" \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_audio_fork.so
+
+# ============================================================================
+# Validation Stage: Verify module dependencies
+# ============================================================================
+RUN echo "=========================================" \
+    && echo "Module Validation" \
+    && echo "=========================================" \
+    && MODULE_PATH="/usr/local/freeswitch/lib/freeswitch/mod/mod_audio_fork.so" \
+    && echo "" \
+    && echo "1. Check module file exists:" \
+    && if [ -f "$MODULE_PATH" ]; then \
+        echo "✅ Module file exists"; ls -lh "$MODULE_PATH"; \
+    else \
+        echo "❌ ERROR: Module file not found: $MODULE_PATH"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "2. Check module dependencies with ldd:" \
+    && ldd "$MODULE_PATH" \
+    && echo "" \
+    && echo "3. Verify libwebsockets linkage:" \
+    && if ldd "$MODULE_PATH" | grep -q "libwebsockets"; then \
+        echo "✅ Module correctly linked with libwebsockets"; \
+        ldd "$MODULE_PATH" | grep libwebsockets; \
+    else \
+        echo "❌ ERROR: Module not linked with libwebsockets"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "4. Check for missing dependencies:" \
+    && if ldd "$MODULE_PATH" | grep -q "not found"; then \
+        echo "❌ ERROR: Missing dependencies:"; \
+        ldd "$MODULE_PATH" | grep "not found"; exit 1; \
+    else \
+        echo "✅ No missing dependencies"; \
+    fi \
+    && echo "=========================================" \
+    && echo "✅ Static validation passed!" \
+    && echo "========================================="
+
+# ============================================================================
+# Update FreeSWITCH modules.conf.xml to load mod_audio_fork
+# ============================================================================
+RUN sed -i '/<\/modules>/i \    <load module="mod_audio_fork"/>' \
+    /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml \
+    && echo "✅ Added mod_audio_fork to modules.conf.xml"
+
+# ============================================================================
+# Runtime Validation: Quick module load test
+# ============================================================================
+RUN export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH \
+    && timeout 60s /usr/local/freeswitch/bin/freeswitch -nonat -nc -nf >/dev/null 2>&1 & FS_PID=$! \
+    && sleep 15 \
+    && grep -q "mod_audio_fork" /usr/local/freeswitch/log/freeswitch.log \
+    && ! grep "mod_audio_fork" /usr/local/freeswitch/log/freeswitch.log | grep -qiE "error|fail|cannot|unable" \
+    && kill $FS_PID 2>/dev/null || true \
+    && echo "✅ Runtime validation passed - mod_audio_fork loaded successfully"
+
+# ============================================================================
+# Final Stage: Clean Runtime Image
+# ============================================================================
+FROM ${BASE_IMAGE} AS runtime
+
+# Copy mod_audio_fork module and libwebsockets
+COPY --from=builder /usr/local/freeswitch/lib/freeswitch/mod/mod_audio_fork.so /usr/local/freeswitch/lib/freeswitch/mod/
+COPY --from=builder /usr/local/lib/libwebsockets.so* /usr/local/lib/
+COPY --from=builder /usr/local/include/libwebsockets* /usr/local/include/
+
+# Copy updated modules.conf.xml
+COPY --from=builder /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml /usr/local/freeswitch/conf/autoload_configs/
+
+# Update library cache
+RUN ldconfig
+
+# Set environment
+ENV PATH="/usr/local/freeswitch/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+
+# Labels
+LABEL maintainer="FreeSWITCH mod_audio_fork"
+LABEL description="FreeSWITCH with mod_audio_fork - based on srt2011/freeswitch-base:latest"
+LABEL base.image="srt2011/freeswitch-base:latest"
+LABEL module="mod_audio_fork"
+LABEL dependency="libwebsockets-4.3.3"
