@@ -196,6 +196,96 @@ docker exec -it freeswitch fs_cli -x 'uuid_audio_fork bba5d840-47d1-4245-8319-de
 - ✅ 182-line Dockerfile (48% smaller than original)
 - ✅ Behaves identically to base image with mod_audio_fork added
 
+### Manual Verification for mod_audio_fork
+
+After building or pulling the mod_audio_fork image, verify it manually:
+
+#### Step 1: Check Module File Exists
+
+```bash
+# Verify mod_audio_fork.so exists in the image
+docker run --rm freeswitch-mod-audio-fork:latest ls -lh /usr/local/freeswitch/mod/mod_audio_fork.so
+
+# Should show file with size around 200-400 KB
+```
+
+#### Step 2: Check Module Dependencies
+
+```bash
+# Verify module is linked with libwebsockets
+docker run --rm freeswitch-mod-audio-fork:latest ldd /usr/local/freeswitch/mod/mod_audio_fork.so | grep -i websockets
+
+# Should show: libwebsockets.so.19 => /usr/local/lib/libwebsockets.so.19
+```
+
+Check for missing dependencies:
+```bash
+# Run full ldd check
+docker run --rm freeswitch-mod-audio-fork:latest ldd /usr/local/freeswitch/mod/mod_audio_fork.so
+
+# Should show NO "not found" entries
+```
+
+#### Step 3: Verify Module Loading
+
+```bash
+# Start FreeSWITCH and check module loading
+docker run --rm freeswitch-mod-audio-fork:latest bash -c '
+    echo "Starting FreeSWITCH in background..."
+    /usr/local/freeswitch/bin/freeswitch -nc -nf > /dev/null 2>&1 &
+    FS_PID=$!
+
+    echo "Waiting 15 seconds for FreeSWITCH to start..."
+    sleep 15
+
+    echo ""
+    echo "Checking FreeSWITCH log for mod_audio_fork..."
+    grep -i "mod_audio_fork" /usr/local/freeswitch/log/freeswitch.log || echo "❌ mod_audio_fork NOT found in logs"
+
+    kill $FS_PID 2>/dev/null || true
+'
+```
+
+Expected output should include:
+```
+[NOTICE] mod_audio_fork.c:300 mod_audio_fork API loading..
+[NOTICE] lws_glue.cpp:372 mod_audio_fork: audio buffer (in secs):    2 secs
+[NOTICE] lws_glue.cpp:373 mod_audio_fork: sub-protocol:              audio.drachtio.org
+[NOTICE] lws_glue.cpp:374 mod_audio_fork: lws service threads:       1
+[NOTICE] mod_audio_fork.c:324 mod_audio_fork API successfully loaded
+[CONSOLE] switch_loadable_module.c:1772 Successfully Loaded [mod_audio_fork]
+[NOTICE] switch_loadable_module.c:389 Adding API Function 'uuid_audio_fork'
+```
+
+#### Step 4: Check for Loading Errors
+
+```bash
+# Check for errors when loading mod_audio_fork
+docker run --rm freeswitch-mod-audio-fork:latest bash -c '
+    /usr/local/freeswitch/bin/freeswitch -nc -nf > /dev/null 2>&1 &
+    sleep 15
+    grep -i "mod_audio_fork" /usr/local/freeswitch/log/freeswitch.log | grep -iE "error|fail"
+    if [ $? -eq 0 ]; then
+        echo "❌ Errors detected when loading mod_audio_fork"
+        exit 1
+    else
+        echo "✅ No errors detected"
+    fi
+'
+```
+
+#### Verification Summary
+
+If all checks pass:
+```
+✅ mod_audio_fork is installed and loads successfully!
+```
+
+**To start FreeSWITCH with mod_audio_fork**:
+```bash
+docker run --rm -it freeswitch-mod-audio-fork:latest freeswitch -nc -nf
+```
+
 ## Build Process
 
 ### mod_audio_fork (Base Image Approach - RECOMMENDED)
@@ -548,24 +638,166 @@ Once you've built the FreeSWITCH base image, you can test it in two ways:
 
 See **DOCKER_HUB_DEPLOYMENT.md** for detailed step-by-step instructions.
 
-### Option 2: Automated Validation Script
+### Option 2: Manual Validation (Recommended for Learning)
 
-**Best for**: Quick health checks, CI/CD validation
+**Best for**: Understanding FreeSWITCH components, debugging, learning
+
+#### Step 1: Start FreeSWITCH Container
 
 ```bash
-# Run validation script
-./dockerfiles/test-freeswitch-base.sh freeswitch-base:1.10.11
+# Start with all ports mapped
+docker run -d \
+    --name freeswitch-test \
+    --platform linux/amd64 \
+    -p 5060:5060/tcp \
+    -p 5060:5060/udp \
+    -p 5080:5080/tcp \
+    -p 5080:5080/udp \
+    -p 8021:8021/tcp \
+    -p 16384-16484:16384-16484/udp \
+    freeswitch-base:1.10.11
 ```
 
-**Validates**:
-- ✅ FreeSWITCH process running
-- ✅ fs_cli connectivity (Event Socket)
-- ✅ Module loading (100+ modules expected)
-- ✅ SIP profiles active
-- ✅ Extensions 1000 and 1001 configured
-- ✅ System utilities available (ps, netstat, ping, etc.)
+#### Step 2: Wait for FreeSWITCH to Start
 
-**Note**: This validates the build but doesn't test actual calling. For real SIP calling tests, use Option 1.
+```bash
+# Wait 30 seconds for startup
+sleep 30
+```
+
+#### Step 3: Verify Container is Running
+
+```bash
+# Check container status
+docker ps | grep freeswitch-test
+
+# Should show STATUS as "Up X seconds"
+```
+
+If container is not running:
+```bash
+# Check logs for errors
+docker logs freeswitch-test
+```
+
+#### Step 4: Check FreeSWITCH Process
+
+```bash
+# Verify FreeSWITCH process is running
+docker exec freeswitch-test pgrep -f freeswitch
+
+# Should return a process ID (e.g., 1)
+```
+
+#### Step 5: Check FreeSWITCH Log File
+
+```bash
+# Verify log file exists
+docker exec freeswitch-test test -f /usr/local/freeswitch/log/freeswitch.log && echo "✅ Log file exists"
+
+# Check for startup errors (ignore NORMAL_CLEARING and switch_odbc.c)
+docker exec freeswitch-test grep -i "error" /usr/local/freeswitch/log/freeswitch.log | grep -v "NORMAL_CLEARING" | grep -v "switch_odbc.c"
+
+# If no output or only expected errors, you're good
+```
+
+#### Step 6: Test fs_cli Connectivity
+
+```bash
+# Connect with fs_cli and get status
+docker exec freeswitch-test /usr/local/freeswitch/bin/fs_cli -x "status"
+
+# Should show FreeSWITCH version, uptime, and session info
+```
+
+If connection fails:
+```bash
+# Check event socket configuration
+docker exec freeswitch-test cat /usr/local/freeswitch/conf/autoload_configs/event_socket.conf.xml
+```
+
+#### Step 7: Check Loaded Modules
+
+```bash
+# Count loaded modules
+docker exec freeswitch-test /usr/local/freeswitch/bin/fs_cli -x "show modules" | grep -c "^mod_"
+
+# Should show 50+ modules (production builds have 100+)
+```
+
+List first 20 modules:
+```bash
+docker exec freeswitch-test /usr/local/freeswitch/bin/fs_cli -x "show modules" | head -20
+```
+
+#### Step 8: Check SIP Profiles
+
+```bash
+# Verify SIP profiles are running
+docker exec freeswitch-test /usr/local/freeswitch/bin/fs_cli -x "sofia status"
+
+# Should show "internal" and "external" profiles as RUNNING
+```
+
+#### Step 9: Verify Extensions 1000 and 1001
+
+```bash
+# Check extension 1000 configuration
+docker exec freeswitch-test test -f /usr/local/freeswitch/conf/directory/default/1000.xml && echo "✅ Extension 1000 exists"
+
+# Check extension 1001 configuration
+docker exec freeswitch-test test -f /usr/local/freeswitch/conf/directory/default/1001.xml && echo "✅ Extension 1001 exists"
+```
+
+#### Step 10: Test System Utilities
+
+```bash
+# Test ps command
+docker exec freeswitch-test ps aux > /dev/null && echo "✅ ps works"
+
+# Test netstat
+docker exec freeswitch-test netstat -an > /dev/null && echo "✅ netstat works"
+
+# Test ping
+docker exec freeswitch-test ping -c 1 8.8.8.8 > /dev/null && echo "✅ ping works"
+
+# Test vim
+docker exec freeswitch-test which vim > /dev/null && echo "✅ vim installed"
+
+# Test curl
+docker exec freeswitch-test which curl > /dev/null && echo "✅ curl installed"
+```
+
+#### Step 11: Verify Critical Modules
+
+```bash
+# Check critical modules for SIP and WebRTC
+for module in mod_sofia mod_event_socket mod_conference mod_dptools mod_dialplan_xml mod_opus mod_vp8 mod_h264; do
+    echo -n "Checking $module: "
+    docker exec freeswitch-test /usr/local/freeswitch/bin/fs_cli -x "show modules" | grep -q "^$module" && echo "✅" || echo "❌"
+done
+```
+
+#### Validation Summary
+
+If all checks pass:
+```
+✅ FreeSWITCH base image validation complete!
+```
+
+**Next steps**:
+1. Register SIP clients to extensions 1000 and 1001
+2. Test calling between extensions
+3. Test WebRTC connectivity
+
+**Cleanup**:
+```bash
+# Stop and remove test container
+docker stop freeswitch-test
+docker rm freeswitch-test
+```
+
+**Note**: This manual validation helps you understand each component. For quick health checks in CI/CD, consider scripting these steps.
 
 ---
 
