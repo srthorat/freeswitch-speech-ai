@@ -7,6 +7,21 @@ This directory contains Dockerfiles for building FreeSWITCH images with differen
 
 ---
 
+## 🚀 Quick Start: Running on MacBook
+
+**Want to quickly test on your MacBook?** See the comprehensive guide:
+
+📘 **[RUN_ON_MACBOOK.md](RUN_ON_MACBOOK.md)** - Complete MacBook setup guide with examples
+
+```bash
+# Example: Run with Deepgram transcription
+./dockerfiles/run-on-macbook.sh \
+  srt2011/freeswitch-mod-deepgram-transcribe:latest \
+  YOUR_DEEPGRAM_API_KEY
+```
+
+---
+
 ## 1. FreeSWITCH Base Image (Recommended Starting Point)
 
 **Files**:
