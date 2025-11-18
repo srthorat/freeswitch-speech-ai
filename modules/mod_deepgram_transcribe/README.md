@@ -79,29 +79,49 @@ In stereo mode:
 
 ### Channel Variables
 
-The following channel variables can be set to configure the Deepgram transcription service:
+The following channel variables can be set to configure the Deepgram transcription service. The module automatically reads these variables and constructs the Deepgram WebSocket API URL.
 
-| Variable | Description | Default |
-| --- | ----------- | --- |
-| DEEPGRAM_API_KEY | Deepgram API key for authentication (required) | none |
-| DEEPGRAM_SPEECH_MODEL | Model to use: general, meeting, phonecall, voicemail, finance, conversationalai, video, medical, or custom | general |
-| DEEPGRAM_SPEECH_MODEL_VERSION | Specific model version to use | latest |
-| DEEPGRAM_SPEECH_TIER | Model tier: base, enhanced, nova, nova-2 | base |
-| DEEPGRAM_SPEECH_CUSTOM_MODEL | Custom model ID (if using a custom trained model) | none |
-| DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION | Enable automatic punctuation: true/false | true |
-| DEEPGRAM_SPEECH_PROFANITY_FILTER | Filter profanity from transcripts: true/false | false |
-| DEEPGRAM_SPEECH_REDACT | Redact sensitive info: pci, ssn, numbers, or combination (comma-separated) | none |
-| DEEPGRAM_SPEECH_DIARIZE | Enable speaker diarization: true/false | false |
-| DEEPGRAM_SPEECH_DIARIZE_VERSION | Diarization version to use | latest |
-| DEEPGRAM_SPEECH_NER | Enable Named Entity Recognition: true/false | false |
-| DEEPGRAM_SPEECH_ALTERNATIVES | Number of alternative transcription hypotheses to return (1-10) | 1 |
-| DEEPGRAM_SPEECH_NUMERALS | Convert spoken numbers to numerals: true/false | false |
-| DEEPGRAM_SPEECH_SEARCH | Keywords to search for in transcript (comma-separated) | none |
-| DEEPGRAM_SPEECH_KEYWORDS | Keywords to boost with optional intensity: word:intensity,word2:intensity | none |
-| DEEPGRAM_SPEECH_REPLACE | Find and replace terms: find1:replace1,find2:replace2 | none |
-| DEEPGRAM_SPEECH_TAG | Custom tags for the request (for organization/tracking) | none |
-| DEEPGRAM_SPEECH_ENDPOINTING | Time in milliseconds of silence to detect end of speech | none |
-| DEEPGRAM_SPEECH_VAD_TURNOFF | Time in milliseconds to wait before turning off VAD | none |
+| Variable | Deepgram API Parameter | Values/Format | Default | Description |
+| --- | --- | --- | --- | --- |
+| **Authentication** |
+| DEEPGRAM_API_KEY | Authorization header | API key string | none | Your Deepgram API key (required) |
+| **Model Selection** |
+| DEEPGRAM_SPEECH_MODEL | `model` | general, meeting, phonecall, voicemail, finance, conversationalai, video, medical | Auto-selected | Model optimized for use case |
+| DEEPGRAM_SPEECH_TIER | `tier` | base, enhanced, nova, nova-2 | Auto-selected | Model quality tier |
+| DEEPGRAM_SPEECH_MODEL_VERSION | `version` | Version string | latest | Specific model version |
+| DEEPGRAM_SPEECH_CUSTOM_MODEL | `model` | Custom model ID | none | Your custom trained model |
+| **Speaker & Entity Detection** |
+| DEEPGRAM_SPEECH_DIARIZE | `diarize` | true/false | false | Identify different speakers |
+| DEEPGRAM_SPEECH_DIARIZE_VERSION | `diarize_version` | Version string | latest | Diarization algorithm version |
+| DEEPGRAM_SPEECH_NER | `ner` | true/false | false | Named Entity Recognition (names, dates, etc.) |
+| **Text Formatting** |
+| DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION | `punctuate` | true/false | false | Add punctuation automatically |
+| DEEPGRAM_SPEECH_NUMERALS | `numerals` | true/false | false | Convert spoken numbers to digits |
+| DEEPGRAM_SPEECH_ENABLE_SMART_FORMAT | `smart_format`, `no_delay` | true/false | false | Smart formatting with reduced latency |
+| **Keywords & Search** |
+| DEEPGRAM_SPEECH_KEYWORDS | `keywords` | word:intensity,... | none | Boost keywords (intensity 1-10) |
+| DEEPGRAM_SPEECH_SEARCH | `search` | word1,word2,... | none | Search for specific keywords |
+| **Privacy & Compliance** |
+| DEEPGRAM_SPEECH_REDACT | `redact` | pci, ssn, numbers (comma-separated) | none | Redact sensitive information |
+| DEEPGRAM_SPEECH_PROFANITY_FILTER | `profanity_filter` | true/false | false | Filter profanity from transcripts |
+| DEEPGRAM_SPEECH_REPLACE | `replace` | find:replace,... | none | Find and replace terms |
+| **Quality & Alternatives** |
+| DEEPGRAM_SPEECH_ALTERNATIVES | `alternatives` | 1-10 | 1 | Number of alternative transcription hypotheses |
+| **Voice Activity Detection** |
+| DEEPGRAM_SPEECH_ENDPOINTING | `endpointing` | milliseconds | none | Silence duration to detect end of speech |
+| DEEPGRAM_SPEECH_UTTERANCE_END_MS | `utterance_end_ms` | milliseconds | none | Utterance end detection threshold |
+| DEEPGRAM_SPEECH_VAD_TURNOFF | `vad_turnoff` | milliseconds | none | Delay before turning off VAD |
+| **Organization** |
+| DEEPGRAM_SPEECH_TAG | `tag` | string | none | Custom tag for tracking/organization |
+
+**Fixed Parameters** (automatically set by module):
+- `encoding=linear16` - Audio encoding format (hardcoded)
+- `sample_rate=8000` - Sample rate in Hz (hardcoded)
+- `language=<lang-code>` - From command line parameter
+- `multichannel=true&channels=2` - When `stereo` mode is used
+- `interim_results=true` - When `interim` is specified
+
+**Module Code Reference:** All variable handling is in `dg_transcribe_glue.cpp` lines 141-267.
 
 ## Model Options
 
@@ -125,6 +145,55 @@ Deepgram offers several pre-trained models optimized for different use cases:
 - **enhanced** - Improved accuracy over base
 - **nova** - Deepgram's Nova model for highest accuracy
 - **nova-2** - Latest version of Nova with further improvements
+
+### Automatic Model/Tier Selection
+
+If you don't specify `DEEPGRAM_SPEECH_MODEL` and `DEEPGRAM_SPEECH_TIER`, the module automatically selects optimal defaults based on the language code. Here are the automatic selections:
+
+| Language | Code | Auto Tier | Auto Model | Notes |
+|----------|------|-----------|------------|-------|
+| **English (US)** | en, en-US | nova | phonecall | Best quality for phone calls |
+| **English (Other)** | en-AU, en-GB, en-IN, en-NZ | nova | general | Best quality, general purpose |
+| **Spanish** | es, es-419 | nova | general | High quality for Spanish |
+| **Chinese** | zh, zh-CN, zh-TW | base | general | Standard quality |
+| **Danish** | da | enhanced | general | Enhanced quality |
+| **Dutch** | nl | enhanced | general | Enhanced quality |
+| **French** | fr | enhanced | general | Enhanced quality |
+| **French (Canada)** | fr-CA | base | general | Standard quality |
+| **German** | de | enhanced | general | Enhanced quality |
+| **Hindi** | hi | enhanced | general | Enhanced quality |
+| **Hindi (Latin)** | hi-Latn | base | general | Standard quality |
+| **Indonesian** | id | base | general | Standard quality |
+| **Japanese** | ja | enhanced | general | Enhanced quality |
+| **Korean** | ko | enhanced | general | Enhanced quality |
+| **Norwegian** | no | enhanced | general | Enhanced quality |
+| **Polish** | pl | enhanced | general | Enhanced quality |
+| **Portuguese** | pt, pt-BR, pt-PT | enhanced | general | Enhanced quality |
+| **Russian** | ru | base | general | Standard quality |
+| **Swedish** | sv | enhanced | general | Enhanced quality |
+| **Tamil** | ta | enhanced | general | Enhanced quality |
+| **Turkish** | tr | base | general | Standard quality |
+| **Ukrainian** | uk | base | general | Standard quality |
+
+**How it works:**
+
+```bash
+# Without specifying model/tier - uses automatic defaults
+uuid_deepgram_transcribe <uuid> start en-US interim
+# → Automatically uses: tier=nova, model=phonecall
+
+# Override with your own preferences
+uuid_setvar <uuid> DEEPGRAM_SPEECH_MODEL meeting
+uuid_setvar <uuid> DEEPGRAM_SPEECH_TIER nova-2
+uuid_deepgram_transcribe <uuid> start en-US interim
+# → Uses: tier=nova-2, model=meeting
+
+# For unsupported languages, defaults to base/general
+uuid_deepgram_transcribe <uuid> start ar interim
+# → Falls back to: tier=base, model=general
+```
+
+**Code reference:** The automatic selection logic is in `dg_transcribe_glue.cpp` lines 41-73, 154-161.
 
 ## Authentication
 
@@ -448,6 +517,159 @@ ep.api('uuid_deepgram_transcribe', `${ep.uuid} stop`);
 ```
 
 This stereo example will transcribe both parties during a bridged call, with caller on channel 0 and callee on channel 1.
+
+---
+
+## How the Module Constructs API Requests
+
+Understanding how channel variables map to Deepgram API parameters helps you configure features correctly.
+
+### URL Construction Process
+
+When you run `uuid_deepgram_transcribe <uuid> start en-US interim stereo`, the module:
+
+1. **Reads all channel variables** set for that call
+2. **Builds the WebSocket URL** with query parameters
+3. **Connects to Deepgram** with the complete feature set
+
+### Example 1: Basic Transcription
+
+**Configuration:**
+```xml
+<variable name="DEEPGRAM_API_KEY" value="abc123..."/>
+```
+
+**Command:**
+```bash
+uuid_deepgram_transcribe <uuid> start en-US interim
+```
+
+**Generated URL:**
+```
+wss://api.deepgram.com/v1/listen?tier=nova&model=phonecall&language=en-US&punctuate=true&interim_results=true&encoding=linear16&sample_rate=8000
+```
+
+**Headers:**
+```
+Authorization: Token abc123...
+```
+
+**Explanation:**
+- `tier=nova&model=phonecall` - Auto-selected for en-US
+- `language=en-US` - From command line
+- `punctuate=true` - Default behavior
+- `interim_results=true` - From `interim` parameter
+- `encoding=linear16&sample_rate=8000` - Always set by module
+
+### Example 2: Stereo with Diarization
+
+**Configuration:**
+```xml
+<variable name="DEEPGRAM_API_KEY" value="abc123..."/>
+<variable name="DEEPGRAM_SPEECH_MODEL" value="meeting"/>
+<variable name="DEEPGRAM_SPEECH_TIER" value="nova-2"/>
+<variable name="DEEPGRAM_SPEECH_DIARIZE" value="true"/>
+<variable name="DEEPGRAM_SPEECH_DIARIZE_VERSION" value="2024-01-01"/>
+```
+
+**Command:**
+```bash
+uuid_deepgram_transcribe <uuid> start en-US interim stereo
+```
+
+**Generated URL:**
+```
+wss://api.deepgram.com/v1/listen?tier=nova-2&model=meeting&language=en-US&multichannel=true&channels=2&punctuate=true&diarize=true&diarize_version=2024-01-01&interim_results=true&encoding=linear16&sample_rate=8000
+```
+
+**Explanation:**
+- `tier=nova-2&model=meeting` - From channel variables (overrides auto-selection)
+- `multichannel=true&channels=2` - From `stereo` parameter
+- `diarize=true&diarize_version=2024-01-01` - From channel variables
+
+### Example 3: Full Feature Set
+
+**Configuration:**
+```xml
+<variable name="DEEPGRAM_API_KEY" value="abc123..."/>
+<variable name="DEEPGRAM_SPEECH_MODEL" value="phonecall"/>
+<variable name="DEEPGRAM_SPEECH_TIER" value="nova"/>
+<variable name="DEEPGRAM_SPEECH_DIARIZE" value="true"/>
+<variable name="DEEPGRAM_SPEECH_NER" value="true"/>
+<variable name="DEEPGRAM_SPEECH_KEYWORDS" value="pricing:5,discount:3"/>
+<variable name="DEEPGRAM_SPEECH_SEARCH" value="refund,cancel"/>
+<variable name="DEEPGRAM_SPEECH_REDACT" value="pci,ssn"/>
+<variable name="DEEPGRAM_SPEECH_ALTERNATIVES" value="3"/>
+<variable name="DEEPGRAM_SPEECH_NUMERALS" value="true"/>
+<variable name="DEEPGRAM_SPEECH_TAG" value="sales-call-001"/>
+```
+
+**Command:**
+```bash
+uuid_deepgram_transcribe <uuid> start en-US interim stereo
+```
+
+**Generated URL:**
+```
+wss://api.deepgram.com/v1/listen?tier=nova&model=phonecall&language=en-US&multichannel=true&channels=2&punctuate=true&redact=pci%2Cssn&diarize=true&ner=true&alternatives=3&numerals=true&search=refund&search=cancel&keywords=pricing%3A5&keywords=discount%3A3&tag=sales-call-001&interim_results=true&encoding=linear16&sample_rate=8000
+```
+
+**Explanation:**
+- All channel variables are converted to API parameters
+- Comma-separated lists (keywords, search, redact) become multiple parameters
+- Special characters are URL-encoded (`:` → `%3A`, `,` → `%2C`)
+- The module handles all encoding automatically
+
+### Example 4: PCI Compliance
+
+**Configuration:**
+```xml
+<variable name="DEEPGRAM_API_KEY" value="abc123..."/>
+<variable name="DEEPGRAM_SPEECH_MODEL" value="finance"/>
+<variable name="DEEPGRAM_SPEECH_TIER" value="enhanced"/>
+<variable name="DEEPGRAM_SPEECH_REDACT" value="pci,ssn,numbers"/>
+<variable name="DEEPGRAM_SPEECH_PROFANITY_FILTER" value="true"/>
+<variable name="DEEPGRAM_SPEECH_REPLACE" value="card:payment,account:identifier"/>
+```
+
+**Command:**
+```bash
+uuid_deepgram_transcribe <uuid> start en-US interim
+```
+
+**Generated URL:**
+```
+wss://api.deepgram.com/v1/listen?tier=enhanced&model=finance&language=en-US&punctuate=true&profanity_filter=true&redact=pci%2Cssn%2Cnumbers&replace=card%3Apayment&replace=account%3Aidentifier&interim_results=true&encoding=linear16&sample_rate=8000
+```
+
+**Result:**
+- Credit card numbers redacted: "My card is [REDACTED]"
+- SSN redacted: "My SSN is [REDACTED]"
+- Words replaced: "card" → "payment", "account" → "identifier"
+
+### Variable Processing Details
+
+**Boolean Variables:**
+- Module uses `switch_true()` to evaluate: "true", "yes", "1", "on" → true
+- Any other value → false
+
+**Comma-Separated Lists:**
+- `DEEPGRAM_SPEECH_KEYWORDS`: Each item becomes `&keywords=item`
+- `DEEPGRAM_SPEECH_SEARCH`: Each item becomes `&search=item`
+- `DEEPGRAM_SPEECH_REPLACE`: Each item becomes `&replace=item`
+- Supports up to 500 items per variable
+
+**URL Encoding:**
+- Automatically encodes special characters
+- Preserves: `!'()*-.0-9A-Za-z_~:`
+- Encodes everything else as `%HH`
+
+**Code Implementation:** See `dg_transcribe_glue.cpp`:
+- URL construction: Lines 141-267
+- URI encoding: Lines 121-139
+- Boolean parsing: Lines 192-215
+
+---
 
 ## Supported Languages
 
