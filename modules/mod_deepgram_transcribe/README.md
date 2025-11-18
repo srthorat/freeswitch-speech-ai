@@ -325,7 +325,62 @@ Fired when an error occurs during transcription. Contains error details in the e
 
 ## Usage
 
-### Using drachtio-fsmrf
+### Method 1: User Directory Configuration
+
+Configure Deepgram settings per user by adding variables to user XML files. This is ideal when you want all calls from specific users to automatically have transcription capabilities.
+
+**Edit user directory file** (e.g., `/usr/local/freeswitch/conf/directory/default/1000.xml`):
+
+```xml
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1000"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1000"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+      <variable name="effective_caller_id_number" value="1000"/>
+
+      <!-- Deepgram Transcription Variables -->
+      <variable name="DEEPGRAM_API_KEY" value="your-deepgram-api-key"/>
+      <variable name="DEEPGRAM_SPEECH_MODEL" value="phonecall"/>
+      <variable name="DEEPGRAM_SPEECH_TIER" value="nova"/>
+      <variable name="DEEPGRAM_SPEECH_DIARIZE" value="true"/>
+      <variable name="DEEPGRAM_SPEECH_DIARIZE_VERSION" value="latest"/>
+      <variable name="DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION" value="true"/>
+    </variables>
+  </user>
+</include>
+```
+
+**Reload directory configuration:**
+```bash
+fs_cli -x 'reloadxml'
+```
+
+**Start transcription on active call:**
+```bash
+# Get call UUID
+fs_cli -x 'show calls'
+
+# Start transcription (mono - caller only)
+fs_cli -x 'uuid_deepgram_transcribe <uuid> start en-US interim'
+
+# Or start transcription (stereo - both parties)
+fs_cli -x 'uuid_deepgram_transcribe <uuid> start en-US interim stereo'
+```
+
+**Benefits:**
+- Variables automatically inherited by all calls from that user
+- No need to set variables per-call or in dialplan
+- Centralized configuration per extension
+- Easy to manage different settings for different users/departments
+
+### Method 2: Using drachtio-fsmrf
 
 When using [drachtio-fsmrf](https://www.npmjs.com/package/drachtio-fsmrf), you can access this API command via the api method on the 'endpoint' object.
 
@@ -360,7 +415,7 @@ ep.api('uuid_deepgram_transcribe', `${ep.uuid} start en interim`);
 ep.api('uuid_deepgram_transcribe', `${ep.uuid} stop`);
 ```
 
-### Using FreeSWITCH Dialplan
+### Method 3: Using FreeSWITCH Dialplan
 
 **Mono mode (caller only):**
 ```xml

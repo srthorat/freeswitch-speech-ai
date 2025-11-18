@@ -687,6 +687,126 @@ docker exec -it fs fs_cli -x "uuid_deepgram_transcribe <uuid> stop"
 
 ---
 
+### Method 4: User Directory Configuration (Per-User Defaults)
+
+Configure Deepgram settings per user by adding variables to user XML files. This is ideal when you want all calls from specific users/extensions to automatically have transcription capabilities with predefined settings.
+
+#### Setup
+
+**1. Edit user configuration file** (e.g., for extension 1000):
+
+```bash
+# Access container
+docker exec -it fs bash
+
+# Edit user file
+vi /usr/local/freeswitch/conf/directory/default/1000.xml
+```
+
+**2. Add Deepgram variables to the user:**
+
+```xml
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1000"/>
+    </params>
+    <variables>
+      <!-- Standard user variables -->
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1000"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+      <variable name="effective_caller_id_number" value="1000"/>
+
+      <!-- Deepgram Transcription Variables -->
+      <variable name="DEEPGRAM_API_KEY" value="your-deepgram-api-key"/>
+      <variable name="DEEPGRAM_SPEECH_MODEL" value="phonecall"/>
+      <variable name="DEEPGRAM_SPEECH_TIER" value="nova"/>
+      <variable name="DEEPGRAM_SPEECH_DIARIZE" value="true"/>
+      <variable name="DEEPGRAM_SPEECH_DIARIZE_VERSION" value="latest"/>
+      <variable name="DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION" value="true"/>
+    </variables>
+  </user>
+</include>
+```
+
+**3. Reload FreeSWITCH configuration:**
+
+```bash
+docker exec -it fs fs_cli -x 'reloadxml'
+```
+
+#### Usage
+
+Once configured, the variables are automatically inherited by all calls from that user:
+
+```bash
+# Get active calls
+docker exec -it fs fs_cli -x 'show calls'
+
+# Start transcription (mono - caller only)
+docker exec -it fs fs_cli -x 'uuid_deepgram_transcribe <uuid> start en-US interim'
+
+# Start transcription (stereo - both parties on separate channels)
+docker exec -it fs fs_cli -x 'uuid_deepgram_transcribe <uuid> start en-US interim stereo'
+
+# Stop transcription
+docker exec -it fs fs_cli -x 'uuid_deepgram_transcribe <uuid> stop'
+```
+
+#### Different Settings Per User/Department
+
+**Sales Team (Extension 1000-1099):**
+```xml
+<!-- High-end transcription with diarization and NER -->
+<variable name="DEEPGRAM_SPEECH_MODEL" value="meeting"/>
+<variable name="DEEPGRAM_SPEECH_TIER" value="nova-2"/>
+<variable name="DEEPGRAM_SPEECH_DIARIZE" value="true"/>
+<variable name="DEEPGRAM_SPEECH_NER" value="true"/>
+<variable name="DEEPGRAM_SPEECH_KEYWORDS" value="pricing:5,discount:4,payment:3"/>
+```
+
+**Support Team (Extension 2000-2099):**
+```xml
+<!-- Standard transcription with keyword boosting -->
+<variable name="DEEPGRAM_SPEECH_MODEL" value="phonecall"/>
+<variable name="DEEPGRAM_SPEECH_TIER" value="nova"/>
+<variable name="DEEPGRAM_SPEECH_KEYWORDS" value="issue:3,problem:3,refund:2"/>
+```
+
+**Payment Processing (Extension 3000-3099):**
+```xml
+<!-- Finance model with PCI redaction -->
+<variable name="DEEPGRAM_SPEECH_MODEL" value="finance"/>
+<variable name="DEEPGRAM_SPEECH_TIER" value="enhanced"/>
+<variable name="DEEPGRAM_SPEECH_REDACT" value="pci,ssn,numbers"/>
+<variable name="DEEPGRAM_SPEECH_PROFANITY_FILTER" value="true"/>
+```
+
+#### Benefits
+
+- **Automatic inheritance**: Variables applied to all calls from that user
+- **No per-call configuration**: Just start transcription, settings are already there
+- **Centralized management**: One place to configure each user/extension
+- **Department-level policies**: Different transcription settings per team
+- **Persistent**: Settings survive across calls and container restarts (if directory is mounted)
+
+#### Make Configuration Persistent
+
+To persist user directory changes across container restarts, mount the directory as a volume:
+
+```bash
+docker run -d --name fs \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  -v $(pwd)/freeswitch-config/directory:/usr/local/freeswitch/conf/directory \
+  srt2011/freeswitch-mod-deepgram-transcribe:latest
+```
+
+---
+
 ### Audio Mixing Modes (Mono vs Stereo)
 
 Deepgram module supports different audio channel configurations:

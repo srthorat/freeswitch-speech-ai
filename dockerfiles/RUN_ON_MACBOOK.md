@@ -244,6 +244,66 @@ Stop transcription:
 freeswitch@internal> uuid_deepgram_transcribe <call-uuid> stop
 ```
 
+#### Option 3: User Directory Configuration (Persistent)
+
+Configure Deepgram settings per user so they're automatically applied to all calls.
+
+**1. Access the container:**
+```bash
+docker exec -it freeswitch bash
+```
+
+**2. Edit user configuration** (e.g., for extension 1000):
+```bash
+vi /usr/local/freeswitch/conf/directory/default/1000.xml
+```
+
+**3. Add Deepgram variables:**
+```xml
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="1234"/>
+    </params>
+    <variables>
+      <!-- Standard variables -->
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+
+      <!-- Deepgram Transcription Variables -->
+      <variable name="DEEPGRAM_API_KEY" value="your-deepgram-api-key"/>
+      <variable name="DEEPGRAM_SPEECH_MODEL" value="phonecall"/>
+      <variable name="DEEPGRAM_SPEECH_TIER" value="nova"/>
+      <variable name="DEEPGRAM_SPEECH_DIARIZE" value="true"/>
+      <variable name="DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION" value="true"/>
+    </variables>
+  </user>
+</include>
+```
+
+**4. Reload configuration:**
+```bash
+docker exec -it freeswitch fs_cli -x 'reloadxml'
+```
+
+**5. Start transcription on any call from that user:**
+```bash
+# Get call UUID
+docker exec -it freeswitch fs_cli -x 'show calls'
+
+# Start transcription (mono)
+docker exec -it freeswitch fs_cli -x 'uuid_deepgram_transcribe <uuid> start en-US interim'
+
+# Or start transcription (stereo - both parties)
+docker exec -it freeswitch fs_cli -x 'uuid_deepgram_transcribe <uuid> start en-US interim stereo'
+```
+
+**Benefits:**
+- Variables automatically applied to all calls from that user
+- No need to set per-call or pass to script
+- Persistent across container restarts if directory is mounted as volume
+- Different settings per user/department
+
 ---
 
 ### Azure Transcription
