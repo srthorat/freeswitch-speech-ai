@@ -4,30 +4,43 @@
 # ============================================================================
 #
 # Usage:
-#   ./run-on-macbook.sh <docker-image-name>
+#   ./run-on-macbook.sh <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION]
 #
 # Examples:
 #   ./run-on-macbook.sh srt2011/freeswitch-base:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-audio-fork:latest
-#   ./run-on-macbook.sh username/freeswitch-base:1.10.11
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest
+#
+# With API keys for transcription:
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest "" YOUR_AZURE_KEY eastus
 #
 # ============================================================================
 
 set -e
 
 REMOTE_IMAGE=${1}
+DEEPGRAM_API_KEY=${2:-""}
+AZURE_SUBSCRIPTION_KEY=${3:-""}
+AZURE_REGION=${4:-"eastus"}
 CONTAINER_NAME="freeswitch"
 
 # Validation
 if [ -z "$REMOTE_IMAGE" ]; then
     echo "❌ Error: Docker image name is required"
     echo ""
-    echo "Usage: $0 <docker-image-name>"
+    echo "Usage: $0 <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION]"
     echo ""
     echo "Examples:"
     echo "  $0 srt2011/freeswitch-base:latest"
     echo "  $0 srt2011/freeswitch-mod-audio-fork:latest"
-    echo "  $0 username/freeswitch-base:1.10.11"
+    echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest"
+    echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest"
+    echo ""
+    echo "With API keys:"
+    echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY"
+    echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
     exit 1
 fi
 
@@ -37,6 +50,15 @@ echo "============================================="
 echo ""
 echo "Image: $REMOTE_IMAGE"
 echo "Container: $CONTAINER_NAME"
+
+# Show API key configuration
+if [ -n "$DEEPGRAM_API_KEY" ]; then
+    echo "Deepgram API Key: ${DEEPGRAM_API_KEY:0:10}... (configured)"
+fi
+if [ -n "$AZURE_SUBSCRIPTION_KEY" ]; then
+    echo "Azure Subscription Key: ${AZURE_SUBSCRIPTION_KEY:0:10}... (configured)"
+    echo "Azure Region: $AZURE_REGION"
+fi
 echo ""
 
 # Check if Docker is running
@@ -68,8 +90,10 @@ echo ""
 
 # Run container
 echo "Step 2: Starting FreeSWITCH container..."
-docker run -d \
-    --name "$CONTAINER_NAME" \
+
+# Build docker run command with optional environment variables
+DOCKER_CMD="docker run -d \
+    --name $CONTAINER_NAME \
     --platform linux/amd64 \
     --net=host \
     -p 5060:5060/tcp \
@@ -77,8 +101,21 @@ docker run -d \
     -p 5080:5080/tcp \
     -p 5080:5080/udp \
     -p 18021:8021/tcp \
-    -p 16384-16484:16384-16484/udp \
-    "$REMOTE_IMAGE"
+    -p 16384-16484:16384-16484/udp"
+
+# Add API keys if provided
+if [ -n "$DEEPGRAM_API_KEY" ]; then
+    DOCKER_CMD="$DOCKER_CMD -e DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY"
+fi
+if [ -n "$AZURE_SUBSCRIPTION_KEY" ]; then
+    DOCKER_CMD="$DOCKER_CMD -e AZURE_SUBSCRIPTION_KEY=$AZURE_SUBSCRIPTION_KEY"
+    DOCKER_CMD="$DOCKER_CMD -e AZURE_REGION=$AZURE_REGION"
+fi
+
+DOCKER_CMD="$DOCKER_CMD $REMOTE_IMAGE"
+
+# Execute docker run
+eval $DOCKER_CMD
 
 echo "✅ Container started"
 echo ""
@@ -122,6 +159,33 @@ echo "============================================="
 docker exec "$CONTAINER_NAME" /usr/local/freeswitch/bin/fs_cli -x "sofia status" || echo "Sofia status failed"
 echo ""
 
+# Check for transcription modules
+echo "============================================="
+echo "Transcription Modules"
+echo "============================================="
+MODULE_CHECK=$(docker exec "$CONTAINER_NAME" /usr/local/freeswitch/bin/fs_cli -x "show modules" 2>/dev/null | grep -E "audio_fork|deepgram|azure" || echo "")
+if [ -z "$MODULE_CHECK" ]; then
+    echo "No transcription modules detected (base image)"
+else
+    echo "$MODULE_CHECK"
+    echo ""
+    if echo "$MODULE_CHECK" | grep -q "deepgram"; then
+        if [ -n "$DEEPGRAM_API_KEY" ]; then
+            echo "✅ Deepgram transcription is configured and ready"
+        else
+            echo "⚠️  Deepgram module loaded but API key not configured"
+        fi
+    fi
+    if echo "$MODULE_CHECK" | grep -q "azure"; then
+        if [ -n "$AZURE_SUBSCRIPTION_KEY" ]; then
+            echo "✅ Azure transcription is configured and ready"
+        else
+            echo "⚠️  Azure module loaded but API key not configured"
+        fi
+    fi
+fi
+echo ""
+
 # Get MacBook IP
 echo "============================================="
 echo "Network Information"
@@ -159,7 +223,28 @@ echo "  1. Install a SIP client (Zoiper, Linphone, etc.)"
 echo "  2. Register extension 1000 and 1001"
 echo "  3. Call from 1000 to 1001 (dial: 1001)"
 echo "  4. Test echo service (dial: 9196)"
+
+# Add transcription-specific instructions if modules are present
+if [ -n "$MODULE_CHECK" ]; then
+    echo ""
+    echo "Transcription Module Usage:"
+    if echo "$MODULE_CHECK" | grep -q "deepgram"; then
+        echo "  Deepgram:"
+        echo "    docker exec -it $CONTAINER_NAME fs_cli"
+        echo "    freeswitch@internal> uuid_setvar <uuid> DEEPGRAM_API_KEY your-key"
+        echo "    freeswitch@internal> uuid_deepgram_transcribe <uuid> start en-US interim"
+    fi
+    if echo "$MODULE_CHECK" | grep -q "azure"; then
+        echo "  Azure:"
+        echo "    docker exec -it $CONTAINER_NAME fs_cli"
+        echo "    freeswitch@internal> uuid_setvar <uuid> AZURE_SUBSCRIPTION_KEY your-key"
+        echo "    freeswitch@internal> uuid_setvar <uuid> AZURE_REGION eastus"
+        echo "    freeswitch@internal> uuid_azure_transcribe <uuid> start en-US interim"
+    fi
+fi
+
 echo ""
 echo "For detailed instructions, see:"
 echo "  dockerfiles/DOCKER_HUB_DEPLOYMENT.md"
+echo "  dockerfiles/README.md"
 echo ""
