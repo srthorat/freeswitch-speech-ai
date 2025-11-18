@@ -40,17 +40,42 @@ apt-get install -y libwebsockets-dev
 The freeswitch module exposes the following API commands:
 
 ```
-uuid_deepgram_transcribe <uuid> start <lang-code> [interim]
+uuid_deepgram_transcribe <uuid> start <lang-code> [interim] [stereo|mono]
 ```
 Attaches media bug to channel and performs streaming recognize request.
 - `uuid` - unique identifier of Freeswitch channel
 - `lang-code` - a valid language code supported by Deepgram (e.g., en-US, en-GB, es, fr, de)
 - `interim` - If the 'interim' keyword is present then both interim and final transcription results will be returned; otherwise only final transcriptions will be returned
+- `stereo|mono` - Audio channel mode (optional, defaults to mono):
+  - `mono` - Single channel with caller audio only (default)
+  - `stereo` - Two channels with caller and callee audio on separate channels
 
 ```
 uuid_deepgram_transcribe <uuid> stop
 ```
 Stop transcription on the channel.
+
+### Audio Channel Modes
+
+**Mono Mode (Default)** - Captures caller audio only:
+```
+uuid_deepgram_transcribe <uuid> start en-US interim
+uuid_deepgram_transcribe <uuid> start en-US interim mono
+```
+
+**Stereo Mode** - Captures both caller and callee on separate channels:
+```
+uuid_deepgram_transcribe <uuid> start en-US interim stereo
+```
+
+In stereo mode:
+- Channel 0: Caller (inbound/read stream)
+- Channel 1: Callee (outbound/write stream)
+- Deepgram receives `multichannel=true&channels=2` parameter
+- Useful for call centers, quality monitoring, and compliance recording
+- Can be combined with speaker diarization for enhanced speaker separation
+
+**Mixed Mode**: Not supported. For mixed audio, use mono mode with speaker diarization as an alternative.
 
 ### Channel Variables
 
@@ -305,12 +330,20 @@ Fired when an error occurs during transcription. Contains error details in the e
 When using [drachtio-fsmrf](https://www.npmjs.com/package/drachtio-fsmrf), you can access this API command via the api method on the 'endpoint' object.
 
 ```javascript
-// Basic transcription
+// Basic transcription (mono - caller only)
 await ep.set({
   DEEPGRAM_API_KEY: 'your-api-key',
   DEEPGRAM_SPEECH_MODEL: 'phonecall'
 });
 ep.api('uuid_deepgram_transcribe', `${ep.uuid} start en-US interim`);
+
+// Stereo mode (both caller and callee on separate channels)
+await ep.set({
+  DEEPGRAM_API_KEY: 'your-api-key',
+  DEEPGRAM_SPEECH_MODEL: 'phonecall',
+  DEEPGRAM_SPEECH_TIER: 'nova'
+});
+ep.api('uuid_deepgram_transcribe', `${ep.uuid} start en-US interim stereo`);
 
 // With speaker diarization and keyword boosting
 await ep.set({
@@ -329,8 +362,9 @@ ep.api('uuid_deepgram_transcribe', `${ep.uuid} stop`);
 
 ### Using FreeSWITCH Dialplan
 
+**Mono mode (caller only):**
 ```xml
-<extension name="deepgram_transcribe">
+<extension name="deepgram_transcribe_mono">
   <condition field="destination_number" expression="^transcribe$">
     <action application="answer"/>
     <action application="set" data="DEEPGRAM_API_KEY=your-api-key"/>
@@ -343,6 +377,22 @@ ep.api('uuid_deepgram_transcribe', `${ep.uuid} stop`);
   </condition>
 </extension>
 ```
+
+**Stereo mode (both caller and callee on separate channels):**
+```xml
+<extension name="deepgram_transcribe_stereo">
+  <condition field="destination_number" expression="^(1\d{3})$">
+    <action application="answer"/>
+    <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+    <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+    <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+    <action application="uuid_deepgram_transcribe" data="start en-US interim stereo"/>
+    <action application="bridge" data="user/${destination_number}"/>
+  </condition>
+</extension>
+```
+
+This stereo example will transcribe both parties during a bridged call, with caller on channel 0 and callee on channel 1.
 
 ## Supported Languages
 

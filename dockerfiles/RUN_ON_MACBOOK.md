@@ -219,9 +219,14 @@ docker exec -it freeswitch fs_cli
 freeswitch@internal> show channels
 ```
 
-Start transcription:
+Start transcription (mono - caller only):
 ```bash
 freeswitch@internal> uuid_deepgram_transcribe <call-uuid> start en-US interim
+```
+
+Start transcription (stereo - both caller and callee on separate channels):
+```bash
+freeswitch@internal> uuid_deepgram_transcribe <call-uuid> start en-US interim stereo
 ```
 
 #### Option 2: Configure per-call
@@ -272,11 +277,25 @@ freeswitch@internal> uuid_azure_transcribe <call-uuid> stop
 
 ### Deepgram Features
 
+#### Stereo Mode (Both Caller and Callee)
+```bash
+# Transcribe both parties on separate channels
+# Channel 0: Caller, Channel 1: Callee
+uuid_deepgram_transcribe <uuid> start en-US interim stereo
+```
+
+Use stereo mode for:
+- Call center recordings with separate agent/customer channels
+- Quality monitoring and compliance
+- Better speaker separation than diarization
+
 #### Speaker Diarization
 ```bash
 uuid_setvar <uuid> DEEPGRAM_SPEECH_DIARIZE true
 uuid_deepgram_transcribe <uuid> start en-US interim
 ```
+
+Use diarization in mono mode to identify different speakers in a single audio channel.
 
 #### Keyword Boosting
 ```bash

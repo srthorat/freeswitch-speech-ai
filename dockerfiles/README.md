@@ -687,6 +687,96 @@ docker exec -it fs fs_cli -x "uuid_deepgram_transcribe <uuid> stop"
 
 ---
 
+### Audio Mixing Modes (Mono vs Stereo)
+
+Deepgram module supports different audio channel configurations:
+
+#### Mode 1: Mono (Default) - Caller Audio Only
+
+**Usage:**
+```bash
+# Default mode - only captures caller audio
+uuid_deepgram_transcribe <uuid> start en-US interim
+
+# Explicitly specify mono
+uuid_deepgram_transcribe <uuid> start en-US interim mono
+```
+
+**What's sent to Deepgram:**
+- ✅ Single channel (mono)
+- ✅ Caller audio only (read stream)
+- ❌ Callee audio NOT included
+
+**Best for:**
+- Transcribing customer/caller side only
+- Voicemail transcription
+- One-sided call recording compliance
+
+---
+
+#### Mode 2: Stereo - Separate Caller and Callee Channels
+
+**Usage:**
+```bash
+# Stereo mode - captures both caller and callee on separate channels
+uuid_deepgram_transcribe <uuid> start en-US interim stereo
+```
+
+**What's sent to Deepgram:**
+- ✅ Two channels (stereo)
+- ✅ Channel 0: Caller audio (read stream)
+- ✅ Channel 1: Callee audio (write stream)
+- ✅ Deepgram API: `&multichannel=true&channels=2`
+
+**Best for:**
+- Call center quality monitoring
+- Agent vs customer analysis
+- Distinguishing speaker attribution
+- Separate sentiment analysis per participant
+
+**Dialplan Example:**
+```xml
+<extension name="stereo_transcribe">
+  <condition field="destination_number" expression="^(2\d{3})$">
+    <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+    <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+    <action application="set" data="DEEPGRAM_SPEECH_DIARIZE=true"/>
+
+    <!-- Start stereo transcription -->
+    <action application="uuid_deepgram_transcribe" data="start en-US interim stereo"/>
+  </condition>
+</extension>
+```
+
+---
+
+#### Mixed Mode: NOT Supported
+
+The module does **not** support mixed mode (single channel with both caller and callee mixed together).
+
+**Alternatives:**
+- Use **stereo mode** and merge transcripts in your application
+- Use **mono mode** with **speaker diarization** (`DEEPGRAM_SPEECH_DIARIZE=true`) if you only need one participant's audio but want to identify speakers
+
+**API Syntax:**
+```
+uuid_deepgram_transcribe <uuid> [start|stop] <lang-code> [interim] [stereo|mono]
+```
+
+**Examples:**
+```bash
+# Mono (caller only)
+uuid_deepgram_transcribe abc123 start en-US interim mono
+
+# Stereo (both parties, separate channels)
+uuid_deepgram_transcribe abc123 start en-US interim stereo
+
+# With dialplan (stereo)
+<action application="uuid_deepgram_transcribe" data="start en-US interim stereo"/>
+```
+
+---
+
 ### Method 4: FreeSWITCH Service Configuration (Supervised/Systemd)
 
 #### Option A: Docker Compose with Environment Variables
