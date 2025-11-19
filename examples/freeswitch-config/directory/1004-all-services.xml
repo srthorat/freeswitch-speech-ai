@@ -12,15 +12,11 @@
       <variable name="effective_caller_id_number" value="1004"/>
 
       <!-- SERVICE FLAGS -->
-      <!-- EXAMPLE: Enable ALL services for this user -->
+      <!-- EXAMPLE: Enable ALL services for this user (for testing/demo) -->
+      <!-- All service settings (API keys, URLs) are configured in dialplan -->
       <variable name="enable_audio_fork" value="true"/>
       <variable name="enable_deepgram" value="true"/>
       <variable name="enable_azure" value="true"/>
-
-      <!-- Service Configuration -->
-      <variable name="DEEPGRAM_API_KEY" value="your-deepgram-api-key"/>
-      <variable name="AZURE_SUBSCRIPTION_KEY" value="your-azure-key"/>
-      <variable name="AZURE_REGION" value="eastus"/>
     </variables>
   </user>
 </include>

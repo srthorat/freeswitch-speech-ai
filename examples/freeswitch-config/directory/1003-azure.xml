@@ -13,15 +13,8 @@
 
       <!-- SERVICE FLAGS -->
       <!-- Enable Azure transcription for this user -->
+      <!-- All Azure settings (subscription key, region) are configured in dialplan -->
       <variable name="enable_azure" value="true"/>
-
-      <!-- Azure Configuration (optional - uses environment vars if not set) -->
-      <variable name="AZURE_SUBSCRIPTION_KEY" value="your-azure-key"/>
-      <variable name="AZURE_REGION" value="eastus"/>
-
-      <!-- Other services disabled -->
-      <!-- <variable name="enable_audio_fork" value="true"/> -->
-      <!-- <variable name="enable_deepgram" value="true"/> -->
     </variables>
   </user>
 </include>

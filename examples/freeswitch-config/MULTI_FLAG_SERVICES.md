@@ -44,6 +44,9 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
       <condition field="${enable_deepgram}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
           <action application="log" data="INFO [DEEPGRAM] User ${caller_id_number} has Deepgram enabled → ${destination_number}"/>
+          <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
+          <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+          <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
           <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
           <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
         </condition>
@@ -55,6 +58,8 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
       <condition field="${enable_azure}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
           <action application="log" data="INFO [AZURE] User ${caller_id_number} has Azure enabled → ${destination_number}"/>
+          <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
+          <action application="set" data="AZURE_REGION=eastus"/>
           <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
           <action application="set" data="api_hangup_hook=azure_transcribe ${uuid} stop"/>
         </condition>
@@ -93,11 +98,14 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
       <variable name="effective_caller_id_number" value="1000"/>
 
       <!-- Enable ONLY audio fork for this user -->
+      <!-- All audio fork settings (WebSocket URL, mix type) are configured in dialplan -->
       <variable name="enable_audio_fork" value="true"/>
     </variables>
   </user>
 </include>
 ```
+
+**Note:** User file contains ONLY the flag. All service settings (WebSocket URL, mix type, sampling rate) are centralized in dialplan.
 
 #### User 1001 - Deepgram Only
 
@@ -116,16 +124,14 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
       <variable name="effective_caller_id_number" value="1001"/>
 
       <!-- Enable ONLY Deepgram for this user -->
+      <!-- All Deepgram settings (API key, model, tier) are configured in dialplan -->
       <variable name="enable_deepgram" value="true"/>
-
-      <!-- Deepgram Configuration (optional if using environment vars) -->
-      <variable name="DEEPGRAM_API_KEY" value="your-deepgram-api-key"/>
-      <variable name="DEEPGRAM_SPEECH_MODEL" value="phonecall"/>
-      <variable name="DEEPGRAM_SPEECH_TIER" value="nova"/>
     </variables>
   </user>
 </include>
 ```
+
+**Note:** User file contains ONLY the flag. All Deepgram settings (API key, model, tier) are centralized in dialplan.
 
 #### User 1003 - Azure Only
 
@@ -144,15 +150,14 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
       <variable name="effective_caller_id_number" value="1003"/>
 
       <!-- Enable ONLY Azure for this user -->
+      <!-- All Azure settings (subscription key, region) are configured in dialplan -->
       <variable name="enable_azure" value="true"/>
-
-      <!-- Azure Configuration (optional if using environment vars) -->
-      <variable name="AZURE_SUBSCRIPTION_KEY" value="your-azure-key"/>
-      <variable name="AZURE_REGION" value="eastus"/>
     </variables>
   </user>
 </include>
 ```
+
+**Note:** User file contains ONLY the flag. All Azure settings (subscription key, region) are centralized in dialplan.
 
 #### User 1004 - ALL Services
 
@@ -170,19 +175,17 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
       <variable name="effective_caller_id_name" value="Extension 1004"/>
       <variable name="effective_caller_id_number" value="1004"/>
 
-      <!-- Enable ALL services for this user -->
+      <!-- Enable ALL services for this user (for testing/demo) -->
+      <!-- All service settings (API keys, URLs) are configured in dialplan -->
       <variable name="enable_audio_fork" value="true"/>
       <variable name="enable_deepgram" value="true"/>
       <variable name="enable_azure" value="true"/>
-
-      <!-- Service Configuration -->
-      <variable name="DEEPGRAM_API_KEY" value="your-deepgram-api-key"/>
-      <variable name="AZURE_SUBSCRIPTION_KEY" value="your-azure-key"/>
-      <variable name="AZURE_REGION" value="eastus"/>
     </variables>
   </user>
 </include>
 ```
+
+**Note:** User file contains ONLY the flags. All service settings are centralized in dialplan. This is mainly for testing/demo purposes.
 
 ### Step 3: Reload Configuration
 
@@ -294,11 +297,18 @@ To add a new service (e.g., `enable_google_transcribe`):
 ### 2. Add flag to user files
 
 ```xml
+<!-- User file contains ONLY the flag -->
 <variable name="enable_google" value="true"/>
-<variable name="GOOGLE_APPLICATION_CREDENTIALS" value="/path/to/creds.json"/>
 ```
 
-That's it! The pattern is completely extensible.
+### 3. Add service configuration to dialplan
+
+```xml
+<!-- Set service configuration in dialplan (centralized) -->
+<action application="set" data="GOOGLE_APPLICATION_CREDENTIALS=/path/to/creds.json"/>
+```
+
+That's it! The pattern is completely extensible. User files contain only flags, all settings in dialplan.
 
 ## Service Configuration
 
@@ -316,34 +326,30 @@ Configure WebSocket URL in dialplan (`default.xml`):
 
 ### Deepgram Settings
 
-Configure in dialplan or user files:
+All Deepgram configuration is centralized in dialplan:
 
-**In dialplan (global):**
+**In dialplan (default.xml):**
 ```xml
+<action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
+<action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+<action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
 <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
 ```
 
-**In user file (per-user):**
-```xml
-<variable name="DEEPGRAM_API_KEY" value="your-api-key"/>
-<variable name="DEEPGRAM_SPEECH_MODEL" value="phonecall"/>
-<variable name="DEEPGRAM_SPEECH_TIER" value="nova"/>
-```
+To change API key or settings, edit the values in dialplan. No need to modify user files!
 
 ### Azure Settings
 
-Configure in dialplan or user files:
+All Azure configuration is centralized in dialplan:
 
-**In dialplan (global):**
+**In dialplan (default.xml):**
 ```xml
+<action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
+<action application="set" data="AZURE_REGION=eastus"/>
 <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
 ```
 
-**In user file (per-user):**
-```xml
-<variable name="AZURE_SUBSCRIPTION_KEY" value="your-key"/>
-<variable name="AZURE_REGION" value="eastus"/>
-```
+To change subscription key or region, edit the values in dialplan. No need to modify user files!
 
 ## Troubleshooting
 
@@ -374,21 +380,22 @@ If running multiple transcription services causes issues:
 ### API keys not working
 
 **For Deepgram/Azure:**
-1. Set keys in user file OR environment variables
-2. Module checks user file first, then environment variables
-3. Verify keys:
-   ```bash
-   fs_cli -x 'user_data 1001@default var DEEPGRAM_API_KEY'
-   ```
+1. Keys are configured in dialplan (default.xml) using `<action application="set">`
+2. These settings apply to all users with the service flag enabled
+3. Alternative: Use environment variables instead (module checks environment vars if channel vars not set)
+4. To verify keys are being set during calls, check FreeSWITCH logs for the service startup messages
 
 ## Benefits
 
-✅ **Flexible per-user control** - Each user can have different services
+✅ **Flexible per-user control** - Each user can have different services (via flags)
+✅ **Centralized configuration** - All service settings (API keys, URLs) in ONE file (dialplan)
+✅ **Clean user files** - User files contain ONLY flags, no sensitive data
+✅ **Easy management** - Change API key once in dialplan, applies to all users
 ✅ **Extensible** - Easy to add new services (just copy the pattern)
 ✅ **No code changes** - Pure XML configuration
 ✅ **Mix and match** - Users can have multiple services enabled
-✅ **Centralized** - Service settings in dialplan, flags in user files
 ✅ **Scalable** - Works with thousands of users
+✅ **Secure** - No API keys scattered across multiple user files
 
 ## Related Documentation
 

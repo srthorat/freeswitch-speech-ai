@@ -13,11 +13,8 @@
 
       <!-- SERVICE FLAGS -->
       <!-- Enable audio fork (WebSocket streaming) for this user -->
+      <!-- All audio fork settings (WebSocket URL, mix type) are configured in dialplan -->
       <variable name="enable_audio_fork" value="true"/>
-
-      <!-- Other services disabled -->
-      <!-- <variable name="enable_deepgram" value="true"/> -->
-      <!-- <variable name="enable_azure" value="true"/> -->
     </variables>
   </user>
 </include>

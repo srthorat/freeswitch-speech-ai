@@ -71,28 +71,29 @@ See: [Multi-Flag Configuration](../MULTI_FLAG_SERVICES.md)
 **Deepgram Only:**
 ```xml
 <variables>
+  <!-- Flag only - all Deepgram settings in dialplan -->
   <variable name="enable_deepgram" value="true"/>
-  <variable name="DEEPGRAM_API_KEY" value="your-key"/>
 </variables>
 ```
 
 **Azure Only:**
 ```xml
 <variables>
+  <!-- Flag only - all Azure settings in dialplan -->
   <variable name="enable_azure" value="true"/>
-  <variable name="AZURE_SUBSCRIPTION_KEY" value="your-key"/>
-  <variable name="AZURE_REGION" value="eastus"/>
 </variables>
 ```
 
 **Multiple Services:**
 ```xml
 <variables>
+  <!-- Flags only - all service settings in dialplan -->
   <variable name="enable_audio_fork" value="true"/>
   <variable name="enable_deepgram" value="true"/>
-  <variable name="DEEPGRAM_API_KEY" value="your-key"/>
 </variables>
 ```
+
+**Key Point:** With the multi-flag approach, user files contain **ONLY flags**. All service configuration (API keys, WebSocket URLs, etc.) is centralized in dialplan for easy management.
 
 ## Reload
 
