@@ -223,8 +223,33 @@ ep.api('azure_transcribe', `${ep.uuid} stop`);
 
 ### Using FreeSWITCH Dialplan
 
+**Recommended: Per-User Flag-Based Approach**
+
+See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+
 ```xml
-<extension name="azure_transcribe">
+<!-- In dialplan: Check flag and start transcription AFTER answer -->
+<extension name="azure_conditional" continue="true">
+  <condition field="${enable_azure}" expression="^true$">
+    <condition field="destination_number" expression="^(.+)$">
+      <action application="log" data="INFO [AZURE] User ${caller_id_number} has Azure enabled"/>
+
+      <!-- Set Azure configuration (centralized) -->
+      <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
+      <action application="set" data="AZURE_REGION=eastus"/>
+
+      <!-- Start transcription AFTER call is answered (api_on_answer for API command) -->
+      <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
+      <action application="set" data="api_hangup_hook=azure_transcribe ${uuid} stop"/>
+    </condition>
+  </condition>
+</extension>
+```
+
+**Legacy: Direct Application Usage**
+
+```xml
+<extension name="azure_transcribe_test">
   <condition field="destination_number" expression="^transcribe$">
     <action application="answer"/>
     <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-subscription-key"/>

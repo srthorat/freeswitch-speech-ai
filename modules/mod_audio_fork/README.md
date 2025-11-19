@@ -233,11 +233,13 @@ To start audio forking **only after the call is answered** (not during routing),
 </include>
 ```
 
-#### Method 3: Using User Directory Variables
+#### Method 3: Per-User Flag-Based Configuration (Recommended for Production)
 
-Configure audio forking at the user level so it applies to ALL calls from that extension.
+Configure audio forking at the user level with flags in user files and settings in dialplan.
 
-**Edit** `/usr/local/freeswitch/conf/directory/default/1000.xml`:
+📖 **See:** [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+
+**User file** (flag only) `/usr/local/freeswitch/conf/directory/default/1000.xml`:
 
 ```xml
 <include>
@@ -249,34 +251,40 @@ Configure audio forking at the user level so it applies to ALL calls from that e
       <variable name="user_context" value="default"/>
       <variable name="effective_caller_id_name" value="Extension 1000"/>
 
-      <!-- Audio Fork Configuration -->
+      <!-- Audio Fork Flag (settings are in dialplan) -->
       <variable name="enable_audio_fork" value="true"/>
-      <variable name="audio_fork_ws_url" value="wss://your-backend-server.com/audio"/>
-      <variable name="audio_fork_mix_type" value="stereo"/>
-      <variable name="audio_fork_sampling_rate" value="16k"/>
     </variables>
   </user>
 </include>
 ```
 
-**Then in dialplan** `/usr/local/freeswitch/conf/dialplan/default/audio_fork_auto.xml`:
+**Dialplan** (centralized settings) `/usr/local/freeswitch/conf/dialplan/default.xml`:
 
 ```xml
 <include>
   <!-- Check if audio fork is enabled for this user -->
-  <extension name="audio_fork_auto_check" continue="true">
+  <extension name="audio_fork_conditional" continue="true">
     <condition field="${enable_audio_fork}" expression="^true$">
-      <condition field="destination_number" expression="^(10\d{2})$">
-        <!-- Build metadata with call information -->
-        <action application="set" data="metadata={'caller':'${caller_id_number}','callee':'${destination_number}','callid':'${uuid}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
+      <condition field="destination_number" expression="^(.+)$">
+        <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled"/>
 
-        <!-- Start audio forking using user directory variables -->
-        <action application="uuid_audio_fork" data="${uuid} start ${audio_fork_ws_url} ${audio_fork_mix_type} ${audio_fork_sampling_rate} ${metadata}"/>
+        <!-- Start audio forking AFTER call is answered -->
+        <!-- All settings centralized here (WebSocket URL, mix type, sampling rate) -->
+        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
+
+        <!-- Stop on hangup -->
+        <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
       </condition>
     </condition>
   </extension>
 </include>
 ```
+
+**Benefits:**
+- User files contain only flags (clean and simple)
+- All settings (WebSocket URL, mix type, sampling rate) centralized in dialplan
+- Starts AFTER call is answered (not during routing)
+- Easy to manage API keys and settings in one place
 
 **Reload configuration:**
 ```bash

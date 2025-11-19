@@ -502,9 +502,43 @@ ep.api('uuid_deepgram_transcribe', `${ep.uuid} stop`);
 
 ### Method 3: Using FreeSWITCH Dialplan
 
+**Recommended: Per-User Flag-Based Approach (Starts AFTER Answer)**
+
+See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+
+```xml
+<!-- In dialplan: Check flag and start transcription AFTER answer -->
+<extension name="deepgram_conditional" continue="true">
+  <condition field="${enable_deepgram}" expression="^true$">
+    <condition field="destination_number" expression="^(.+)$">
+      <action application="log" data="INFO [DEEPGRAM] User ${caller_id_number} has Deepgram enabled"/>
+
+      <!-- Set Deepgram configuration (centralized) -->
+      <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
+      <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+      <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+
+      <!-- Start transcription AFTER call is answered (api_on_answer for API command) -->
+      <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
+      <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
+    </condition>
+  </condition>
+</extension>
+```
+
+**Benefits:**
+- Starts transcription AFTER call is answered (not during routing)
+- User files contain only flags (`enable_deepgram=true`)
+- API keys centralized in dialplan
+- Works with Audio Fork and Azure transcription
+
+---
+
+**Legacy: Direct Application Usage**
+
 **Mono mode (caller only):**
 ```xml
-<extension name="deepgram_transcribe_mono">
+<extension name="deepgram_transcribe_mono_test">
   <condition field="destination_number" expression="^transcribe$">
     <action application="answer"/>
     <action application="set" data="DEEPGRAM_API_KEY=your-api-key"/>
@@ -520,7 +554,7 @@ ep.api('uuid_deepgram_transcribe', `${ep.uuid} stop`);
 
 **Stereo mode (both caller and callee on separate channels):**
 ```xml
-<extension name="deepgram_transcribe_stereo">
+<extension name="deepgram_transcribe_stereo_test">
   <condition field="destination_number" expression="^(1\d{3})$">
     <action application="answer"/>
     <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
@@ -532,7 +566,7 @@ ep.api('uuid_deepgram_transcribe', `${ep.uuid} stop`);
 </extension>
 ```
 
-This stereo example will transcribe both parties during a bridged call, with caller on channel 0 and callee on channel 1.
+**Note:** Legacy examples start transcription during call setup. For production, use the recommended flag-based approach which starts AFTER answer.
 
 ---
 
