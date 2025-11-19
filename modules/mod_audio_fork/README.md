@@ -510,6 +510,37 @@ fs_cli -x 'reloadxml'
 
 ### Troubleshooting
 
+#### Common Issue: Dialplan Not Executing (No Log Messages)
+
+**Symptom:** Dialplan file exists and is loaded, but actions never execute (no log messages appear).
+
+**Root Cause:** Empty `<condition>` tag without `field` attribute.
+
+**WRONG ❌:**
+```xml
+<extension name="audio_fork_all_calls" continue="true">
+  <condition>  <!-- Missing field attribute! -->
+    <action application="log" data="INFO Starting audio fork"/>
+  </condition>
+</extension>
+```
+
+**CORRECT ✅:**
+```xml
+<extension name="audio_fork_all_calls" continue="true">
+  <condition field="destination_number" expression="^.*$">  <!-- Has field and expression -->
+    <action application="log" data="INFO Starting audio fork"/>
+  </condition>
+</extension>
+```
+
+In FreeSWITCH, a `<condition>` tag **must** have a `field` attribute to match against. To match all calls, use:
+- `field="destination_number"` with `expression="^.*$"` (matches any destination)
+
+**For detailed troubleshooting and configuration examples**, see:
+- [Complete FreeSWITCH Dialplan Configuration Guide](../../examples/freeswitch-config/FREESWITCH_DIALPLAN_AUDIO_FORK.md)
+- [Working dialplan example file](../../examples/freeswitch-config/dialplan/00_audio_fork_all_calls.xml)
+
 #### Check if audio forking is active:
 
 ```bash
