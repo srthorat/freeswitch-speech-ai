@@ -198,6 +198,17 @@ Fired when an error occurs during transcription. Contains error details in the e
 
 ## Usage
 
+**Recommended Approach for Production:** Use per-user flag-based configuration with centralized settings in dialplan.
+
+📖 **See:** [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+
+**Note:** The guide shows Azure transcription examples, but the same pattern applies to AWS transcription by:
+1. Using `enable_aws_transcribe` flag in user files
+2. Setting AWS credentials in dialplan using channel variables
+3. Using `api_on_answer` to start transcription after call is answered
+
+---
+
 ### Using drachtio-fsmrf
 
 When using [drachtio-fsmrf](https://www.npmjs.com/package/drachtio-fsmrf), you can access this API command via the api method on the 'endpoint' object.

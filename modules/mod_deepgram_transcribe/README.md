@@ -394,7 +394,23 @@ Fired when an error occurs during transcription. Contains error details in the e
 
 ## Usage
 
-### Method 1: User Directory Configuration
+**Recommended Approach for Production:** Use per-user flag-based configuration with centralized settings in dialplan.
+
+📖 **See:** [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+
+This approach provides:
+- Clean user files (flags only)
+- Centralized API key management in dialplan
+- Easy per-user service control
+- Works seamlessly with Audio Fork and Azure transcription
+
+**Quick Start:**
+- [Complete dialplan example](../../examples/freeswitch-config/dialplan/default.xml.complete-example)
+- [User 1001 example (Deepgram enabled)](../../examples/freeswitch-config/directory/1001.xml.complete)
+
+---
+
+### Method 1: User Directory Configuration (Alternative)
 
 Configure Deepgram settings per user by adding variables to user XML files. This is ideal when you want all calls from specific users to automatically have transcription capabilities.
 

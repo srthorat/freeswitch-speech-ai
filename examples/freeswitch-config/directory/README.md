@@ -13,7 +13,6 @@ This directory contains example user directory files demonstrating per-user serv
 - **`1000-audio-fork.xml`** - Audio Fork (WebSocket) only
 - **`1001-deepgram.xml`** - Deepgram transcription only
 - **`1003-azure.xml`** - Azure transcription only
-- **`1004-all-services.xml`** - ALL services enabled (demo/testing)
 
 ## Quick Installation
 

@@ -179,6 +179,22 @@ Fired when an error occurs during transcription. Contains error details in the e
 
 ## Usage
 
+**Recommended Approach for Production:** Use per-user flag-based configuration with centralized settings in dialplan.
+
+📖 **See:** [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+
+This approach provides:
+- Clean user files (flags only)
+- Centralized Azure credentials management in dialplan
+- Easy per-user service control
+- Works seamlessly with Audio Fork and Deepgram transcription
+
+**Quick Start:**
+- [Complete dialplan example](../../examples/freeswitch-config/dialplan/default.xml.complete-example)
+- [User 1003 example (Azure enabled)](../../examples/freeswitch-config/directory/1003.xml.complete)
+
+---
+
 ### Using drachtio-fsmrf
 
 When using [drachtio-fsmrf](https://www.npmjs.com/package/drachtio-fsmrf), you can access this API command via the api method on the 'endpoint' object.

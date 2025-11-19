@@ -8,7 +8,8 @@ Enable different services for different users:
 - **User 1000**: Audio Fork (WebSocket streaming) only
 - **User 1001**: Deepgram transcription only
 - **User 1003**: Azure transcription only
-- **User 1004**: ALL services enabled
+
+**Note:** Users can have multiple flags enabled (e.g., both `enable_audio_fork` and `enable_deepgram`). Fallback logic for service selection will be explored in future releases.
 
 ## How It Works
 
@@ -159,34 +160,6 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
 
 **Note:** User file contains ONLY the flag. All Azure settings (subscription key, region) are centralized in dialplan.
 
-#### User 1004 - ALL Services
-
-**File:** `/usr/local/freeswitch/conf/directory/default/1004.xml`
-
-```xml
-<include>
-  <user id="1004">
-    <params>
-      <param name="password" value="1234"/>
-    </params>
-    <variables>
-      <variable name="toll_allow" value="domestic,international,local"/>
-      <variable name="user_context" value="default"/>
-      <variable name="effective_caller_id_name" value="Extension 1004"/>
-      <variable name="effective_caller_id_number" value="1004"/>
-
-      <!-- Enable ALL services for this user (for testing/demo) -->
-      <!-- All service settings (API keys, URLs) are configured in dialplan -->
-      <variable name="enable_audio_fork" value="true"/>
-      <variable name="enable_deepgram" value="true"/>
-      <variable name="enable_azure" value="true"/>
-    </variables>
-  </user>
-</include>
-```
-
-**Note:** User file contains ONLY the flags. All service settings are centralized in dialplan. This is mainly for testing/demo purposes.
-
 ### Step 3: Reload Configuration
 
 ```bash
@@ -228,18 +201,6 @@ mod_audio_fork: streaming 16000 sampling to 20.244.30.42:8077/stream
 # NO Audio Fork or Deepgram logs
 ```
 
-### Test User 1004 (ALL Services)
-
-```bash
-# User 1004 calls 1000
-# Expected logs:
-[INFO] [AUDIO_FORK] User 1004 has audio fork enabled → 1000
-[INFO] [DEEPGRAM] User 1004 has Deepgram enabled → 1000
-[INFO] [AZURE] User 1004 has Azure enabled → 1000
-
-# ALL three services start!
-```
-
 ## Verification Commands
 
 ### Check user flags
@@ -274,7 +235,8 @@ fs_cli -x 'uuid_buglist <uuid>'
 | 1000 | ✅ | ❌ | ❌ | WebSocket streaming only |
 | 1001 | ❌ | ✅ | ❌ | Deepgram transcription only |
 | 1003 | ❌ | ❌ | ✅ | Azure transcription only |
-| 1004 | ✅ | ✅ | ✅ | All services (testing/demo) |
+
+**Note:** Users can enable multiple services by setting multiple flags. However, running multiple transcription services simultaneously (Deepgram + Azure) is generally not recommended.
 
 ## Adding More Services
 

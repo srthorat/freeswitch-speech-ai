@@ -468,7 +468,17 @@ When you want to stop audio forking at call end:
 
 ### Complete Working Example
 
-Here's a complete, production-ready dialplan configuration:
+**Recommended Approach:** Use the per-user multi-service configuration for production deployments.
+
+See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+
+**Quick Start:**
+- [Complete dialplan example](../../examples/freeswitch-config/dialplan/default.xml.complete-example)
+- [User directory examples](../../examples/freeswitch-config/directory/)
+
+---
+
+**Legacy Example:** Single extension with inline audio fork
 
 **/usr/local/freeswitch/conf/dialplan/default/01_audio_fork_ext_1000.xml:**
 
