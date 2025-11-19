@@ -70,7 +70,7 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
           <action application="log" data="INFO [AZURE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Azure"/>
           <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-subscription-key"/>
           <action application="set" data="AZURE_REGION=southeastasia"/>
-          <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim"/>
+          <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim stereo"/>
           <action application="set" data="api_hangup_hook=uuid_azure_transcribe ${uuid} stop"/>
         </condition>
       </condition>
@@ -317,7 +317,7 @@ All Azure configuration is centralized in dialplan:
 ```xml
 <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-subscription-key"/>
 <action application="set" data="AZURE_REGION=southeastasia"/>
-<action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim"/>
+<action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim stereo"/>
 ```
 
 To change subscription key or region, edit the values in dialplan. No need to modify user files!

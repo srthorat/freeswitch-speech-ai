@@ -35,15 +35,17 @@ apt-get install -y libwebsockets-dev
 The freeswitch module exposes the following API commands:
 
 ```
-uuid_azure_transcribe <uuid> start <lang-code> [interim]
+uuid_azure_transcribe <uuid> start <lang-code> [interim] [stereo|mono] [bugname]
 ```
 Attaches media bug to channel and performs streaming recognize request.
 - `uuid` - unique identifier of Freeswitch channel
 - `lang-code` - a valid Azure [language code](https://docs.microsoft.com/en-us/azure/cognitive-services/speech-service/language-support) that is supported for streaming transcription (e.g., en-US, es-ES, fr-FR)
-- `interim` - If the 'interim' keyword is present then both interim and final transcription results will be returned; otherwise only final transcriptions will be returned
+- `interim` - (optional) If the 'interim' keyword is present then both interim and final transcription results will be returned; otherwise only final transcriptions will be returned
+- `stereo|mono` - (optional) Capture mode: 'stereo' captures both caller (channel 0) and callee (channel 1) separately; 'mono' captures mixed audio (default: mono)
+- `bugname` - (optional) Custom name for the media bug (default: azure_transcribe)
 
 ```
-uuid_azure_transcribe <uuid> stop
+uuid_azure_transcribe <uuid> stop [bugname]
 ```
 Stop transcription on the channel.
 
@@ -200,12 +202,12 @@ This approach provides:
 When using [drachtio-fsmrf](https://www.npmjs.com/package/drachtio-fsmrf), you can access this API command via the api method on the 'endpoint' object.
 
 ```javascript
-// Basic transcription
+// Basic transcription with stereo audio
 await ep.set({
   AZURE_SUBSCRIPTION_KEY: 'your-subscription-key',
   AZURE_REGION: 'eastus'
 });
-ep.api('uuid_azure_transcribe', `${ep.uuid} start en-US interim`);
+ep.api('uuid_azure_transcribe', `${ep.uuid} start en-US interim stereo`);
 
 // With detailed output and profanity filtering
 await ep.set({
@@ -215,7 +217,7 @@ await ep.set({
   AZURE_PROFANITY_OPTION: 'masked',
   AZURE_SPEECH_HINTS: 'weather,forecast,temperature'
 });
-ep.api('uuid_azure_transcribe', `${ep.uuid} start en-US interim`);
+ep.api('uuid_azure_transcribe', `${ep.uuid} start en-US interim stereo`);
 
 // Stop transcription
 ep.api('uuid_azure_transcribe', `${ep.uuid} stop`);
@@ -239,7 +241,7 @@ See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-conf
       <action application="set" data="AZURE_REGION=eastus"/>
 
       <!-- Start transcription AFTER call is answered (api_on_answer for API command) -->
-      <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim"/>
+      <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim stereo"/>
       <action application="set" data="api_hangup_hook=uuid_azure_transcribe ${uuid} stop"/>
     </condition>
   </condition>
@@ -249,6 +251,7 @@ See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-conf
 **Benefits:**
 - Uses `user_data()` function for reliable flag checking (production-proven)
 - Starts transcription AFTER call is answered (not during routing)
+- Stereo mode captures caller and callee on separate channels
 - User files contain only flags (`enable_azure=true`)
 - Azure credentials centralized in dialplan
 - Works with Audio Fork and Deepgram transcription
