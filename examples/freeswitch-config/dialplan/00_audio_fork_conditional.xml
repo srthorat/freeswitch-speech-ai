@@ -28,12 +28,9 @@
         <!-- Log for debugging -->
         <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled, setting up for call to ${destination_number}"/>
 
-        <!-- Build metadata with call information -->
-        <action application="set" data="audio_fork_metadata={'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
-
         <!-- Start audio forking AFTER call is answered -->
-        <!-- Uses settings from user directory: audio_fork_ws_url, audio_fork_mix_type, audio_fork_sampling_rate -->
-        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ${audio_fork_ws_url} ${audio_fork_mix_type} ${audio_fork_sampling_rate} ${audio_fork_metadata}"/>
+        <!-- Audio fork settings are configured HERE in dialplan (not in user directory) -->
+        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
 
         <!-- Stop audio fork on hangup -->
         <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
@@ -43,5 +40,14 @@
   </extension>
 
   <!-- This extension will NOT execute if enable_audio_fork is false or not set -->
+
+  <!--
+    CONFIGURATION:
+    - WebSocket URL: ws://20.244.30.42:8077/stream (change to your server)
+    - Mix type: stereo (caller on channel 0, callee on channel 1)
+    - Sampling rate: 16k (16kHz for better quality)
+
+    To change settings, edit the uuid_audio_fork command above.
+  -->
 
 </include>

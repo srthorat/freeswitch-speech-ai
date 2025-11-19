@@ -15,10 +15,8 @@
       <!-- Option 1: Set to "false" to explicitly disable -->
       <variable name="enable_audio_fork" value="false"/>
 
-      <!-- Option 2: Simply don't set the flag at all (commented out) -->
+      <!-- Option 2: Simply don't set the flag at all (comment it out) -->
       <!-- <variable name="enable_audio_fork" value="true"/> -->
-
-      <!-- Note: Audio fork settings not needed when disabled -->
     </variables>
   </user>
 </include>

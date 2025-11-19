@@ -86,10 +86,8 @@ The above configuration enables audio fork for **ALL calls**. If you want to ena
 1. **Set flag in user directory** (`/usr/local/freeswitch/conf/directory/default/1000.xml`):
    ```xml
    <variables>
+     <!-- Only the flag is needed in user file -->
      <variable name="enable_audio_fork" value="true"/>
-     <variable name="audio_fork_ws_url" value="ws://20.244.30.42:8077/stream"/>
-     <variable name="audio_fork_mix_type" value="stereo"/>
-     <variable name="audio_fork_sampling_rate" value="16k"/>
    </variables>
    ```
 
@@ -98,7 +96,8 @@ The above configuration enables audio fork for **ALL calls**. If you want to ena
    <extension name="audio_fork_conditional" continue="true">
      <condition field="${enable_audio_fork}" expression="^true$">
        <condition field="destination_number" expression="^(.+)$">
-         <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ${audio_fork_ws_url} ${audio_fork_mix_type} ${audio_fork_sampling_rate} {'caller':'${caller_id_number}'}"/>
+         <!-- Audio fork settings are in dialplan, not in user files -->
+         <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
          <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
        </condition>
      </condition>

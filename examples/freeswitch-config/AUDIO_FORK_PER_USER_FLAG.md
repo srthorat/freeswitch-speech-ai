@@ -32,17 +32,16 @@ This guide shows how to enable audio fork on a **per-user basis** using a flag i
       <variable name="effective_caller_id_name" value="Extension 1000"/>
       <variable name="effective_caller_id_number" value="1000"/>
 
-      <!-- AUDIO FORK ENABLED -->
+      <!-- AUDIO FORK FLAG -->
+      <!-- Set to "true" to enable automatic audio forking for this user -->
+      <!-- Audio fork settings (URL, mix type, etc.) are configured in dialplan -->
       <variable name="enable_audio_fork" value="true"/>
-
-      <!-- Audio Fork Settings -->
-      <variable name="audio_fork_ws_url" value="ws://20.244.30.42:8077/stream"/>
-      <variable name="audio_fork_mix_type" value="stereo"/>
-      <variable name="audio_fork_sampling_rate" value="16k"/>
     </variables>
   </user>
 </include>
 ```
+
+**That's it!** The user file only needs the flag. Audio fork settings (WebSocket URL, mix type, sampling rate) are configured in the dialplan (see Step 2).
 
 #### For User with Audio Fork DISABLED (1001.xml)
 
@@ -89,11 +88,9 @@ This guide shows how to enable audio fork on a **per-user basis** using a flag i
         <!-- Log for debugging -->
         <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled"/>
 
-        <!-- Build metadata -->
-        <action application="set" data="audio_fork_metadata={'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
-
         <!-- Start audio forking AFTER call is answered -->
-        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ${audio_fork_ws_url} ${audio_fork_mix_type} ${audio_fork_sampling_rate} ${audio_fork_metadata}"/>
+        <!-- Audio fork settings are configured HERE in dialplan (not in user directory) -->
+        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
 
         <!-- Stop audio fork on hangup -->
         <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
@@ -101,15 +98,25 @@ This guide shows how to enable audio fork on a **per-user basis** using a flag i
       </condition>
     </condition>
   </extension>
+
+  <!--
+    CONFIGURATION:
+    - WebSocket URL: ws://20.244.30.42:8077/stream (change to your server)
+    - Mix type: stereo (caller on channel 0, callee on channel 1)
+    - Sampling rate: 16k (16kHz for better quality)
+
+    To change settings, edit the uuid_audio_fork command above.
+  -->
 </include>
 ```
 
 **Key Points:**
 - Uses `${enable_audio_fork}` to check the flag from user directory
 - Only executes if flag is set to `"true"`
-- Uses user's configured settings: `${audio_fork_ws_url}`, `${audio_fork_mix_type}`, `${audio_fork_sampling_rate}`
+- **Audio fork settings (URL, mix type, rate) are configured in dialplan** (easy to manage centrally)
 - Starts audio fork AFTER call is answered using `api_on_answer`
 - `continue="true"` allows call to proceed normally
+- To change WebSocket URL or settings, edit this dialplan file only (no need to update 100s of user files)
 
 ### Step 3: Reload Configuration
 
@@ -170,61 +177,59 @@ fs_cli -x 'uuid_buglist <uuid>'
 fs_cli -x 'uuid_getvar <uuid> enable_audio_fork'
 # Should return: true
 
-fs_cli -x 'uuid_getvar <uuid> audio_fork_ws_url'
-# Should return: ws://20.244.30.42:8077/stream
+# Check call metadata
+fs_cli -x 'uuid_getvar <uuid> caller_id_number'
+fs_cli -x 'uuid_getvar <uuid> destination_number'
 ```
 
 ## Configuration Options
 
-### Per-User WebSocket URLs
+All audio fork settings are configured in the dialplan file (`00_audio_fork_conditional.xml`), not in individual user files. This makes it easy to manage centrally.
 
-You can use different WebSocket servers for different users:
+### Change WebSocket URL
 
-**User 1000 (Sales department):**
+Edit the dialplan file:
 ```xml
-<variable name="enable_audio_fork" value="true"/>
-<variable name="audio_fork_ws_url" value="ws://sales-analytics.company.com/stream"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://YOUR_SERVER:PORT/stream stereo 16k ..."/>
 ```
 
-**User 1002 (Support department):**
+### Change Mix Type
+
+**Stereo (separate channels):**
 ```xml
-<variable name="enable_audio_fork" value="true"/>
-<variable name="audio_fork_ws_url" value="ws://support-qa.company.com/stream"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 16k ..."/>
 ```
 
-### Different Mix Types Per User
-
-**User for call center (stereo - separate channels):**
+**Mono (caller only):**
 ```xml
-<variable name="audio_fork_mix_type" value="stereo"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream mono 16k ..."/>
 ```
 
-**User for voice assistant (mono - caller only):**
+**Mixed (both parties, single channel):**
 ```xml
-<variable name="audio_fork_mix_type" value="mono"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream mixed 16k ..."/>
 ```
 
-### Different Sampling Rates
+### Change Sampling Rate
 
-**High quality for compliance recording:**
+**16kHz (high quality):**
 ```xml
-<variable name="audio_fork_sampling_rate" value="16k"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 16k ..."/>
 ```
 
-**Lower bandwidth for basic monitoring:**
+**8kHz (lower bandwidth):**
 ```xml
-<variable name="audio_fork_sampling_rate" value="8k"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 8k ..."/>
 ```
 
 ## Advanced: Conditional by Department
 
-You can also enable audio fork for all users in a specific department:
+You can also enable audio fork for all users in a specific department by adding a department variable to user files:
 
 **User directory with department variable:**
 ```xml
 <variable name="department" value="sales"/>
 <variable name="enable_audio_fork" value="true"/>
-<variable name="audio_fork_ws_url" value="ws://sales.company.com/stream"/>
 ```
 
 **Dialplan to check department:**
@@ -234,13 +239,19 @@ You can also enable audio fork for all users in a specific department:
   <condition field="${department}" expression="^sales$">
     <condition field="${enable_audio_fork}" expression="^true$">
       <condition field="destination_number" expression="^(.+)$">
-        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ${audio_fork_ws_url} stereo 16k {'dept':'sales','user':'${caller_id_number}'}"/>
+        <action application="log" data="INFO [AUDIO_FORK] Sales user ${caller_id_number} calling ${destination_number}"/>
+        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://sales-analytics.company.com/stream stereo 16k {'dept':'sales','user':'${caller_id_number}','callee':'${destination_number}'}"/>
         <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
       </condition>
     </condition>
   </condition>
 </extension>
 ```
+
+This allows you to:
+- Route sales calls to a different WebSocket server
+- Add department-specific metadata
+- Apply different settings per department
 
 ## Troubleshooting
 
