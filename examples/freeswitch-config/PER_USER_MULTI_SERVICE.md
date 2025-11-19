@@ -402,4 +402,5 @@ If running multiple transcription services causes issues:
 - [Audio Fork README](../../modules/mod_audio_fork/README.md)
 - [Deepgram README](../../modules/mod_deepgram_transcribe/README.md)
 - [Azure README](../../modules/mod_azure_transcribe/README.md)
-- [Single-Flag Configuration](AUDIO_FORK_PER_USER_FLAG.md)
+- [Complete Dialplan Example](dialplan/default.xml.complete-example)
+- [User Directory Examples](directory/README.md)

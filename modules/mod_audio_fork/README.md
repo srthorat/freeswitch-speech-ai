@@ -546,9 +546,9 @@ fs_cli -x 'reloadxml'
 In FreeSWITCH, a `<condition>` tag **must** have a `field` attribute to match against. To match all calls, use:
 - `field="destination_number"` with `expression="^.*$"` (matches any destination)
 
-**For detailed troubleshooting and configuration examples**, see:
-- [Complete FreeSWITCH Dialplan Configuration Guide](../../examples/freeswitch-config/FREESWITCH_DIALPLAN_AUDIO_FORK.md)
-- [Working dialplan example file](../../examples/freeswitch-config/dialplan/00_audio_fork_all_calls.xml)
+**For detailed configuration examples**, see:
+- [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+- [Complete working dialplan example](../../examples/freeswitch-config/dialplan/default.xml.complete-example)
 
 #### Check if audio forking is active:
 
