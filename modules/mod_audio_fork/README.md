@@ -206,18 +206,27 @@ Create `/usr/local/freeswitch/conf/dialplan/default/audio_fork_ext_1000.xml`:
 - `caller_id_number` matches extension 1000
 - `destination_number` matches 4-digit extensions starting with 10 (1000-1099)
 - Variables are set first, then used in the command
-- Audio forking starts automatically before the call is bridged
+- **Audio forking starts during routing phase** (before call is answered/bridged)
 
-#### Method 2: Using Inline Execution
+#### Method 2: Start Audio Fork After Call is Answered
+
+To start audio forking **only after the call is answered** (not during routing), use `api_on_answer`:
 
 ```xml
 <include>
-  <!-- Simpler version with inline parameters -->
-  <extension name="audio_fork_ext_1000_inline" continue="true">
+  <!-- Start audio fork AFTER call is answered -->
+  <extension name="audio_fork_ext_1000_on_answer" continue="true">
     <condition field="caller_id_number" expression="^1000$">
       <condition field="destination_number" expression="^(10\d{2})$">
-        <!-- Start audio forking with inline parameters -->
-        <action application="uuid_audio_fork" data="${uuid} start wss://your-server.com/audio stereo 16k {'from':'1000','to':'${destination_number}'}"/>
+        <!-- Log for debugging -->
+        <action application="log" data="INFO [AUDIO_FORK] Setting up for ext 1000 → ${destination_number}"/>
+
+        <!-- Start audio forking AFTER call is answered -->
+        <!-- Note: uuid_audio_fork is an API command, use api_on_answer (NOT execute_on_answer) -->
+        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start wss://your-server.com/audio stereo 16k {'from':'1000','to':'${destination_number}'}"/>
+
+        <!-- Stop audio forking on hangup -->
+        <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
       </condition>
     </condition>
   </extension>
