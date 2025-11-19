@@ -214,6 +214,63 @@ fs_cli -x 'reloadxml' 2>&1 | grep -i error
    </extension>
    ```
 
+### Issue 6: Audio Fork Starts During Early Media (Before Call is Answered)
+
+**Symptom:** Audio fork starts during call routing/early media phase instead of after the call is answered. Logs show:
+```
+[INFO] mod_audio_fork.c:84 Sending early media
+```
+
+**Root Cause:** Using inline `uuid_audio_fork` execution in the dialplan causes it to run during the routing phase (early media), not after the B-leg answers.
+
+**WRONG ❌ (Starts during routing/early media):**
+```xml
+<extension name="audio_fork_all_calls" continue="true">
+  <condition field="destination_number" expression="^.*$">
+    <!-- This executes during ROUTING, not after answer -->
+    <action application="uuid_audio_fork" data="${uuid} start ws://server/stream stereo 16k"/>
+  </condition>
+</extension>
+```
+
+**CORRECT ✅ (Starts after call is answered):**
+```xml
+<extension name="audio_fork_all_calls" continue="true">
+  <condition field="destination_number" expression="^.*$">
+    <action application="log" data="INFO [AUDIO_FORK] Setting up auto-fork for: ${caller_id_number} → ${destination_number}"/>
+
+    <!-- Execute audio fork when the call is ANSWERED -->
+    <action application="export" data="nolocal:execute_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
+
+    <!-- Stop audio fork on hangup -->
+    <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
+  </condition>
+</extension>
+```
+
+**Explanation:**
+
+| Approach | When It Runs | Use Case |
+|----------|--------------|----------|
+| Inline `<action application="uuid_audio_fork"...>` | During routing phase (early media) | When you need audio from ringing/early media |
+| `execute_on_answer=uuid_audio_fork...` | After B-leg answers the call | When you only want audio from established calls |
+
+**Key Points:**
+- `execute_on_answer` delays execution until the called party answers
+- `export nolocal:` ensures the variable applies to the current call leg
+- `api_hangup_hook` automatically stops audio fork when call ends
+- Early media audio may include ringing tones, not actual conversation
+
+**Verification:**
+```bash
+# During routing phase, you should see:
+[INFO] [AUDIO_FORK] Setting up auto-fork for: 1000 → 1001
+
+# After call is answered, you should see:
+mod_audio_fork: streaming 16000 sampling to server...
+# But NO "Sending early media" message
+```
+
 ## Advanced Configuration
 
 ### Configuration 1: Fork Audio Only for Specific Extensions
@@ -342,32 +399,50 @@ curl -v --no-buffer -H "Connection: Upgrade" -H "Upgrade: websocket" \
 
 ## Complete Working Example
 
-Here's the complete, tested configuration for forking audio on all calls:
+Here's the complete, tested configuration for forking audio on all calls **AFTER they are answered**:
 
 **File:** `/usr/local/freeswitch/conf/dialplan/default/00_audio_fork_all_calls.xml`
 
 ```xml
 <include>
   <!--
-    AUTOMATIC AUDIO FORKING FOR ALL CALLS
+    AUTOMATIC AUDIO FORKING FOR ALL CALLS (AFTER ANSWER)
     - Runs first (00_ prefix)
     - Matches all calls (destination_number=^.*$)
     - Continues to other extensions (continue="true")
+    - Audio fork starts AFTER call is answered (execute_on_answer)
   -->
   <extension name="audio_fork_all_calls" continue="true">
     <condition field="destination_number" expression="^.*$">
 
       <!-- Log for debugging -->
-      <action application="log" data="INFO [AUDIO_FORK] Starting: ${caller_id_number} → ${destination_number}"/>
+      <action application="log" data="INFO [AUDIO_FORK] Setting up auto-fork for: ${caller_id_number} → ${destination_number}"/>
 
-      <!-- Start audio forking -->
-      <action application="uuid_audio_fork" data="${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
+      <!-- Start audio forking AFTER call is answered -->
+      <action application="export" data="nolocal:execute_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
 
       <!-- Auto-cleanup on hangup -->
       <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop {'end':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
 
-      <action application="log" data="INFO [AUDIO_FORK] Started for ${uuid}"/>
+    </condition>
+  </extension>
+</include>
+```
 
+**Alternative: Start During Early Media (Including Ringing)**
+
+If you want audio fork to start immediately during routing (including ringing tones):
+
+```xml
+<include>
+  <extension name="audio_fork_all_calls" continue="true">
+    <condition field="destination_number" expression="^.*$">
+      <action application="log" data="INFO [AUDIO_FORK] Starting: ${caller_id_number} → ${destination_number}"/>
+
+      <!-- Start audio forking immediately (during early media) -->
+      <action application="uuid_audio_fork" data="${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
+
+      <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
     </condition>
   </extension>
 </include>
