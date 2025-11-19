@@ -4,28 +4,29 @@ This guide provides step-by-step instructions for configuring FreeSWITCH dialpla
 
 ## Quick Start
 
-### Step 1: Copy the Dialplan File
+### Working Configuration
 
-Copy the provided dialplan file to your FreeSWITCH dialplan directory:
-
-```bash
-# Copy from this repository
-cp examples/freeswitch-config/dialplan/00_audio_fork_all_calls.xml \
-   /usr/local/freeswitch/conf/dialplan/default/00_audio_fork_all_calls.xml
-
-# Set proper permissions
-chmod 644 /usr/local/freeswitch/conf/dialplan/default/00_audio_fork_all_calls.xml
-```
-
-### Step 2: Configure WebSocket URL
-
-Edit the file and update the WebSocket URL to match your backend server:
+Add this to your `/usr/local/freeswitch/conf/dialplan/default.xml` inside the `<context name="default">` section:
 
 ```xml
-<action application="uuid_audio_fork" data="${uuid} start ws://YOUR_SERVER_IP:PORT/stream stereo 16k ..."/>
+<context name="default">
+  <!-- GLOBAL AUDIO FORK - STARTS AFTER ANSWER -->
+  <extension name="audio_fork_all_calls" continue="true">
+    <condition field="destination_number" expression="^(.+)$">
+      <action application="log" data="INFO [AUDIO_FORK] Setting up auto-fork for: ${caller_id_number} → ${destination_number}"/>
+
+      <!-- Use api_on_answer for API commands (uuid_audio_fork is an API) -->
+      <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
+
+      <!-- Stop audio fork on hangup -->
+      <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
+    </condition>
+  </extension>
+
+  <!-- Your other extensions follow here -->
 ```
 
-**Example configurations:**
+**Important:** Update the WebSocket URL to match your server:
 
 | Environment | WebSocket URL |
 |------------|---------------|
@@ -34,7 +35,7 @@ Edit the file and update the WebSocket URL to match your backend server:
 | Remote server | `ws://20.244.30.42:8077/stream` |
 | Secure WebSocket | `wss://audio.yourcompany.com/stream` |
 
-### Step 3: Reload FreeSWITCH Configuration
+### Reload FreeSWITCH Configuration
 
 ```bash
 fs_cli -x 'reloadxml'
@@ -45,26 +46,20 @@ You should see:
 +OK [Success]
 ```
 
-### Step 4: Verify Configuration
-
-Check that the dialplan is loaded:
-
-```bash
-fs_cli -x 'xml_locate dialplan' | grep -A 10 "audio_fork_all_calls"
-```
-
-You should see your extension listed.
-
-### Step 5: Test with a Call
+### Test with a Call
 
 1. Make a call from any extension to any destination
 2. Check the FreeSWITCH console for log messages:
    ```
-   [INFO] [AUDIO_FORK] Starting audio fork: 1000 → 1001
-   [INFO] [AUDIO_FORK] Audio fork started successfully for <uuid>
+   [INFO] [AUDIO_FORK] Setting up auto-fork for: 1000 → 1001
    ```
 
-3. Verify audio fork is active:
+3. **After the call is answered**, audio fork starts:
+   ```
+   mod_audio_fork: streaming 16000 sampling to 20.244.30.42:8077/stream
+   ```
+
+4. Verify audio fork is active:
    ```bash
    fs_cli -x 'show channels'  # Get the UUID
    fs_cli -x 'uuid_buglist <uuid>'
@@ -221,25 +216,28 @@ fs_cli -x 'reloadxml' 2>&1 | grep -i error
 [INFO] mod_audio_fork.c:84 Sending early media
 ```
 
-**Root Cause:** Using inline `uuid_audio_fork` execution in the dialplan causes it to run during the routing phase (early media), not after the B-leg answers.
+**Root Cause:** `uuid_audio_fork` is an API command, not a dialplan application. Must use `api_on_answer` (not `execute_on_answer` or inline execution).
 
-**WRONG ❌ (Starts during routing/early media):**
+**WRONG ❌:**
 ```xml
 <extension name="audio_fork_all_calls" continue="true">
   <condition field="destination_number" expression="^.*$">
-    <!-- This executes during ROUTING, not after answer -->
+    <!-- WRONG: This executes during ROUTING -->
     <action application="uuid_audio_fork" data="${uuid} start ws://server/stream stereo 16k"/>
+
+    <!-- ALSO WRONG: execute_on_answer is for applications, not APIs -->
+    <action application="export" data="nolocal:execute_on_answer=uuid_audio_fork ${uuid} start..."/>
   </condition>
 </extension>
 ```
 
-**CORRECT ✅ (Starts after call is answered):**
+**CORRECT ✅:**
 ```xml
 <extension name="audio_fork_all_calls" continue="true">
   <condition field="destination_number" expression="^.*$">
     <action application="log" data="INFO [AUDIO_FORK] Setting up auto-fork for: ${caller_id_number} → ${destination_number}"/>
 
-    <!-- Execute audio fork API when the call is ANSWERED -->
+    <!-- CORRECT: Use api_on_answer for API commands -->
     <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
 
     <!-- Stop audio fork on hangup -->
@@ -248,19 +246,12 @@ fs_cli -x 'reloadxml' 2>&1 | grep -i error
 </extension>
 ```
 
-**Explanation:**
-
-| Approach | When It Runs | Use Case |
-|----------|--------------|----------|
-| Inline `<action application="uuid_audio_fork"...>` | During routing phase (early media) | When you need audio from ringing/early media |
-| `api_on_answer=uuid_audio_fork...` | After B-leg answers the call | When you only want audio from established calls |
-
 **Key Points:**
-- **`uuid_audio_fork` is an API command, not an application** - use `api_on_answer` (not `execute_on_answer`)
-- `api_on_answer` delays execution until the called party answers
+- **`uuid_audio_fork` is an API command** - use `api_on_answer` (NOT `execute_on_answer`)
+- `api_on_answer` = for API commands (run with fs_cli -x)
+- `execute_on_answer` = for dialplan applications only
+- `api_on_answer` executes after the called party answers
 - `api_hangup_hook` automatically stops audio fork when call ends
-- Early media audio may include ringing tones, not actual conversation
-- Use `export nolocal:api_on_answer=...` if you need it on B-leg only
 
 **Verification:**
 ```bash
@@ -276,13 +267,15 @@ mod_audio_fork: streaming 16000 sampling to server...
 
 ### Configuration 1: Fork Audio Only for Specific Extensions
 
-Match only extensions 1000-1099:
+Match only extensions 1000-1099 (starts after answer):
 
 ```xml
 <extension name="audio_fork_specific_exts" continue="true">
   <condition field="caller_id_number" expression="^(10\d{2})$">
     <condition field="destination_number" expression="^(10\d{2})$">
-      <action application="uuid_audio_fork" data="${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
+      <action application="log" data="INFO [AUDIO_FORK] Setting up fork for ext: ${caller_id_number}"/>
+      <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
+      <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
     </condition>
   </condition>
 </extension>
@@ -290,32 +283,35 @@ Match only extensions 1000-1099:
 
 ### Configuration 2: Fork Audio Only for External Calls
 
-Match 10-digit numbers (external calls):
+Match 10-digit numbers (external calls, starts after answer):
 
 ```xml
 <extension name="audio_fork_external" continue="true">
   <condition field="destination_number" expression="^(\d{10})$">
     <action application="log" data="INFO [AUDIO_FORK] External call to ${destination_number}"/>
-    <action application="uuid_audio_fork" data="${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'type':'external','number':'${destination_number}'}"/>
+    <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'type':'external','number':'${destination_number}'}"/>
+    <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
   </condition>
 </extension>
 ```
 
 ### Configuration 3: Fork Audio with Different Mix Types
 
+**Note:** Use `api_on_answer` to start after call is answered. Examples below show the URL format only.
+
 #### Mono (Caller Audio Only)
 ```xml
-<action application="uuid_audio_fork" data="${uuid} start ws://server/stream mono 16k {'mode':'mono'}"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream mono 16k {'mode':'mono'}"/>
 ```
 
 #### Mixed (Both Parties, Single Channel)
 ```xml
-<action application="uuid_audio_fork" data="${uuid} start ws://server/stream mixed 16k {'mode':'mixed'}"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream mixed 16k {'mode':'mixed'}"/>
 ```
 
 #### Stereo (Caller + Callee, Separate Channels)
 ```xml
-<action application="uuid_audio_fork" data="${uuid} start ws://server/stream stereo 16k {'mode':'stereo'}"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 16k {'mode':'stereo'}"/>
 ```
 
 **Stereo Channel Layout:**
@@ -326,14 +322,14 @@ Match 10-digit numbers (external calls):
 
 #### 8kHz (Telephony Quality, Lower Bandwidth)
 ```xml
-<action application="uuid_audio_fork" data="${uuid} start ws://server/stream stereo 8k {'rate':'8000'}"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 8k {'rate':'8000'}"/>
 ```
 - Bandwidth: ~128 kbps (stereo)
 - Use case: Basic speech recognition
 
 #### 16kHz (High Quality, Better Transcription)
 ```xml
-<action application="uuid_audio_fork" data="${uuid} start ws://server/stream stereo 16k {'rate':'16000'}"/>
+<action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 16k {'rate':'16000'}"/>
 ```
 - Bandwidth: ~256 kbps (stereo)
 - Use case: Production transcription, quality analysis
@@ -411,7 +407,7 @@ Here's the complete, tested configuration for forking audio on all calls **AFTER
     - Runs first (00_ prefix)
     - Matches all calls (destination_number=^.*$)
     - Continues to other extensions (continue="true")
-    - Audio fork starts AFTER call is answered (execute_on_answer)
+    - Audio fork starts AFTER call is answered (api_on_answer)
   -->
   <extension name="audio_fork_all_calls" continue="true">
     <condition field="destination_number" expression="^.*$">
@@ -425,25 +421,6 @@ Here's the complete, tested configuration for forking audio on all calls **AFTER
       <!-- Auto-cleanup on hangup -->
       <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop {'end':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
 
-    </condition>
-  </extension>
-</include>
-```
-
-**Alternative: Start During Early Media (Including Ringing)**
-
-If you want audio fork to start immediately during routing (including ringing tones):
-
-```xml
-<include>
-  <extension name="audio_fork_all_calls" continue="true">
-    <condition field="destination_number" expression="^.*$">
-      <action application="log" data="INFO [AUDIO_FORK] Starting: ${caller_id_number} → ${destination_number}"/>
-
-      <!-- Start audio forking immediately (during early media) -->
-      <action application="uuid_audio_fork" data="${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
-
-      <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
     </condition>
   </extension>
 </include>
