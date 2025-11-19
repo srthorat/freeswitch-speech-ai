@@ -12,9 +12,9 @@
     fs_cli -x 'reloadxml'
 
   Configuration:
-    - Update WebSocket URL on line 30 (Audio Fork)
-    - Update Deepgram API key on line 44 (Deepgram)
-    - Update Azure credentials on lines 60-61 (Azure)
+    - Update WebSocket URL on line 33 (Audio Fork)
+    - Update Deepgram API key on line 47 (Deepgram)
+    - Update Azure credentials on lines 66-67 (Azure)
 -->
 <include>
   <context name="default">
@@ -63,11 +63,11 @@
           <action application="log" data="INFO [AZURE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Azure"/>
 
           <!-- ⚙️ CONFIGURE: Update Azure settings below -->
-          <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
-          <action application="set" data="AZURE_REGION=eastus"/>
+          <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-subscription-key"/>
+          <action application="set" data="AZURE_REGION=southeastasia"/>
 
-          <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
-          <action application="set" data="api_hangup_hook=azure_transcribe ${uuid} stop"/>
+          <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim"/>
+          <action application="set" data="api_hangup_hook=uuid_azure_transcribe ${uuid} stop"/>
         </condition>
       </condition>
     </extension>

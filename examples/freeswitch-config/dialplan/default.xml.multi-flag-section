@@ -55,14 +55,14 @@
       <action application="log" data="INFO [AZURE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Azure"/>
 
       <!-- Set Azure configuration (centralized here) -->
-      <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
-      <action application="set" data="AZURE_REGION=eastus"/>
+      <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-subscription-key"/>
+      <action application="set" data="AZURE_REGION=southeastasia"/>
 
       <!-- Start Azure transcription AFTER call is answered -->
-      <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
+      <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim"/>
 
       <!-- Stop on hangup -->
-      <action application="set" data="api_hangup_hook=azure_transcribe ${uuid} stop"/>
+      <action application="set" data="api_hangup_hook=uuid_azure_transcribe ${uuid} stop"/>
     </condition>
   </condition>
 </extension>
@@ -83,8 +83,8 @@
     - Language: en-US
 
   Azure:
-    - Subscription Key: Set AZURE_SUBSCRIPTION_KEY above (line 56)
-    - Region: eastus (change to your Azure region)
+    - Subscription Key: Set AZURE_SUBSCRIPTION_KEY above (line 58)
+    - Region: southeastasia (change to your Azure region)
     - Language: en-US
 
   NOTES:

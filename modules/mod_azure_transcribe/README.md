@@ -35,7 +35,7 @@ apt-get install -y libwebsockets-dev
 The freeswitch module exposes the following API commands:
 
 ```
-azure_transcribe <uuid> start <lang-code> [interim]
+uuid_azure_transcribe <uuid> start <lang-code> [interim]
 ```
 Attaches media bug to channel and performs streaming recognize request.
 - `uuid` - unique identifier of Freeswitch channel
@@ -43,7 +43,7 @@ Attaches media bug to channel and performs streaming recognize request.
 - `interim` - If the 'interim' keyword is present then both interim and final transcription results will be returned; otherwise only final transcriptions will be returned
 
 ```
-azure_transcribe <uuid> stop
+uuid_azure_transcribe <uuid> stop
 ```
 Stop transcription on the channel.
 
@@ -205,7 +205,7 @@ await ep.set({
   AZURE_SUBSCRIPTION_KEY: 'your-subscription-key',
   AZURE_REGION: 'eastus'
 });
-ep.api('azure_transcribe', `${ep.uuid} start en-US interim`);
+ep.api('uuid_azure_transcribe', `${ep.uuid} start en-US interim`);
 
 // With detailed output and profanity filtering
 await ep.set({
@@ -215,10 +215,10 @@ await ep.set({
   AZURE_PROFANITY_OPTION: 'masked',
   AZURE_SPEECH_HINTS: 'weather,forecast,temperature'
 });
-ep.api('azure_transcribe', `${ep.uuid} start en-US interim`);
+ep.api('uuid_azure_transcribe', `${ep.uuid} start en-US interim`);
 
 // Stop transcription
-ep.api('azure_transcribe', `${ep.uuid} stop`);
+ep.api('uuid_azure_transcribe', `${ep.uuid} stop`);
 ```
 
 ### Using FreeSWITCH Dialplan
@@ -239,8 +239,8 @@ See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-conf
       <action application="set" data="AZURE_REGION=eastus"/>
 
       <!-- Start transcription AFTER call is answered (api_on_answer for API command) -->
-      <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
-      <action application="set" data="api_hangup_hook=azure_transcribe ${uuid} stop"/>
+      <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim"/>
+      <action application="set" data="api_hangup_hook=uuid_azure_transcribe ${uuid} stop"/>
     </condition>
   </condition>
 </extension>

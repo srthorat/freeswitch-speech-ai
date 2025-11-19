@@ -68,10 +68,10 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_azure)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
           <action application="log" data="INFO [AZURE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Azure"/>
-          <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
-          <action application="set" data="AZURE_REGION=eastus"/>
-          <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
-          <action application="set" data="api_hangup_hook=azure_transcribe ${uuid} stop"/>
+          <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-subscription-key"/>
+          <action application="set" data="AZURE_REGION=southeastasia"/>
+          <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim"/>
+          <action application="set" data="api_hangup_hook=uuid_azure_transcribe ${uuid} stop"/>
         </condition>
       </condition>
     </extension>
@@ -315,9 +315,9 @@ All Azure configuration is centralized in dialplan:
 
 **In dialplan (default.xml):**
 ```xml
-<action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
-<action application="set" data="AZURE_REGION=eastus"/>
-<action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
+<action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-subscription-key"/>
+<action application="set" data="AZURE_REGION=southeastasia"/>
+<action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim"/>
 ```
 
 To change subscription key or region, edit the values in dialplan. No need to modify user files!
