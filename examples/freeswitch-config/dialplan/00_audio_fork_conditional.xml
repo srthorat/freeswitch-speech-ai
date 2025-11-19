@@ -1,0 +1,47 @@
+<include>
+  <!--
+    CONDITIONAL AUDIO FORKING BASED ON USER FLAG
+
+    This dialplan checks if the caller has "enable_audio_fork=true" set in their
+    user directory file. If yes, audio fork starts automatically AFTER call is answered.
+    If no, audio fork is skipped.
+
+    How it works:
+    1. User directory file (e.g., /usr/local/freeswitch/conf/directory/default/1000.xml)
+       sets the variable: <variable name="enable_audio_fork" value="true"/>
+    2. When that user makes a call, this dialplan checks the flag
+    3. If flag is "true", audio fork starts when call is answered
+    4. If flag is "false" or not set, nothing happens
+
+    Installation:
+    1. Copy to: /usr/local/freeswitch/conf/dialplan/default/00_audio_fork_conditional.xml
+    2. Configure user directory files with enable_audio_fork flag
+    3. Reload: fs_cli -x 'reloadxml'
+  -->
+
+  <extension name="audio_fork_conditional" continue="true">
+    <!-- Check if enable_audio_fork is set to "true" for this user -->
+    <condition field="${enable_audio_fork}" expression="^true$">
+      <!-- Match all destination numbers -->
+      <condition field="destination_number" expression="^(.+)$">
+
+        <!-- Log for debugging -->
+        <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled, setting up for call to ${destination_number}"/>
+
+        <!-- Build metadata with call information -->
+        <action application="set" data="audio_fork_metadata={'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
+
+        <!-- Start audio forking AFTER call is answered -->
+        <!-- Uses settings from user directory: audio_fork_ws_url, audio_fork_mix_type, audio_fork_sampling_rate -->
+        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ${audio_fork_ws_url} ${audio_fork_mix_type} ${audio_fork_sampling_rate} ${audio_fork_metadata}"/>
+
+        <!-- Stop audio fork on hangup -->
+        <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
+
+      </condition>
+    </condition>
+  </extension>
+
+  <!-- This extension will NOT execute if enable_audio_fork is false or not set -->
+
+</include>

@@ -71,6 +71,42 @@ You should see:
    Function: audio_fork
    ```
 
+## Per-User Control (Flag-Based)
+
+The above configuration enables audio fork for **ALL calls**. If you want to enable audio fork **only for specific users**, use the flag-based approach:
+
+**Example:**
+- Extension 1000: `enable_audio_fork=true` → Audio fork ENABLED
+- Extension 1001: `enable_audio_fork=false` → Audio fork DISABLED
+
+**See detailed guide:** [Per-User Flag-Based Audio Fork Configuration](AUDIO_FORK_PER_USER_FLAG.md)
+
+**Quick overview:**
+
+1. **Set flag in user directory** (`/usr/local/freeswitch/conf/directory/default/1000.xml`):
+   ```xml
+   <variables>
+     <variable name="enable_audio_fork" value="true"/>
+     <variable name="audio_fork_ws_url" value="ws://20.244.30.42:8077/stream"/>
+     <variable name="audio_fork_mix_type" value="stereo"/>
+     <variable name="audio_fork_sampling_rate" value="16k"/>
+   </variables>
+   ```
+
+2. **Use conditional dialplan** (`/usr/local/freeswitch/conf/dialplan/default/00_audio_fork_conditional.xml`):
+   ```xml
+   <extension name="audio_fork_conditional" continue="true">
+     <condition field="${enable_audio_fork}" expression="^true$">
+       <condition field="destination_number" expression="^(.+)$">
+         <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ${audio_fork_ws_url} ${audio_fork_mix_type} ${audio_fork_sampling_rate} {'caller':'${caller_id_number}'}"/>
+         <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
+       </condition>
+     </condition>
+   </extension>
+   ```
+
+This approach gives you **per-user control** over audio fork without modifying dialplan for each user.
+
 ## Common Issues and Fixes
 
 ### Issue 1: Dialplan Not Executing (No Log Messages)

@@ -1,0 +1,24 @@
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1000"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1000"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+      <variable name="effective_caller_id_number" value="1000"/>
+
+      <!-- AUDIO FORK CONFIGURATION -->
+      <!-- Set to "true" to enable automatic audio forking for this user -->
+      <variable name="enable_audio_fork" value="true"/>
+
+      <!-- Audio Fork Settings (used when enable_audio_fork=true) -->
+      <variable name="audio_fork_ws_url" value="ws://20.244.30.42:8077/stream"/>
+      <variable name="audio_fork_mix_type" value="stereo"/>
+      <variable name="audio_fork_sampling_rate" value="16k"/>
+    </variables>
+  </user>
+</include>
