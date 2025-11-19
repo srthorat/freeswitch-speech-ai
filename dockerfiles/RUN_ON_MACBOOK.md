@@ -379,6 +379,45 @@ uuid_deepgram_transcribe <uuid> start en-US interim
 
 ### Azure Features
 
+#### Stereo Mode with Channel Identification
+```bash
+# Start transcription in stereo mode (uses ConversationTranscriber)
+# Channel 0 = Caller, Channel 1 = Callee
+uuid_azure_transcribe <uuid> start en-US interim stereo
+```
+
+#### Speaker Diarization (Stereo Mode Only)
+```bash
+# Enable diarization in interim results
+uuid_setvar <uuid> AZURE_DIARIZE_INTERIM_RESULTS true
+uuid_setvar <uuid> AZURE_DIARIZATION_SPEAKER_COUNT 2
+uuid_setvar <uuid> AZURE_DIARIZATION_MIN_SPEAKER_COUNT 1
+uuid_setvar <uuid> AZURE_DIARIZATION_MAX_SPEAKER_COUNT 2
+uuid_azure_transcribe <uuid> start en-US interim stereo
+```
+
+#### Word-Level Timestamps
+```bash
+# Get detailed timing information for each word
+uuid_setvar <uuid> AZURE_WORD_LEVEL_TIMESTAMPS true
+uuid_setvar <uuid> AZURE_USE_OUTPUT_FORMAT_DETAILED true
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
+#### Sentiment Analysis
+```bash
+# Enable sentiment analysis for emotional tone detection
+uuid_setvar <uuid> AZURE_SENTIMENT_ANALYSIS true
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
+#### Dictation Mode
+```bash
+# Enable dictation mode for better punctuation and formatting
+uuid_setvar <uuid> AZURE_DICTATION_MODE true
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
 #### Detailed Output with N-best
 ```bash
 uuid_setvar <uuid> AZURE_USE_OUTPUT_FORMAT_DETAILED true
@@ -393,7 +432,7 @@ uuid_azure_transcribe <uuid> start en-US interim
 
 Options: `masked`, `removed`, `raw`
 
-#### Speech Hints
+#### Speech Hints (Mono Mode Only)
 ```bash
 uuid_setvar <uuid> AZURE_SPEECH_HINTS "account,balance,payment"
 uuid_azure_transcribe <uuid> start en-US interim

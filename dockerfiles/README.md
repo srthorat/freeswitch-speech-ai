@@ -1251,10 +1251,15 @@ docker exec -it fs fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram|azure
 **Features**:
 - ✅ Builds on mod_deepgram_transcribe image (all modules included)
 - ✅ Real-time streaming transcription via Azure Speech Services
+- ✅ Stereo mode with ConversationTranscriber for proper channel identification
+- ✅ Speaker diarization in stereo mode (interim results, speaker counts)
+- ✅ Word-level timestamps for detailed timing information
+- ✅ Sentiment analysis for emotional tone detection
+- ✅ Dictation mode for improved punctuation and formatting
 - ✅ Profanity filtering (masked, removed, raw modes)
 - ✅ Detailed output with N-best alternatives and confidence scores
 - ✅ Signal-to-noise ratio (SNR) reporting
-- ✅ Speech hints for improved domain-specific recognition
+- ✅ Speech hints for improved domain-specific recognition (mono mode)
 - ✅ Configurable timeout settings
 - ✅ Supports 50+ languages and dialects
 - ✅ Interim and final transcription results
@@ -1366,16 +1371,30 @@ docker run --rm -it \
 **Example API Usage**:
 ```bash
 # In fs_cli or via ESL
+
+# Basic configuration
 uuid_setvar <call-uuid> AZURE_SUBSCRIPTION_KEY your-subscription-key
 uuid_setvar <call-uuid> AZURE_REGION eastus
 uuid_setvar <call-uuid> AZURE_USE_OUTPUT_FORMAT_DETAILED true
 uuid_setvar <call-uuid> AZURE_PROFANITY_OPTION masked
 
-# Start transcription with interim results
-azure_transcribe <call-uuid> start en-US interim
+# Advanced features
+uuid_setvar <call-uuid> AZURE_WORD_LEVEL_TIMESTAMPS true
+uuid_setvar <call-uuid> AZURE_SENTIMENT_ANALYSIS true
+uuid_setvar <call-uuid> AZURE_DICTATION_MODE true
+
+# Speaker diarization (stereo mode only)
+uuid_setvar <call-uuid> AZURE_DIARIZE_INTERIM_RESULTS true
+uuid_setvar <call-uuid> AZURE_DIARIZATION_SPEAKER_COUNT 2
+
+# Start transcription with interim results (mono)
+uuid_azure_transcribe <call-uuid> start en-US interim
+
+# Start transcription with stereo for channel identification
+uuid_azure_transcribe <call-uuid> start en-US interim stereo
 
 # Stop transcription
-azure_transcribe <call-uuid> stop
+uuid_azure_transcribe <call-uuid> stop
 ```
 
 For full API documentation, see: `modules/mod_azure_transcribe/README.md`
