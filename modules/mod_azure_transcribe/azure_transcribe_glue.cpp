@@ -22,6 +22,7 @@
 
 using namespace Microsoft::CognitiveServices::Speech;
 using namespace Microsoft::CognitiveServices::Speech::Audio;
+using namespace Microsoft::CognitiveServices::Speech::Transcription;
 
 const char ALLOC_TAG[] = "drachtio";
 
@@ -45,8 +46,9 @@ public:
 		const char* region, 
 		const char* subscriptionKey, 
 		responseHandler_t responseHandler
-  ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_stopped(false), m_interim(interim), 
-	 m_connected(false), m_connecting(false), m_audioBuffer(320 * (samples_per_second == 8000 ? 1 : 2), 15),
+  ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_stopped(false), m_interim(interim),
+	 m_connected(false), m_connecting(false), m_useStereo(channels == 2),
+	 m_audioBuffer(320 * (samples_per_second == 8000 ? 1 : 2), 15),
 	m_responseHandler(responseHandler) {
 
 		switch_core_session_t* psession = switch_core_session_locate(sessionId);
@@ -91,29 +93,38 @@ public:
 		m_pushStream = AudioInputStream::CreatePushStream(format);
 		auto audioConfig = AudioConfig::FromStreamInput(m_pushStream);
 
-    // alternative language
-		const char* var;
-    if (var = switch_channel_get_variable(channel, "AZURE_SPEECH_ALTERNATIVE_LANGUAGE_CODES")) {
-			std::vector<std::string> languages;
-			char *alt_langs[3] = { 0 };
-      int argc = switch_separate_string((char *) var, ',', alt_langs, 3);
-
-			languages.push_back(lang); // primary language
-      for (int i = 0; i < argc; i++) {
-				languages.push_back( alt_langs[i]);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "added alternative lang %s\n", alt_langs[i]);
-      }
-			auto autoDetectSourceLanguageConfig = AutoDetectSourceLanguageConfig::FromLanguages(languages);
-			m_recognizer = SpeechRecognizer::FromConfig(speechConfig, autoDetectSourceLanguageConfig, audioConfig);
-    }
+		// Use ConversationTranscriber for stereo to get channel identification
+		if (m_useStereo) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_INFO, "Using ConversationTranscriber for stereo mode (channel identification)\n");
+			speechConfig->SetSpeechRecognitionLanguage(lang);
+			m_transcriber = ConversationTranscriber::FromConfig(speechConfig, audioConfig);
+		}
+		// Use SpeechRecognizer for mono (supports alternative languages)
 		else {
-			auto sourceLanguageConfig = SourceLanguageConfig::FromLanguage(lang);
-			m_recognizer = SpeechRecognizer::FromConfig(speechConfig, sourceLanguageConfig, audioConfig);
+			// alternative language
+			const char* var;
+			if (var = switch_channel_get_variable(channel, "AZURE_SPEECH_ALTERNATIVE_LANGUAGE_CODES")) {
+				std::vector<std::string> languages;
+				char *alt_langs[3] = { 0 };
+				int argc = switch_separate_string((char *) var, ',', alt_langs, 3);
+
+				languages.push_back(lang); // primary language
+				for (int i = 0; i < argc; i++) {
+					languages.push_back( alt_langs[i]);
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "added alternative lang %s\n", alt_langs[i]);
+				}
+				auto autoDetectSourceLanguageConfig = AutoDetectSourceLanguageConfig::FromLanguages(languages);
+				m_recognizer = SpeechRecognizer::FromConfig(speechConfig, autoDetectSourceLanguageConfig, audioConfig);
+			}
+			else {
+				auto sourceLanguageConfig = SourceLanguageConfig::FromLanguage(lang);
+				m_recognizer = SpeechRecognizer::FromConfig(speechConfig, sourceLanguageConfig, audioConfig);
+			}
 		}
 
 
-		// set properties 
-		auto &properties = m_recognizer->Properties;
+		// set properties
+		auto &properties = m_useStereo ? m_transcriber->Properties : m_recognizer->Properties;
 
 		// profanity options: Allowed values are "masked", "removed", and "raw".
 		const char* profanity = switch_channel_get_variable(channel, "AZURE_PROFANITY_OPTION");
@@ -144,9 +155,9 @@ public:
 		}
 		*/
 
-		// hints
+		// hints (only supported for SpeechRecognizer, not ConversationTranscriber)
 		const char* hints = switch_channel_get_variable(channel, "AZURE_SPEECH_HINTS");
-		if (hints) {
+		if (hints && !m_useStereo) {
 			auto grammar = PhraseListGrammar::FromRecognizer(m_recognizer);
 			char *phrases[500] = { 0 };
       int argc = switch_separate_string((char *)hints, ',', phrases, 500);
@@ -154,6 +165,9 @@ public:
         grammar->AddPhrase(phrases[i]);
       }
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "added %d hints\n", argc);
+		}
+		else if (hints && m_useStereo) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_WARNING, "AZURE_SPEECH_HINTS not supported in stereo mode (ConversationTranscriber)\n");
 		}
 
 		auto onSessionStopped = [this](const SessionEventArgs& args) {
@@ -232,12 +246,24 @@ public:
       }
 		};
 
-		m_recognizer->SessionStopped += onSessionStopped;
-		m_recognizer->SpeechStartDetected += onSpeechStartDetected;
-		m_recognizer->SpeechEndDetected += onSpeechEndDetected;
-		if (interim) m_recognizer->Recognizing += onRecognitionEvent;
-		m_recognizer->Recognized += onRecognitionEvent;
-		m_recognizer->Canceled += onCanceled;
+		// Attach event handlers based on mode
+		if (m_useStereo) {
+			// ConversationTranscriber events
+			m_transcriber->SessionStopped += onSessionStopped;
+			if (interim) m_transcriber->Transcribing += onRecognitionEvent;
+			m_transcriber->Transcribed += onRecognitionEvent;
+			m_transcriber->Canceled += onCanceled;
+			// Note: ConversationTranscriber doesn't have SpeechStartDetected/SpeechEndDetected
+		}
+		else {
+			// SpeechRecognizer events
+			m_recognizer->SessionStopped += onSessionStopped;
+			m_recognizer->SpeechStartDetected += onSpeechStartDetected;
+			m_recognizer->SpeechEndDetected += onSpeechEndDetected;
+			if (interim) m_recognizer->Recognizing += onRecognitionEvent;
+			m_recognizer->Recognized += onRecognitionEvent;
+			m_recognizer->Canceled += onCanceled;
+		}
 
 		switch_core_session_rwunlock(psession);
 	}
@@ -274,8 +300,15 @@ public:
 				switch_core_session_rwunlock(psession);
 			}
 		};
-		m_recognizer->SessionStarted += onSessionStarted;
-		m_recognizer->StartContinuousRecognitionAsync();
+
+		if (m_useStereo) {
+			m_transcriber->SessionStarted += onSessionStarted;
+			m_transcriber->StartTranscribingAsync();
+		}
+		else {
+			m_recognizer->SessionStarted += onSessionStarted;
+			m_recognizer->StartContinuousRecognitionAsync();
+		}
 
 	}
 
@@ -297,9 +330,17 @@ public:
 
 	void finish() {
 		if (m_finished) return;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::finish - calling  StopContinuousRecognitionAsync (%p)\n", this);
 		m_finished = true;
-		m_recognizer->StopContinuousRecognitionAsync().get();
+
+		if (m_useStereo) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::finish - calling StopTranscribingAsync (%p)\n", this);
+			m_transcriber->StopTranscribingAsync().get();
+		}
+		else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::finish - calling StopContinuousRecognitionAsync (%p)\n", this);
+			m_recognizer->StopContinuousRecognitionAsync().get();
+		}
+
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer::finish - recognition has completed (%p)\n", this);
 	}
 
@@ -316,6 +357,7 @@ private:
 	std::string m_bugname;
 	std::string  m_region;
 	std::shared_ptr<SpeechRecognizer> m_recognizer;
+	std::shared_ptr<ConversationTranscriber> m_transcriber;
 	std::shared_ptr<PushAudioInputStream> m_pushStream;
 
 	responseHandler_t m_responseHandler;
@@ -324,6 +366,7 @@ private:
 	bool m_connected;
 	bool m_connecting;
 	bool m_stopped;
+	bool m_useStereo;
 	SimpleBuffer m_audioBuffer;
 };
 

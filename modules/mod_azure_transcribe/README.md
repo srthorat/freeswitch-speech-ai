@@ -49,6 +49,32 @@ uuid_azure_transcribe <uuid> stop [bugname]
 ```
 Stop transcription on the channel.
 
+**Stereo Mode and Channel Identification:**
+
+When using `stereo` mode, the module automatically uses Azure's **ConversationTranscriber** API instead of SpeechRecognizer. This provides proper channel identification in transcription results:
+
+- **Mono mode** (default): Uses `SpeechRecognizer` - all transcriptions show `"Channel":0`
+- **Stereo mode**: Uses `ConversationTranscriber` - transcriptions include correct channel number:
+  - `"Channel":0` = Caller (the person who initiated the call)
+  - `"Channel":1` = Callee (the person who received the call)
+
+**Important stereo mode limitations:**
+- `AZURE_SPEECH_HINTS` is not supported with ConversationTranscriber (stereo mode only)
+- `AZURE_SPEECH_ALTERNATIVE_LANGUAGE_CODES` is not supported in stereo mode
+- Speech start/end detection events are not available in stereo mode
+
+**Example stereo transcription result:**
+```json
+{
+  "Id":"552502b2ed704e48940207fbe64ff3fe",
+  "RecognitionStatus":"Success",
+  "DisplayText":"Hello.",
+  "Offset":241100000,
+  "Duration":4400000,
+  "Channel":1
+}
+```
+
 ### Channel Variables
 
 The following channel variables can be set to configure the Azure Speech-to-Text service:
@@ -251,7 +277,7 @@ See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-conf
 **Benefits:**
 - Uses `user_data()` function for reliable flag checking (production-proven)
 - Starts transcription AFTER call is answered (not during routing)
-- Stereo mode captures caller and callee on separate channels
+- Stereo mode properly identifies caller (Channel 0) vs callee (Channel 1) using ConversationTranscriber
 - User files contain only flags (`enable_azure=true`)
 - Azure credentials centralized in dialplan
 - Works with Audio Fork and Deepgram transcription
