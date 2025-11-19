@@ -230,9 +230,9 @@ See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-conf
 ```xml
 <!-- In dialplan: Check flag and start transcription AFTER answer -->
 <extension name="azure_conditional" continue="true">
-  <condition field="${enable_azure}" expression="^true$">
+  <condition field="${user_data(${caller_id_number}@${domain_name} var enable_azure)}" expression="^true$">
     <condition field="destination_number" expression="^(.+)$">
-      <action application="log" data="INFO [AZURE] User ${caller_id_number} has Azure enabled"/>
+      <action application="log" data="INFO [AZURE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Azure"/>
 
       <!-- Set Azure configuration (centralized) -->
       <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
@@ -245,6 +245,15 @@ See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-conf
   </condition>
 </extension>
 ```
+
+**Benefits:**
+- Uses `user_data()` function for reliable flag checking (production-proven)
+- Starts transcription AFTER call is answered (not during routing)
+- User files contain only flags (`enable_azure=true`)
+- Azure credentials centralized in dialplan
+- Works with Audio Fork and Deepgram transcription
+
+---
 
 **Legacy: Direct Application Usage**
 

@@ -14,8 +14,15 @@ Enable different services for different users:
 ## How It Works
 
 1. **User directory files** contain service flags (`enable_audio_fork`, `enable_deepgram`, `enable_azure`)
-2. **Dialplan** checks these flags and starts the appropriate services
-3. **All services start AFTER call is answered** (using `api_on_answer`)
+2. **Dialplan** uses `user_data()` function to explicitly fetch flags from user directory
+3. **Dialplan** checks these flags and starts the appropriate services
+4. **All services start AFTER call is answered** (using `api_on_answer`)
+
+**Why `user_data()` function?**
+- More reliable than variable inheritance (works even with authentication issues)
+- Explicitly fetches flag value from user directory during dialplan processing
+- Easier to debug - clear what's being checked
+- Proven to work in production environments
 
 ## Installation
 
@@ -31,9 +38,9 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
 
     <!-- EXTENSION 1: Audio Fork (WebSocket Streaming) -->
     <extension name="audio_fork_conditional" continue="true">
-      <condition field="${enable_audio_fork}" expression="^true$">
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_audio_fork)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled → ${destination_number}"/>
+          <action application="log" data="INFO [AUDIO_FORK] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Stream"/>
           <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','service':'audio_fork'}"/>
           <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
         </condition>
@@ -42,9 +49,9 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
 
     <!-- EXTENSION 2: Deepgram Transcription -->
     <extension name="deepgram_conditional" continue="true">
-      <condition field="${enable_deepgram}" expression="^true$">
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_deepgram)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [DEEPGRAM] User ${caller_id_number} has Deepgram enabled → ${destination_number}"/>
+          <action application="log" data="INFO [DEEPGRAM] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Deepgram"/>
           <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
           <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
           <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
@@ -56,9 +63,9 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
 
     <!-- EXTENSION 3: Azure Transcription -->
     <extension name="azure_conditional" continue="true">
-      <condition field="${enable_azure}" expression="^true$">
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_azure)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [AZURE] User ${caller_id_number} has Azure enabled → ${destination_number}"/>
+          <action application="log" data="INFO [AZURE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Azure"/>
           <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
           <action application="set" data="AZURE_REGION=eastus"/>
           <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
@@ -246,9 +253,9 @@ To add a new service (e.g., `enable_google_transcribe`):
 
 ```xml
 <extension name="google_conditional" continue="true">
-  <condition field="${enable_google}" expression="^true$">
+  <condition field="${user_data(${caller_id_number}@${domain_name} var enable_google)}" expression="^true$">
     <condition field="destination_number" expression="^(.+)$">
-      <action application="log" data="INFO [GOOGLE] User ${caller_id_number} has Google enabled"/>
+      <action application="log" data="INFO [GOOGLE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Google"/>
       <action application="set" data="api_on_answer=uuid_google_transcribe ${uuid} start en-US"/>
       <action application="set" data="api_hangup_hook=uuid_google_transcribe ${uuid} stop"/>
     </condition>

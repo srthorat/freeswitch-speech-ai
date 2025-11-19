@@ -509,9 +509,9 @@ See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-conf
 ```xml
 <!-- In dialplan: Check flag and start transcription AFTER answer -->
 <extension name="deepgram_conditional" continue="true">
-  <condition field="${enable_deepgram}" expression="^true$">
+  <condition field="${user_data(${caller_id_number}@${domain_name} var enable_deepgram)}" expression="^true$">
     <condition field="destination_number" expression="^(.+)$">
-      <action application="log" data="INFO [DEEPGRAM] User ${caller_id_number} has Deepgram enabled"/>
+      <action application="log" data="INFO [DEEPGRAM] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Deepgram"/>
 
       <!-- Set Deepgram configuration (centralized) -->
       <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
@@ -527,6 +527,7 @@ See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-conf
 ```
 
 **Benefits:**
+- Uses `user_data()` function for reliable flag checking (production-proven)
 - Starts transcription AFTER call is answered (not during routing)
 - User files contain only flags (`enable_deepgram=true`)
 - API keys centralized in dialplan

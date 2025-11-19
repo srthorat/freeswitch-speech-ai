@@ -264,9 +264,9 @@ Configure audio forking at the user level with flags in user files and settings 
 <include>
   <!-- Check if audio fork is enabled for this user -->
   <extension name="audio_fork_conditional" continue="true">
-    <condition field="${enable_audio_fork}" expression="^true$">
+    <condition field="${user_data(${caller_id_number}@${domain_name} var enable_audio_fork)}" expression="^true$">
       <condition field="destination_number" expression="^(.+)$">
-        <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled"/>
+        <action application="log" data="INFO [AUDIO_FORK] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Stream"/>
 
         <!-- Start audio forking AFTER call is answered -->
         <!-- All settings centralized here (WebSocket URL, mix type, sampling rate) -->
@@ -281,6 +281,7 @@ Configure audio forking at the user level with flags in user files and settings 
 ```
 
 **Benefits:**
+- Uses `user_data()` function for reliable flag checking (works even with auth issues)
 - User files contain only flags (clean and simple)
 - All settings (WebSocket URL, mix type, sampling rate) centralized in dialplan
 - Starts AFTER call is answered (not during routing)

@@ -25,9 +25,9 @@
 
     <!-- SERVICE 1: Audio Fork (WebSocket Streaming) -->
     <extension name="audio_fork_conditional" continue="true">
-      <condition field="${enable_audio_fork}" expression="^true$">
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_audio_fork)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled → ${destination_number}"/>
+          <action application="log" data="INFO [AUDIO_FORK] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Stream"/>
 
           <!-- ⚙️ CONFIGURE: Update WebSocket URL below -->
           <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','service':'audio_fork'}"/>
@@ -39,9 +39,9 @@
 
     <!-- SERVICE 2: Deepgram Transcription -->
     <extension name="deepgram_conditional" continue="true">
-      <condition field="${enable_deepgram}" expression="^true$">
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_deepgram)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [DEEPGRAM] User ${caller_id_number} has Deepgram enabled → ${destination_number}"/>
+          <action application="log" data="INFO [DEEPGRAM] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Deepgram"/>
 
           <!-- ⚙️ CONFIGURE: Update Deepgram settings below -->
           <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
@@ -56,9 +56,9 @@
 
     <!-- SERVICE 3: Azure Transcription -->
     <extension name="azure_conditional" continue="true">
-      <condition field="${enable_azure}" expression="^true$">
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_azure)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [AZURE] User ${caller_id_number} has Azure enabled → ${destination_number}"/>
+          <action application="log" data="INFO [AZURE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Azure"/>
 
           <!-- ⚙️ CONFIGURE: Update Azure settings below -->
           <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
