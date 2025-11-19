@@ -1,18 +1,12 @@
 # FreeSWITCH User Directory Examples
 
-This directory contains example user directory files demonstrating per-user service configurations.
+This directory contains complete, ready-to-deploy user directory files demonstrating per-user service configurations.
 
 ## Files
 
-### Complete Working Examples (Ready to Deploy)
-- **`1000.xml.complete`** - Audio Fork (WebSocket) only
-- **`1001.xml.complete`** - Deepgram transcription only
-- **`1003.xml.complete`** - Azure transcription only
-
-### Additional Examples
-- **`1000-audio-fork.xml`** - Audio Fork (WebSocket) only
-- **`1001-deepgram.xml`** - Deepgram transcription only
-- **`1003-azure.xml`** - Azure transcription only
+- **`1000.xml.complete`** - Audio Fork (WebSocket streaming) enabled
+- **`1001.xml.complete`** - Deepgram transcription enabled
+- **`1003.xml.complete`** - Azure transcription enabled
 
 ## Quick Installation
 
