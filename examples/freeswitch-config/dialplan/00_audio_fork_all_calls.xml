@@ -9,7 +9,8 @@
     - The "00_" prefix ensures this runs BEFORE other dialplan extensions
     - continue="true" allows the call to proceed to other extensions
     - The condition field="destination_number" with expression="^.*$" matches ALL calls
-    - execute_on_answer ensures audio fork starts AFTER call is answered (not during early media)
+    - api_on_answer ensures audio fork starts AFTER call is answered (not during early media)
+    - uuid_audio_fork is an API command, so use api_on_answer (NOT execute_on_answer)
 
     Installation:
     1. Copy this file to: /usr/local/freeswitch/conf/dialplan/default/00_audio_fork_all_calls.xml
@@ -18,7 +19,7 @@
     4. Test by making any call
 
     For inline execution (starts during early media/ringing):
-    - Replace the export line with:
+    - Replace the api_on_answer line with:
       <action application="uuid_audio_fork" data="${uuid} start ws://..."/>
   -->
   <extension name="audio_fork_all_calls" continue="true">
@@ -28,8 +29,8 @@
       <!-- Log the call setup for debugging -->
       <action application="log" data="INFO [AUDIO_FORK] Setting up auto-fork for: ${caller_id_number} → ${destination_number}"/>
 
-      <!-- Start audio forking AFTER call is answered (not during early media) -->
-      <action application="export" data="nolocal:execute_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
+      <!-- Start audio forking AFTER call is answered (API command, use api_on_answer) -->
+      <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
 
       <!-- Set hangup hook to stop audio forking when call ends -->
       <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop {'end_time':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>

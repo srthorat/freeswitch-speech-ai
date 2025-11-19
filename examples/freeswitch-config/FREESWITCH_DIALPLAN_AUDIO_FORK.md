@@ -239,8 +239,8 @@ fs_cli -x 'reloadxml' 2>&1 | grep -i error
   <condition field="destination_number" expression="^.*$">
     <action application="log" data="INFO [AUDIO_FORK] Setting up auto-fork for: ${caller_id_number} → ${destination_number}"/>
 
-    <!-- Execute audio fork when the call is ANSWERED -->
-    <action application="export" data="nolocal:execute_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
+    <!-- Execute audio fork API when the call is ANSWERED -->
+    <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://server/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}'}"/>
 
     <!-- Stop audio fork on hangup -->
     <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
@@ -253,13 +253,14 @@ fs_cli -x 'reloadxml' 2>&1 | grep -i error
 | Approach | When It Runs | Use Case |
 |----------|--------------|----------|
 | Inline `<action application="uuid_audio_fork"...>` | During routing phase (early media) | When you need audio from ringing/early media |
-| `execute_on_answer=uuid_audio_fork...` | After B-leg answers the call | When you only want audio from established calls |
+| `api_on_answer=uuid_audio_fork...` | After B-leg answers the call | When you only want audio from established calls |
 
 **Key Points:**
-- `execute_on_answer` delays execution until the called party answers
-- `export nolocal:` ensures the variable applies to the current call leg
+- **`uuid_audio_fork` is an API command, not an application** - use `api_on_answer` (not `execute_on_answer`)
+- `api_on_answer` delays execution until the called party answers
 - `api_hangup_hook` automatically stops audio fork when call ends
 - Early media audio may include ringing tones, not actual conversation
+- Use `export nolocal:api_on_answer=...` if you need it on B-leg only
 
 **Verification:**
 ```bash
@@ -418,8 +419,8 @@ Here's the complete, tested configuration for forking audio on all calls **AFTER
       <!-- Log for debugging -->
       <action application="log" data="INFO [AUDIO_FORK] Setting up auto-fork for: ${caller_id_number} → ${destination_number}"/>
 
-      <!-- Start audio forking AFTER call is answered -->
-      <action application="export" data="nolocal:execute_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
+      <!-- Start audio forking AFTER call is answered (API command, use api_on_answer) -->
+      <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
 
       <!-- Auto-cleanup on hangup -->
       <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop {'end':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
