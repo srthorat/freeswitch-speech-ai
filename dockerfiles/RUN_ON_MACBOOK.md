@@ -98,9 +98,15 @@ This guide shows how to quickly run FreeSWITCH Docker images on your MacBook usi
 - ✅ mod_azure_transcribe
 - ✅ Microsoft Azure Speech SDK 1.47.0
 - ✅ **ALL THREE TRANSCRIPTION MODULES**
+- ✅ **Pre-configured example configuration files** (dialplan, user directories 1000-1002)
 
 **Size:** ~1.2 GB
 **Use Case:** Azure speech-to-text, or using both Deepgram and Azure
+
+**Note:** The Azure image includes ready-to-use configuration files:
+- Complete dialplan with Azure transcription examples
+- User directories (1000, 1001, 1002) with example Azure configuration
+- No manual configuration needed for basic testing
 
 ---
 

@@ -1264,7 +1264,32 @@ docker exec -it fs fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram|azure
 - ✅ Supports 50+ languages and dialects
 - ✅ Interim and final transcription results
 - ✅ Includes mod_audio_fork AND mod_deepgram_transcribe from base image
+- ✅ Pre-configured example configuration files (dialplan and user directories)
 - ✅ Automatic static + runtime validation during build
+
+**Included Configuration Files**:
+
+The Docker image includes pre-configured FreeSWITCH configuration files ready for testing:
+
+- **`/usr/local/freeswitch/conf/dialplan/default.xml`** - Complete dialplan with Azure transcription examples
+- **`/usr/local/freeswitch/conf/directory/default/1000.xml`** - User 1000 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1001.xml`** - User 1001 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1002.xml`** - User 1002 with Azure-specific variables
+
+These files provide working examples of:
+- Audio fork setup for transcription services
+- Azure Speech Services integration
+- Per-user multi-service configuration patterns
+- Ready-to-use dialplan patterns
+
+**Note**: You can override these by mounting your own configuration directory:
+```bash
+docker run -d \
+  -v /path/to/your/conf:/usr/local/freeswitch/conf \
+  -e AZURE_SUBSCRIPTION_KEY=your-key \
+  -e AZURE_REGION=eastus \
+  freeswitch-mod-azure-transcribe:latest
+```
 
 ### Manual Verification for mod_azure_transcribe
 

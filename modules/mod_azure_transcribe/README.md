@@ -270,8 +270,10 @@ This approach provides:
 - Works seamlessly with Audio Fork and Deepgram transcription
 
 **Quick Start:**
-- [Complete dialplan example](../../examples/freeswitch-config/dialplan/default.xml.complete-example)
-- [User 1003 example (Azure enabled)](../../examples/freeswitch-config/directory/1003.xml.complete)
+- [Complete dialplan example](../../examples/freeswitch-config/dialplan/default.xml)
+- [User 1002 example (Azure enabled)](../../examples/freeswitch-config/directory/1002.xml)
+
+**Docker Users:** The Azure Docker image (`freeswitch-mod-azure-transcribe:latest`) includes these configuration files pre-installed and ready to use. See [Docker documentation](../../dockerfiles/README.md#mod_azure_transcribe) for details.
 
 ---
 
