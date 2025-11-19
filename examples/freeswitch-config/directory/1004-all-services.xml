@@ -1,0 +1,26 @@
+<include>
+  <user id="1004">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1004"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1004"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1004"/>
+      <variable name="effective_caller_id_number" value="1004"/>
+
+      <!-- SERVICE FLAGS -->
+      <!-- EXAMPLE: Enable ALL services for this user -->
+      <variable name="enable_audio_fork" value="true"/>
+      <variable name="enable_deepgram" value="true"/>
+      <variable name="enable_azure" value="true"/>
+
+      <!-- Service Configuration -->
+      <variable name="DEEPGRAM_API_KEY" value="your-deepgram-api-key"/>
+      <variable name="AZURE_SUBSCRIPTION_KEY" value="your-azure-key"/>
+      <variable name="AZURE_REGION" value="eastus"/>
+    </variables>
+  </user>
+</include>

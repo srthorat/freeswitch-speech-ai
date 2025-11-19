@@ -1,0 +1,69 @@
+<!-- ============================================================ -->
+<!-- MULTI-FLAG SERVICE EXTENSIONS (Add at top of <context>)     -->
+<!-- ============================================================ -->
+<!--
+  This section provides per-user control for different services:
+  - Audio Fork (WebSocket streaming)
+  - Deepgram Transcription
+  - Azure Transcription
+
+  Each user can enable/disable services independently via flags in
+  their user directory file (e.g., /usr/local/freeswitch/conf/directory/default/1000.xml)
+-->
+
+<!-- EXTENSION 1: Audio Fork (WebSocket Streaming) -->
+<extension name="audio_fork_conditional" continue="true">
+  <condition field="${enable_audio_fork}" expression="^true$">
+    <condition field="destination_number" expression="^(.+)$">
+      <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled → ${destination_number}"/>
+
+      <!-- Start audio fork AFTER call is answered -->
+      <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','service':'audio_fork'}"/>
+
+      <!-- Stop on hangup -->
+      <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
+    </condition>
+  </condition>
+</extension>
+
+<!-- EXTENSION 2: Deepgram Transcription -->
+<extension name="deepgram_conditional" continue="true">
+  <condition field="${enable_deepgram}" expression="^true$">
+    <condition field="destination_number" expression="^(.+)$">
+      <action application="log" data="INFO [DEEPGRAM] User ${caller_id_number} has Deepgram enabled → ${destination_number}"/>
+
+      <!-- Start Deepgram transcription AFTER call is answered -->
+      <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
+
+      <!-- Stop on hangup -->
+      <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
+    </condition>
+  </condition>
+</extension>
+
+<!-- EXTENSION 3: Azure Transcription -->
+<extension name="azure_conditional" continue="true">
+  <condition field="${enable_azure}" expression="^true$">
+    <condition field="destination_number" expression="^(.+)$">
+      <action application="log" data="INFO [AZURE] User ${caller_id_number} has Azure enabled → ${destination_number}"/>
+
+      <!-- Start Azure transcription AFTER call is answered -->
+      <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
+
+      <!-- Stop on hangup -->
+      <action application="set" data="api_hangup_hook=azure_transcribe ${uuid} stop"/>
+    </condition>
+  </condition>
+</extension>
+
+<!--
+  NOTES:
+  - All extensions use continue="true" to allow call processing to proceed
+  - All services start AFTER call is answered (using api_on_answer)
+  - Users can have multiple flags enabled (e.g., both audio_fork AND deepgram)
+  - To add more services, copy the pattern above with a new flag name
+-->
+
+<!-- ============================================================ -->
+<!-- END OF MULTI-FLAG SERVICE EXTENSIONS                        -->
+<!-- ============================================================ -->

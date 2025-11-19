@@ -1,0 +1,27 @@
+<include>
+  <user id="1003">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1003"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1003"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1003"/>
+      <variable name="effective_caller_id_number" value="1003"/>
+
+      <!-- SERVICE FLAGS -->
+      <!-- Enable Azure transcription for this user -->
+      <variable name="enable_azure" value="true"/>
+
+      <!-- Azure Configuration (optional - uses environment vars if not set) -->
+      <variable name="AZURE_SUBSCRIPTION_KEY" value="your-azure-key"/>
+      <variable name="AZURE_REGION" value="eastus"/>
+
+      <!-- Other services disabled -->
+      <!-- <variable name="enable_audio_fork" value="true"/> -->
+      <!-- <variable name="enable_deepgram" value="true"/> -->
+    </variables>
+  </user>
+</include>

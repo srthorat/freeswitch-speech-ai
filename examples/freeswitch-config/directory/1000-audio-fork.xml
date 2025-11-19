@@ -1,0 +1,23 @@
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1000"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1000"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+      <variable name="effective_caller_id_number" value="1000"/>
+
+      <!-- SERVICE FLAGS -->
+      <!-- Enable audio fork (WebSocket streaming) for this user -->
+      <variable name="enable_audio_fork" value="true"/>
+
+      <!-- Other services disabled -->
+      <!-- <variable name="enable_deepgram" value="true"/> -->
+      <!-- <variable name="enable_azure" value="true"/> -->
+    </variables>
+  </user>
+</include>

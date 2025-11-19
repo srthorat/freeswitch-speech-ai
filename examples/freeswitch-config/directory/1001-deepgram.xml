@@ -1,0 +1,28 @@
+<include>
+  <user id="1001">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1001"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1001"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1001"/>
+      <variable name="effective_caller_id_number" value="1001"/>
+
+      <!-- SERVICE FLAGS -->
+      <!-- Enable Deepgram transcription for this user -->
+      <variable name="enable_deepgram" value="true"/>
+
+      <!-- Deepgram Configuration (optional - uses environment vars if not set) -->
+      <variable name="DEEPGRAM_API_KEY" value="your-deepgram-api-key"/>
+      <variable name="DEEPGRAM_SPEECH_MODEL" value="phonecall"/>
+      <variable name="DEEPGRAM_SPEECH_TIER" value="nova"/>
+
+      <!-- Other services disabled -->
+      <!-- <variable name="enable_audio_fork" value="true"/> -->
+      <!-- <variable name="enable_azure" value="true"/> -->
+    </variables>
+  </user>
+</include>
