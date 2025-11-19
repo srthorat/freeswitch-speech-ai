@@ -385,22 +385,26 @@ uuid_deepgram_transcribe <uuid> start en-US interim
 
 ### Azure Features
 
-#### Stereo Mode with Channel Identification
+#### ConversationTranscriber Mode
 ```bash
-# Start transcription in stereo mode (uses ConversationTranscriber)
-# Channel 0 = Caller, Channel 1 = Callee
+# Start transcription using ConversationTranscriber (stereo mode)
+# Uses AI-based speaker identification (Guest-1, Guest-2, etc.)
 uuid_azure_transcribe <uuid> start en-US interim stereo
 ```
 
-#### Speaker Diarization (Stereo Mode Only)
+**Important**: Azure's streaming SDK uses AI-based speaker diarization to identify speakers, not true channel separation. The "Channel" field in results indicates audio source, but speaker identification (e.g., "Guest-1") is done via AI analysis.
+
+#### Speaker Diarization
 ```bash
-# Enable diarization in interim results
+# Enable AI-based speaker diarization with ConversationTranscriber
 uuid_setvar <uuid> AZURE_DIARIZE_INTERIM_RESULTS true
 uuid_setvar <uuid> AZURE_DIARIZATION_SPEAKER_COUNT 2
 uuid_setvar <uuid> AZURE_DIARIZATION_MIN_SPEAKER_COUNT 1
 uuid_setvar <uuid> AZURE_DIARIZATION_MAX_SPEAKER_COUNT 2
 uuid_azure_transcribe <uuid> start en-US interim stereo
 ```
+
+**Note**: Speaker diarization is a preview feature. For production use or advanced capabilities, you may need to request access by emailing `diarizationrequest@microsoft.com`. See [module README](../modules/mod_azure_transcribe/README.md#advanced-features) for details.
 
 #### Word-Level Timestamps
 ```bash

@@ -1251,8 +1251,8 @@ docker exec -it fs fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram|azure
 **Features**:
 - ✅ Builds on mod_deepgram_transcribe image (all modules included)
 - ✅ Real-time streaming transcription via Azure Speech Services
-- ✅ Stereo mode with ConversationTranscriber for proper channel identification
-- ✅ Speaker diarization in stereo mode (interim results, speaker counts)
+- ✅ ConversationTranscriber API for speaker identification
+- ✅ AI-based speaker diarization (identifies "Guest-1", "Guest-2", etc.)
 - ✅ Word-level timestamps for detailed timing information
 - ✅ Sentiment analysis for emotional tone detection
 - ✅ Dictation mode for improved punctuation and formatting
@@ -1408,14 +1408,15 @@ uuid_setvar <call-uuid> AZURE_WORD_LEVEL_TIMESTAMPS true
 uuid_setvar <call-uuid> AZURE_SENTIMENT_ANALYSIS true
 uuid_setvar <call-uuid> AZURE_DICTATION_MODE true
 
-# Speaker diarization (stereo mode only)
+# AI-based speaker diarization (uses ConversationTranscriber)
+# Note: Azure uses AI to identify speakers (Guest-1, Guest-2), not channel separation
 uuid_setvar <call-uuid> AZURE_DIARIZE_INTERIM_RESULTS true
 uuid_setvar <call-uuid> AZURE_DIARIZATION_SPEAKER_COUNT 2
 
 # Start transcription with interim results (mono)
 uuid_azure_transcribe <call-uuid> start en-US interim
 
-# Start transcription with stereo for channel identification
+# Start transcription with ConversationTranscriber (stereo mode for speaker identification)
 uuid_azure_transcribe <call-uuid> start en-US interim stereo
 
 # Stop transcription

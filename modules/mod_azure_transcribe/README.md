@@ -77,9 +77,17 @@ When using `stereo` mode, the module automatically uses Azure's **ConversationTr
 
 ### Advanced Features
 
-**Speaker Diarization (Stereo Mode Only)**
+**Speaker Diarization**
 
-When using stereo mode with ConversationTranscriber, you can enable advanced speaker diarization:
+Azure Speech Services provides speaker diarization using `ConversationTranscriber`, which separates speakers in audio (e.g., "Guest-1", "Guest-2") using AI-based speaker recognition.
+
+**Important Notes:**
+- **Not Channel-Based**: Azure's streaming SDK doesn't split recognition by audio channels. Instead, it uses speaker diarization to identify different speakers in the conversation, even from mono or mixed audio.
+- **Preview Feature**: Speaker diarization is a preview feature. For production use or access to advanced diarization capabilities, you may need to request access by emailing `diarizationrequest@microsoft.com`.
+- **ConversationTranscriber API**: Our implementation uses `ConversationTranscriber` (stereo mode) which provides speaker identification in the transcription results.
+- **Alternative**: For true channel-based separation, Azure's [Batch Transcription API](https://docs.microsoft.com/azure/cognitive-services/speech-service/batch-transcription) supports multi-channel audio, but not in real-time streaming.
+
+**Configuration:**
 
 ```xml
 <action application="set" data="AZURE_DIARIZE_INTERIM_RESULTS=true"/>
@@ -88,7 +96,21 @@ When using stereo mode with ConversationTranscriber, you can enable advanced spe
 <action application="set" data="AZURE_DIARIZATION_MAX_SPEAKER_COUNT=2"/>
 ```
 
-These settings help Azure better identify different speakers in the conversation. The speaker identification appears in transcription results.
+**Example Output:**
+```json
+{
+  "Type": "ConversationTranscription",
+  "SpeakerId": "Guest-1",
+  "Channel": 0,
+  "DisplayText": "Hello, how are you?"
+}
+```
+
+These settings help Azure better identify different speakers in the conversation. The speaker identification (e.g., "Guest-1", "Guest-2") appears in transcription results.
+
+**References:**
+- [GitHub Issue #1485](https://github.com/Azure-Samples/cognitive-services-speech-sdk/issues/1485) - Streaming SDK doesn't split by channels
+- [GitHub Issue #1748](https://github.com/Azure-Samples/cognitive-services-speech-sdk/issues/1748) - Speaker diarization preview feature
 
 **Word-Level Timestamps**
 
