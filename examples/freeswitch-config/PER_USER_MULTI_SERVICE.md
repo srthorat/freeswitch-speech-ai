@@ -7,7 +7,7 @@ This guide shows how to enable different services (Audio Fork, Deepgram, Azure) 
 Enable different services for different users:
 - **User 1000**: Audio Fork (WebSocket streaming) only
 - **User 1001**: Deepgram transcription only
-- **User 1003**: Azure transcription only
+- **User 1002**: Azure transcription only
 
 **Note:** Users can have multiple flags enabled (e.g., both `enable_audio_fork` and `enable_deepgram`). Fallback logic for service selection will be explored in future releases.
 
@@ -143,21 +143,21 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
 
 **Note:** User file contains ONLY the flag. All Deepgram settings (API key, model, tier) are centralized in dialplan.
 
-#### User 1003 - Azure Only
+#### User 1002 - Azure Only
 
-**File:** `/usr/local/freeswitch/conf/directory/default/1003.xml`
+**File:** `/usr/local/freeswitch/conf/directory/default/1002.xml`
 
 ```xml
 <include>
-  <user id="1003">
+  <user id="1002">
     <params>
       <param name="password" value="1234"/>
     </params>
     <variables>
       <variable name="toll_allow" value="domestic,international,local"/>
       <variable name="user_context" value="default"/>
-      <variable name="effective_caller_id_name" value="Extension 1003"/>
-      <variable name="effective_caller_id_number" value="1003"/>
+      <variable name="effective_caller_id_name" value="Extension 1002"/>
+      <variable name="effective_caller_id_number" value="1002"/>
 
       <!-- Enable ONLY Azure for this user -->
       <!-- All Azure settings (subscription key, region) are configured in dialplan -->
@@ -199,12 +199,12 @@ mod_audio_fork: streaming 16000 sampling to 20.244.30.42:8077/stream
 # NO Audio Fork or Azure logs
 ```
 
-### Test User 1003 (Azure Only)
+### Test User 1002 (Azure Only)
 
 ```bash
-# User 1003 calls 1000
+# User 1002 calls 1000
 # Expected logs:
-[INFO] [AZURE] User 1003 has Azure enabled → 1000
+[INFO] [AZURE] User 1002 has Azure enabled → 1000
 # Azure transcription events should appear
 
 # NO Audio Fork or Deepgram logs
@@ -222,7 +222,7 @@ fs_cli -x 'user_data 1000@default var enable_audio_fork'
 fs_cli -x 'user_data 1001@default var enable_deepgram'
 # Should return: true
 
-fs_cli -x 'user_data 1003@default var enable_azure'
+fs_cli -x 'user_data 1002@default var enable_azure'
 # Should return: true
 ```
 
@@ -243,7 +243,7 @@ fs_cli -x 'uuid_buglist <uuid>'
 |------|-----------|----------|-------|----------|
 | 1000 | ✅ | ❌ | ❌ | WebSocket streaming only |
 | 1001 | ❌ | ✅ | ❌ | Deepgram transcription only |
-| 1003 | ❌ | ❌ | ✅ | Azure transcription only |
+| 1002 | ❌ | ❌ | ✅ | Azure transcription only |
 
 **Note:** Users can enable multiple services by setting multiple flags. However, running multiple transcription services simultaneously (Deepgram + Azure) is generally not recommended.
 

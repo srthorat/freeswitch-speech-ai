@@ -6,7 +6,7 @@ This directory contains complete, ready-to-deploy user directory files demonstra
 
 - **`1000.xml.complete`** - Audio Fork (WebSocket streaming) enabled
 - **`1001.xml.complete`** - Deepgram transcription enabled
-- **`1003.xml.complete`** - Azure transcription enabled
+- **`1002.xml.complete`** - Azure transcription enabled
 
 ## Quick Installation
 
@@ -16,7 +16,7 @@ Use the complete working examples:
 # Copy complete examples (ready to use)
 cp examples/freeswitch-config/directory/1000.xml.complete /usr/local/freeswitch/conf/directory/default/1000.xml
 cp examples/freeswitch-config/directory/1001.xml.complete /usr/local/freeswitch/conf/directory/default/1001.xml
-cp examples/freeswitch-config/directory/1003.xml.complete /usr/local/freeswitch/conf/directory/default/1003.xml
+cp examples/freeswitch-config/directory/1002.xml.complete /usr/local/freeswitch/conf/directory/default/1002.xml
 
 # Reload configuration
 fs_cli -x 'reloadxml'
@@ -81,7 +81,7 @@ fs_cli -x 'user_data 1000@default var enable_audio_fork'
 fs_cli -x 'user_data 1001@default var enable_deepgram'
 
 # Check Azure flag
-fs_cli -x 'user_data 1003@default var enable_azure'
+fs_cli -x 'user_data 1002@default var enable_azure'
 ```
 
 ## Related Documentation
