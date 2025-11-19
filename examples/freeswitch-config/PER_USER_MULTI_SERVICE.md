@@ -55,6 +55,8 @@ Add the multi-flag extensions **at the top** of the `<context name="default">` s
           <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
           <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
           <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+          <action application="set" data="DEEPGRAM_SPEECH_DIARIZE=true"/>
+          <action application="set" data="DEEPGRAM_SPEECH_DIARIZE_VERSION=latest"/>
           <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
           <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
         </condition>
