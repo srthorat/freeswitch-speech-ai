@@ -171,44 +171,45 @@ public:
 		}
 
 		// Speaker diarization properties (only for ConversationTranscriber in stereo mode)
+		// Note: These properties don't have PropertyId enums, so we use raw string property names
 		if (m_useStereo) {
 			// Enable diarization in interim results
 			const char* diarizeInterim = switch_channel_get_variable(channel, "AZURE_DIARIZE_INTERIM_RESULTS");
 			if (diarizeInterim ? switch_true(diarizeInterim) : true) { // default: true
-				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizeIntermediateResults, TrueString);
+				properties.SetProperty("SpeechServiceResponse_DiarizeIntermediateResults", TrueString);
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "enabled diarization in interim results\n");
 			}
 
 			// Set speaker count (exact number of speakers)
 			const char* speakerCount = switch_channel_get_variable(channel, "AZURE_DIARIZATION_SPEAKER_COUNT");
 			if (speakerCount) {
-				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationSpeakerCount, speakerCount);
+				properties.SetProperty("SpeechServiceResponse_DiarizationSpeakerCount", speakerCount);
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization speaker count to %s\n", speakerCount);
 			}
 			else {
-				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationSpeakerCount, "2");
+				properties.SetProperty("SpeechServiceResponse_DiarizationSpeakerCount", "2");
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization speaker count to 2 (default)\n");
 			}
 
 			// Set minimum speaker count
 			const char* minSpeakerCount = switch_channel_get_variable(channel, "AZURE_DIARIZATION_MIN_SPEAKER_COUNT");
 			if (minSpeakerCount) {
-				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationMinSpeakerCount, minSpeakerCount);
+				properties.SetProperty("SpeechServiceResponse_DiarizationMinSpeakerCount", minSpeakerCount);
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization min speaker count to %s\n", minSpeakerCount);
 			}
 			else {
-				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationMinSpeakerCount, "1");
+				properties.SetProperty("SpeechServiceResponse_DiarizationMinSpeakerCount", "1");
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization min speaker count to 1 (default)\n");
 			}
 
 			// Set maximum speaker count
 			const char* maxSpeakerCount = switch_channel_get_variable(channel, "AZURE_DIARIZATION_MAX_SPEAKER_COUNT");
 			if (maxSpeakerCount) {
-				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationMaxSpeakerCount, maxSpeakerCount);
+				properties.SetProperty("SpeechServiceResponse_DiarizationMaxSpeakerCount", maxSpeakerCount);
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization max speaker count to %s\n", maxSpeakerCount);
 			}
 			else {
-				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationMaxSpeakerCount, "2");
+				properties.SetProperty("SpeechServiceResponse_DiarizationMaxSpeakerCount", "2");
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization max speaker count to 2 (default)\n");
 			}
 		}
@@ -220,8 +221,9 @@ public:
 		}
 
 		// Sentiment analysis (available in both mono and stereo modes)
+		// Note: This property doesn't have a PropertyId enum, so we use raw string property name
 		if (switch_true(switch_channel_get_variable(channel, "AZURE_SENTIMENT_ANALYSIS"))) {
-			properties.SetProperty(PropertyId::SpeechServiceResponse_RequestSentimentAnalysis, TrueString);
+			properties.SetProperty("SpeechServiceResponse_RequestSentimentAnalysis", TrueString);
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "enabled sentiment analysis\n");
 		}
 
@@ -307,13 +309,64 @@ public:
       }
 		};
 
+		// Event handlers for ConversationTranscriber (stereo mode)
+		auto onConversationTranscriptionEvent = [this, responseHandler](const Transcription::ConversationTranscriptionEventArgs& args) {
+			switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
+			if (psession) {
+				auto result = args.Result;
+				auto reason = result->Reason;
+				const auto& properties = result->Properties;
+				auto json = properties.GetProperty(PropertyId::SpeechServiceResponse_JsonResult);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer onConversationTranscriptionEvent reason %d results: %s,\n", reason, json.c_str());
+
+				switch (reason) {
+					case ResultReason::RecognizingSpeech:
+					case ResultReason::RecognizedSpeech:
+						// note: interim results don't have "RecognitionStatus": "Success"
+						responseHandler(psession, TRANSCRIBE_EVENT_RESULTS, json.c_str(), m_bugname.c_str(), m_finished);
+					break;
+					case ResultReason::NoMatch:
+						responseHandler(psession, TRANSCRIBE_EVENT_NO_SPEECH_DETECTED, json.c_str(), m_bugname.c_str(), m_finished);
+					break;
+
+					default:
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "GStreamer unexpected result '%s': reason %d\n",
+							json.c_str(), reason);
+            responseHandler(psession, TRANSCRIBE_EVENT_ERROR, json.c_str(), m_bugname.c_str(), m_finished);
+
+					break;
+				}
+				switch_core_session_rwunlock(psession);
+			}
+		};
+
+		auto onConversationCanceled = [this, responseHandler](const Transcription::ConversationTranscriptionCanceledEventArgs& args) {
+      if (m_finished) return;
+			switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
+			if (psession) {
+        auto result = args.Result;
+        auto cancellation = CancellationDetails::FromResult(result);
+        auto details = cancellation->ErrorDetails;
+        auto code = cancellation->ErrorCode;
+        cJSON* json = cJSON_CreateObject();
+        cJSON_AddStringToObject(json, "type", "error");
+        cJSON_AddStringToObject(json, "error", details.c_str());
+        char* jsonString = cJSON_PrintUnformatted(json);
+        responseHandler(psession, TRANSCRIBE_EVENT_ERROR, jsonString, m_bugname.c_str(), m_finished);
+        free(jsonString);
+        cJSON_Delete(json);
+				switch_core_session_rwunlock(psession);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer conversation transcription canceled, error %d: %s\n", code, details.c_str());
+      }
+		};
+
 		// Attach event handlers based on mode
 		if (m_useStereo) {
 			// ConversationTranscriber events
 			m_transcriber->SessionStopped += onSessionStopped;
-			if (interim) m_transcriber->Transcribing += onRecognitionEvent;
-			m_transcriber->Transcribed += onRecognitionEvent;
-			m_transcriber->Canceled += onCanceled;
+			if (interim) m_transcriber->Transcribing += onConversationTranscriptionEvent;
+			m_transcriber->Transcribed += onConversationTranscriptionEvent;
+			m_transcriber->Canceled += onConversationCanceled;
 			// Note: ConversationTranscriber doesn't have SpeechStartDetected/SpeechEndDetected
 		}
 		else {
