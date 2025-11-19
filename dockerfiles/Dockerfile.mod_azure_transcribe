@@ -146,6 +146,16 @@ RUN ldconfig
 RUN sed -i '/<\/modules>/i \    <load module="mod_azure_transcribe"/>' \
     /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml 2>/dev/null || true
 
+# Copy example configuration files
+COPY examples/freeswitch-config/dialplan/default.xml \
+    /usr/local/freeswitch/conf/dialplan/default.xml
+COPY examples/freeswitch-config/directory/1000.xml \
+    /usr/local/freeswitch/conf/directory/default/1000.xml
+COPY examples/freeswitch-config/directory/1001.xml \
+    /usr/local/freeswitch/conf/directory/default/1001.xml
+COPY examples/freeswitch-config/directory/1002.xml \
+    /usr/local/freeswitch/conf/directory/default/1002.xml
+
 # Runtime validation
 RUN echo "=========================================" \
     && echo "Runtime Validation..." \
@@ -163,11 +173,24 @@ RUN echo "=========================================" \
     && ! ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so | grep "not found" \
     && echo "✅ All dependencies satisfied" \
     && echo "" \
+    && echo "Checking example configuration files..." \
+    && ls -lh /usr/local/freeswitch/conf/dialplan/default.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1000.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1001.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1002.xml \
+    && echo "✅ Configuration files installed" \
+    && echo "" \
     && echo "=========================================" \
     && echo "Available modules in this image:" \
     && echo "  ✅ mod_audio_fork (from base)" \
     && echo "  ✅ mod_deepgram_transcribe (from base)" \
     && echo "  ✅ mod_azure_transcribe (NEW)" \
+    && echo "=========================================" \
+    && echo "Included configuration files:" \
+    && echo "  ✅ dialplan/default.xml (with Azure examples)" \
+    && echo "  ✅ directory/default/1000.xml" \
+    && echo "  ✅ directory/default/1001.xml" \
+    && echo "  ✅ directory/default/1002.xml (with Azure config)" \
     && echo "========================================="
 
 # Labels
