@@ -75,6 +75,51 @@ When using `stereo` mode, the module automatically uses Azure's **ConversationTr
 }
 ```
 
+### Advanced Features
+
+**Speaker Diarization (Stereo Mode Only)**
+
+When using stereo mode with ConversationTranscriber, you can enable advanced speaker diarization:
+
+```xml
+<action application="set" data="AZURE_DIARIZE_INTERIM_RESULTS=true"/>
+<action application="set" data="AZURE_DIARIZATION_SPEAKER_COUNT=2"/>
+<action application="set" data="AZURE_DIARIZATION_MIN_SPEAKER_COUNT=1"/>
+<action application="set" data="AZURE_DIARIZATION_MAX_SPEAKER_COUNT=2"/>
+```
+
+These settings help Azure better identify different speakers in the conversation. The speaker identification appears in transcription results.
+
+**Word-Level Timestamps**
+
+Enable detailed timing information for each word in the transcription:
+
+```xml
+<action application="set" data="AZURE_WORD_LEVEL_TIMESTAMPS=true"/>
+```
+
+When enabled with detailed output format, you'll get offset and duration for each word.
+
+**Sentiment Analysis**
+
+Enable sentiment analysis to understand the emotional tone of transcribed speech:
+
+```xml
+<action application="set" data="AZURE_SENTIMENT_ANALYSIS=true"/>
+```
+
+Sentiment scores will be included in transcription results when available.
+
+**Dictation Mode**
+
+Enable dictation mode for better punctuation and formatting:
+
+```xml
+<action application="set" data="AZURE_DICTATION_MODE=true"/>
+```
+
+This mode is optimized for dictation scenarios with improved punctuation insertion.
+
 ### Channel Variables
 
 The following channel variables can be set to configure the Azure Speech-to-Text service:
@@ -86,8 +131,15 @@ The following channel variables can be set to configure the Azure Speech-to-Text
 | AZURE_PROFANITY_OPTION | Profanity filtering mode: "masked", "removed", or "raw" | raw |
 | AZURE_REQUEST_SNR | If set to "1" or "true", enables signal-to-noise ratio reporting | off |
 | AZURE_INITIAL_SPEECH_TIMEOUT_MS | Initial time to wait for speech before returning no match (milliseconds) | none |
-| AZURE_SPEECH_HINTS | Comma-separated list of phrases or words to expect for improved recognition | none |
+| AZURE_SPEECH_HINTS | Comma-separated list of phrases or words to expect for improved recognition (mono mode only) | none |
 | AZURE_USE_OUTPUT_FORMAT_DETAILED | If set to "true" or "1", provides N-best alternatives and confidence levels | off |
+| AZURE_DIARIZE_INTERIM_RESULTS | If set to "true" or "1", enables speaker identification in interim results (stereo mode only) | true |
+| AZURE_DIARIZATION_SPEAKER_COUNT | Exact number of speakers expected in the conversation (stereo mode only) | 2 |
+| AZURE_DIARIZATION_MIN_SPEAKER_COUNT | Minimum number of speakers in the conversation (stereo mode only) | 1 |
+| AZURE_DIARIZATION_MAX_SPEAKER_COUNT | Maximum number of speakers in the conversation (stereo mode only) | 2 |
+| AZURE_WORD_LEVEL_TIMESTAMPS | If set to "true" or "1", provides word-level timing information | off |
+| AZURE_SENTIMENT_ANALYSIS | If set to "true" or "1", enables sentiment analysis for transcribed text | off |
+| AZURE_DICTATION_MODE | If set to "true" or "1", enables dictation mode for better punctuation and formatting | off |
 
 ## Authentication
 

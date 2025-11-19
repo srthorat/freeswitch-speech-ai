@@ -170,6 +170,67 @@ public:
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_WARNING, "AZURE_SPEECH_HINTS not supported in stereo mode (ConversationTranscriber)\n");
 		}
 
+		// Speaker diarization properties (only for ConversationTranscriber in stereo mode)
+		if (m_useStereo) {
+			// Enable diarization in interim results
+			const char* diarizeInterim = switch_channel_get_variable(channel, "AZURE_DIARIZE_INTERIM_RESULTS");
+			if (diarizeInterim ? switch_true(diarizeInterim) : true) { // default: true
+				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizeIntermediateResults, TrueString);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "enabled diarization in interim results\n");
+			}
+
+			// Set speaker count (exact number of speakers)
+			const char* speakerCount = switch_channel_get_variable(channel, "AZURE_DIARIZATION_SPEAKER_COUNT");
+			if (speakerCount) {
+				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationSpeakerCount, speakerCount);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization speaker count to %s\n", speakerCount);
+			}
+			else {
+				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationSpeakerCount, "2");
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization speaker count to 2 (default)\n");
+			}
+
+			// Set minimum speaker count
+			const char* minSpeakerCount = switch_channel_get_variable(channel, "AZURE_DIARIZATION_MIN_SPEAKER_COUNT");
+			if (minSpeakerCount) {
+				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationMinSpeakerCount, minSpeakerCount);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization min speaker count to %s\n", minSpeakerCount);
+			}
+			else {
+				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationMinSpeakerCount, "1");
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization min speaker count to 1 (default)\n");
+			}
+
+			// Set maximum speaker count
+			const char* maxSpeakerCount = switch_channel_get_variable(channel, "AZURE_DIARIZATION_MAX_SPEAKER_COUNT");
+			if (maxSpeakerCount) {
+				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationMaxSpeakerCount, maxSpeakerCount);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization max speaker count to %s\n", maxSpeakerCount);
+			}
+			else {
+				properties.SetProperty(PropertyId::SpeechServiceResponse_DiarizationMaxSpeakerCount, "2");
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "set diarization max speaker count to 2 (default)\n");
+			}
+		}
+
+		// Word-level timestamps (available in both mono and stereo modes)
+		if (switch_true(switch_channel_get_variable(channel, "AZURE_WORD_LEVEL_TIMESTAMPS"))) {
+			speechConfig->RequestWordLevelTimestamps();
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "enabled word-level timestamps\n");
+		}
+
+		// Sentiment analysis (available in both mono and stereo modes)
+		if (switch_true(switch_channel_get_variable(channel, "AZURE_SENTIMENT_ANALYSIS"))) {
+			properties.SetProperty(PropertyId::SpeechServiceResponse_RequestSentimentAnalysis, TrueString);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "enabled sentiment analysis\n");
+		}
+
+		// Dictation mode (available in both mono and stereo modes)
+		if (switch_true(switch_channel_get_variable(channel, "AZURE_DICTATION_MODE"))) {
+			speechConfig->EnableDictation();
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG, "enabled dictation mode\n");
+		}
+
 		auto onSessionStopped = [this](const SessionEventArgs& args) {
 			switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
 			m_stopped = true;
