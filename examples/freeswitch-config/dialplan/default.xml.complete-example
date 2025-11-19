@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  COMPLETE WORKING EXAMPLE: Per-User Multi-Service Dialplan
+
+  This is a complete, ready-to-use dialplan configuration that enables
+  different services (Audio Fork, Deepgram, Azure) on a per-user basis.
+
+  Installation:
+    cp examples/freeswitch-config/dialplan/default.xml.complete-example \
+       /usr/local/freeswitch/conf/dialplan/default.xml
+
+    fs_cli -x 'reloadxml'
+
+  Configuration:
+    - Update WebSocket URL on line 30 (Audio Fork)
+    - Update Deepgram API key on line 44 (Deepgram)
+    - Update Azure credentials on lines 60-61 (Azure)
+-->
+<include>
+  <context name="default">
+
+    <!-- ============================================================ -->
+    <!-- PER-USER MULTI-SERVICE EXTENSIONS                           -->
+    <!-- ============================================================ -->
+
+    <!-- SERVICE 1: Audio Fork (WebSocket Streaming) -->
+    <extension name="audio_fork_conditional" continue="true">
+      <condition field="${enable_audio_fork}" expression="^true$">
+        <condition field="destination_number" expression="^(.+)$">
+          <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled → ${destination_number}"/>
+
+          <!-- ⚙️ CONFIGURE: Update WebSocket URL below -->
+          <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','service':'audio_fork'}"/>
+
+          <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
+        </condition>
+      </condition>
+    </extension>
+
+    <!-- SERVICE 2: Deepgram Transcription -->
+    <extension name="deepgram_conditional" continue="true">
+      <condition field="${enable_deepgram}" expression="^true$">
+        <condition field="destination_number" expression="^(.+)$">
+          <action application="log" data="INFO [DEEPGRAM] User ${caller_id_number} has Deepgram enabled → ${destination_number}"/>
+
+          <!-- ⚙️ CONFIGURE: Update Deepgram settings below -->
+          <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
+          <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+          <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+
+          <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
+          <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
+        </condition>
+      </condition>
+    </extension>
+
+    <!-- SERVICE 3: Azure Transcription -->
+    <extension name="azure_conditional" continue="true">
+      <condition field="${enable_azure}" expression="^true$">
+        <condition field="destination_number" expression="^(.+)$">
+          <action application="log" data="INFO [AZURE] User ${caller_id_number} has Azure enabled → ${destination_number}"/>
+
+          <!-- ⚙️ CONFIGURE: Update Azure settings below -->
+          <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
+          <action application="set" data="AZURE_REGION=eastus"/>
+
+          <action application="set" data="api_on_answer=azure_transcribe ${uuid} start en-US interim"/>
+          <action application="set" data="api_hangup_hook=azure_transcribe ${uuid} stop"/>
+        </condition>
+      </condition>
+    </extension>
+
+    <!-- ============================================================ -->
+    <!-- END OF PER-USER MULTI-SERVICE EXTENSIONS                    -->
+    <!-- ============================================================ -->
+
+    <!-- Standard FreeSWITCH Extensions -->
+    <extension name="unloop">
+      <condition field="${unroll_loops}" expression="^true$"/>
+      <condition field="${sip_looped_call}" expression="^true$">
+        <action application="deflect" data="${destination_number}"/>
+      </condition>
+    </extension>
+
+    <!-- Local extension handling -->
+    <X-PRE-PROCESS cmd="include" data="default/*.xml"/>
+
+  </context>
+</include>

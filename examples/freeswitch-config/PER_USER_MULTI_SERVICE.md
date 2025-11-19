@@ -1,6 +1,6 @@
-# Multi-Flag Per-User Service Configuration
+# Per-User Multi-Service Configuration
 
-This guide shows how to enable different services (Audio Fork, Deepgram, Azure) on a **per-user basis** using flags.
+This guide shows how to enable different services (Audio Fork, Deepgram, Azure) on a **per-user basis** using flags in user directory files.
 
 ## Overview
 

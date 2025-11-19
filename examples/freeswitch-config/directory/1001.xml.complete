@@ -1,0 +1,32 @@
+<include>
+  <!--
+    USER 1001: Deepgram Transcription Enabled
+
+    This user has Deepgram real-time transcription enabled.
+    All calls made by or to this user will be transcribed using
+    Deepgram API configured in dialplan.
+
+    Installation:
+      cp examples/freeswitch-config/directory/1001.xml.complete \
+         /usr/local/freeswitch/conf/directory/default/1001.xml
+
+      fs_cli -x 'reloadxml'
+  -->
+  <user id="1001">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1001"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1001"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1001"/>
+      <variable name="effective_caller_id_number" value="1001"/>
+
+      <!-- ⚙️ SERVICE FLAG: Deepgram Transcription Enabled -->
+      <!-- All Deepgram settings (API key, model, tier) are in dialplan -->
+      <variable name="enable_deepgram" value="true"/>
+    </variables>
+  </user>
+</include>

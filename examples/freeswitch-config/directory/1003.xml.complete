@@ -1,0 +1,32 @@
+<include>
+  <!--
+    USER 1003: Azure Transcription Enabled
+
+    This user has Azure Speech Services real-time transcription enabled.
+    All calls made by or to this user will be transcribed using
+    Azure Speech API configured in dialplan.
+
+    Installation:
+      cp examples/freeswitch-config/directory/1003.xml.complete \
+         /usr/local/freeswitch/conf/directory/default/1003.xml
+
+      fs_cli -x 'reloadxml'
+  -->
+  <user id="1003">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1003"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1003"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1003"/>
+      <variable name="effective_caller_id_number" value="1003"/>
+
+      <!-- ⚙️ SERVICE FLAG: Azure Transcription Enabled -->
+      <!-- All Azure settings (subscription key, region) are in dialplan -->
+      <variable name="enable_azure" value="true"/>
+    </variables>
+  </user>
+</include>

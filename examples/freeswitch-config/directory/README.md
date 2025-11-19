@@ -38,7 +38,7 @@ cp examples/freeswitch-config/directory/1003-azure.xml /usr/local/freeswitch/con
 cp examples/freeswitch-config/directory/1004-all-services.xml /usr/local/freeswitch/conf/directory/default/1004.xml
 ```
 
-See: [Multi-Flag Configuration](../MULTI_FLAG_SERVICES.md)
+See: [Per-User Multi-Service Configuration](../PER_USER_MULTI_SERVICE.md)
 
 ## Configuration Summary
 
@@ -121,6 +121,6 @@ fs_cli -x 'user_data 1003@default var enable_azure'
 
 ## Related Documentation
 
-- [Multi-Flag Configuration Guide](../MULTI_FLAG_SERVICES.md)
+- [Per-User Multi-Service Configuration](../PER_USER_MULTI_SERVICE.md)
 - [Single-Flag Configuration Guide](../AUDIO_FORK_PER_USER_FLAG.md)
 - [Main Dialplan Configuration](../FREESWITCH_DIALPLAN_AUDIO_FORK.md)
