@@ -13,9 +13,11 @@
   - [2. mod_audio_fork](#2-mod_audio_fork)
   - [3. mod_deepgram_transcribe](#3-mod_deepgram_transcribe)
   - [4. mod_azure_transcribe](#4-mod_azure_transcribe)
+  - [5. mod_aws_transcribe](#5-mod_aws_transcribe)
 - [⚙️ Configuration Guide](#️-configuration-guide)
   - [Deepgram Configuration](#deepgram-configuration)
   - [Azure Configuration](#azure-configuration)
+  - [AWS Configuration](#aws-configuration)
 - [🧪 Testing & Verification](#-testing--verification)
 - [🔧 Troubleshooting](#-troubleshooting)
 - [🚢 Production Deployment](#-production-deployment)
@@ -50,6 +52,10 @@
   "" \\
   YOUR_AZURE_SUBSCRIPTION_KEY \\
   eastus
+
+# With AWS transcription
+./dockerfiles/run-on-macbook.sh \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
 \`\`\`
 
 ### Building Your Own Images
@@ -58,10 +64,11 @@
 # Build base image (30-45 minutes)
 ./dockerfiles/build-freeswitch-base.sh freeswitch-base:1.10.11
 
-# Build with specific module (15-25 minutes)
+# Build with specific module (15-35 minutes)
 ./dockerfiles/docker-build-mod-audio-fork.sh
 ./dockerfiles/docker-build-mod-deepgram-transcribe.sh
 ./dockerfiles/docker-build-mod-azure-transcribe.sh
+./dockerfiles/docker-build-mod-aws-transcribe.sh
 \`\`\`
 
 ---
@@ -1509,6 +1516,204 @@ uuid_azure_transcribe <call-uuid> stop
 ```
 
 For full API documentation, see: `modules/mod_azure_transcribe/README.md`
+
+---
+
+## 5. mod_aws_transcribe
+
+**File**: `Dockerfile.mod_aws_transcribe`
+**Build Script**: `docker-build-mod-aws-transcribe.sh`
+**Base Image**: `srt2011/freeswitch-base:latest` (FreeSWITCH 1.10.11)
+
+**Dependencies Built**:
+- AWS SDK C++ v1.11.345 (core and transcribestreaming)
+- AWS C Common, Event Stream, and Checksums libraries
+
+**Build Time**:
+- Intel/AMD64: **25-35 minutes** (includes AWS SDK C++ build from source)
+- Apple Silicon: **40-50 minutes** (with emulation)
+
+**Usage**:
+```bash
+# Build the image (with custom tag and AWS SDK version)
+./dockerfiles/docker-build-mod-aws-transcribe.sh \\
+  srt2011/freeswitch-mod-aws-transcribe:latest \\
+  1.11.345
+
+# Or use defaults
+./dockerfiles/docker-build-mod-aws-transcribe.sh
+
+# Run FreeSWITCH with AWS credentials
+docker run -d --name fs \\
+  -p 5060:5060/udp \\
+  -p 8021:8021/tcp \\
+  -e AWS_ACCESS_KEY_ID=your-aws-access-key \\
+  -e AWS_SECRET_ACCESS_KEY=your-aws-secret-key \\
+  -e AWS_REGION=us-east-1 \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
+
+# Access fs_cli
+docker exec -it fs fs_cli
+
+# Verify module loaded
+docker exec -it fs fs_cli -x 'show modules' | grep aws_transcribe
+```
+
+**Features**:
+- ✅ Real-time streaming transcription via AWS Transcribe Streaming API
+- ✅ Speaker diarization to identify different speakers
+- ✅ Support for 30+ languages and language identification
+- ✅ Interim and final transcription results
+- ✅ Custom vocabulary support for domain-specific terminology
+- ✅ Vocabulary filtering for profanity or sensitive words
+- ✅ Medical and custom language models
+- ✅ Channel identification for stereo audio
+- ✅ Word-level timestamps and confidence scores
+- ✅ Built on stable freeswitch-base image
+- ✅ Automatic static + runtime validation during build
+- ✅ Pre-configured example configuration files
+
+**Included Configuration Files**:
+
+The Docker image includes pre-configured FreeSWITCH configuration files ready for testing:
+
+- **`/usr/local/freeswitch/conf/dialplan/default.xml`** - Complete dialplan with examples
+- **`/usr/local/freeswitch/conf/directory/default/1000.xml`** - User 1000 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1001.xml`** - User 1001 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1002.xml`** - User 1002 configuration
+
+**Authentication Methods**:
+
+1. **Environment variables** (recommended for Docker):
+```bash
+docker run -d \\
+  -e AWS_ACCESS_KEY_ID=your-key \\
+  -e AWS_SECRET_ACCESS_KEY=your-secret \\
+  -e AWS_REGION=us-east-1 \\
+  freeswitch-mod-aws-transcribe:latest
+```
+
+2. **Channel variables** (per-call):
+```javascript
+// Via drachtio-fsmrf
+await ep.set({
+  AWS_ACCESS_KEY_ID: 'your-key',
+  AWS_SECRET_ACCESS_KEY: 'your-secret',
+  AWS_REGION: 'us-east-1'
+});
+ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+```
+
+3. **IAM instance role** (when running on EC2):
+   - No credentials needed, uses EC2 instance metadata
+
+<details>
+<summary><b>Manual Verification for mod_aws_transcribe</b></summary>
+
+After building or pulling the mod_aws_transcribe image, verify it manually:
+
+#### Step 1: Check Module File Exists
+
+```bash
+# Verify mod_aws_transcribe.so exists
+docker run --rm freeswitch-mod-aws-transcribe:latest \\
+  ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so
+
+# Should show file with size around 200-400 KB
+```
+
+#### Step 2: Check AWS SDK Libraries
+
+```bash
+# Verify AWS SDK libraries are installed
+docker run --rm freeswitch-mod-aws-transcribe:latest \\
+  ls -lh /usr/local/lib/libaws-cpp-sdk-*.so
+
+# Should list:
+# - libaws-cpp-sdk-transcribestreaming.so
+# - libaws-cpp-sdk-core.so
+# - libaws-c-event-stream.so
+# - libaws-checksums.so
+# - libaws-c-common.so
+```
+
+#### Step 3: Check Module Dependencies
+
+```bash
+# Check module dependencies are satisfied
+docker run --rm freeswitch-mod-aws-transcribe:latest \\
+  ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so
+
+# Should show all AWS libraries linked correctly with no "not found" errors
+```
+
+#### Step 4: Runtime Test
+
+```bash
+# Start FreeSWITCH
+docker run -d --name fs-aws-test \\
+  -p 5060:5060/udp \\
+  -p 8021:8021/tcp \\
+  -e AWS_ACCESS_KEY_ID=test \\
+  -e AWS_SECRET_ACCESS_KEY=test \\
+  -e AWS_REGION=us-east-1 \\
+  freeswitch-mod-aws-transcribe:latest
+
+# Wait for startup
+sleep 30
+
+# Verify module loaded
+docker exec fs-aws-test fs_cli -x "show modules" | grep aws_transcribe
+
+# Expected output:
+# api,aws_transcribe,mod_aws_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so
+
+# Cleanup
+docker rm -f fs-aws-test
+```
+
+</details>
+
+### API Commands
+
+```bash
+# Start transcription (mono mode)
+aws_transcribe <uuid> start en-US interim
+
+# Start with speaker diarization
+uuid_setvar <uuid> AWS_SHOW_SPEAKER_LABEL true
+aws_transcribe <uuid> start en-US interim
+
+# Start with custom vocabulary
+uuid_setvar <uuid> AWS_VOCABULARY_NAME my-custom-vocab
+aws_transcribe <uuid> start en-US interim
+
+# Start with vocabulary filter (profanity filtering)
+uuid_setvar <uuid> AWS_VOCABULARY_FILTER_NAME profanity-filter
+uuid_setvar <uuid> AWS_VOCABULARY_FILTER_METHOD mask
+aws_transcribe <uuid> start en-US interim
+
+# Stop transcription
+aws_transcribe <uuid> stop
+```
+
+### Supported Languages (Examples)
+
+- **English**: en-US, en-GB, en-AU, en-IN
+- **Spanish**: es-US, es-ES
+- **French**: fr-FR, fr-CA
+- **German**: de-DE
+- **Portuguese**: pt-BR, pt-PT
+- **Japanese**: ja-JP
+- **Korean**: ko-KR
+- **Chinese**: zh-CN
+- **Arabic**: ar-AE, ar-SA
+- **Hindi**: hi-IN
+- And 20+ more languages...
+
+For the complete list, see: [AWS Transcribe Supported Languages](https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html)
+
+For full API documentation, see: `modules/mod_aws_transcribe/README.md`
 
 ---
 
