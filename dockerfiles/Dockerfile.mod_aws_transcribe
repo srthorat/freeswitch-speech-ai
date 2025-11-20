@@ -68,6 +68,7 @@ RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
     uuid-dev \
     zlib1g-dev \
     libpulse-dev \
+    libspeexdsp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set library path
@@ -248,12 +249,13 @@ RUN echo "=========================================" \
 # ============================================================================
 FROM ${BASE_IMAGE} AS runtime
 
-# Install runtime dependencies for AWS SDK
+# Install runtime dependencies for AWS SDK and mod_aws_transcribe
 RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
     libcurl4 \
     libssl1.1 \
     zlib1g \
     libpulse0 \
+    libspeexdsp1 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV LD_LIBRARY_PATH=/usr/local/lib
