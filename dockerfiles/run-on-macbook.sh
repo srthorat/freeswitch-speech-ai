@@ -4,7 +4,7 @@
 # ============================================================================
 #
 # Usage:
-#   ./run-on-macbook.sh <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY] [AWS_SECRET_KEY] [AWS_REGION] [AWS_SESSION_TOKEN]
+#   ./run-on-macbook.sh <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] [AWS_SESSION_TOKEN]
 #
 # Examples:
 #   ./run-on-macbook.sh srt2011/freeswitch-base:latest
@@ -16,8 +16,8 @@
 # With API keys for transcription:
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest "" YOUR_AZURE_KEY eastus
-#   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1
-#   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1 YOUR_SESSION_TOKEN
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1 YOUR_SESSION_TOKEN
 #
 # ============================================================================
 
@@ -37,7 +37,7 @@ CONTAINER_NAME="freeswitch"
 if [ -z "$REMOTE_IMAGE" ]; then
     echo "❌ Error: Docker image name is required"
     echo ""
-    echo "Usage: $0 <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY] [AWS_SECRET_KEY] [AWS_REGION] [AWS_SESSION_TOKEN]"
+    echo "Usage: $0 <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] [AWS_SESSION_TOKEN]"
     echo ""
     echo "Examples:"
     echo "  $0 srt2011/freeswitch-base:latest"
@@ -51,10 +51,10 @@ if [ -z "$REMOTE_IMAGE" ]; then
     echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
     echo ""
     echo "AWS Transcribe - Permanent credentials (AKIA*):"
-    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1"
+    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1"
     echo ""
     echo "AWS Transcribe - Temporary credentials (ASIA*):"
-    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1 YOUR_SESSION_TOKEN"
+    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1 YOUR_SESSION_TOKEN"
     echo ""
     echo "AWS Transcribe - IAM Role (on EC2/ECS):"
     echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest"

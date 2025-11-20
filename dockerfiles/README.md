@@ -1728,11 +1728,11 @@ The module automatically uses EC2 instance metadata, ECS task role, or EKS servi
 ```bash
 # Permanent credentials (AKIA*)
 ./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest \\
-  "" "" "" YOUR_ACCESS_KEY YOUR_SECRET_KEY us-east-1
+  "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1
 
 # Temporary credentials (ASIA* + session token)
 ./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest \\
-  "" "" "" YOUR_ACCESS_KEY YOUR_SECRET_KEY us-east-1 YOUR_SESSION_TOKEN
+  "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1 YOUR_SESSION_TOKEN
 
 # IAM role (on EC2/ECS)
 ./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest
