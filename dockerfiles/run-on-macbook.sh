@@ -271,7 +271,7 @@ if [ -n "$MODULE_CHECK" ]; then
         echo "    freeswitch@internal> uuid_setvar <uuid> AWS_ACCESS_KEY_ID your-access-key"
         echo "    freeswitch@internal> uuid_setvar <uuid> AWS_SECRET_ACCESS_KEY your-secret-key"
         echo "    freeswitch@internal> uuid_setvar <uuid> AWS_REGION us-east-1"
-        echo "    freeswitch@internal> aws_transcribe <uuid> start en-US interim"
+        echo "    freeswitch@internal> uuid_aws_transcribe <uuid> start en-US interim stereo"
     fi
 fi
 
