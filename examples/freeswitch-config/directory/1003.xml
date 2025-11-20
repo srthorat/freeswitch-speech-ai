@@ -1,0 +1,44 @@
+<include>
+  <!--
+    USER 1003: AWS Transcribe Enabled
+
+    This user has AWS Transcribe (real-time transcription) enabled.
+    All calls made by or to this user will be transcribed using
+    AWS Transcribe Streaming API with channel identification enabled
+    for perfect agent/customer separation.
+
+    Features enabled:
+    - Real-time transcription via AWS Transcribe Streaming API
+    - Channel identification (agent/customer separation)
+    - Support for 30+ languages
+    - Custom vocabulary and filtering (configurable in dialplan)
+    - Voice Activity Detection (VAD) support
+
+    Installation:
+      cp examples/freeswitch-config/directory/1003.xml \
+         /usr/local/freeswitch/conf/directory/default/1003.xml
+
+      fs_cli -x 'reloadxml'
+
+    Configuration:
+      AWS credentials and settings are configured in dialplan (default.xml).
+      See EXTENSION 4: AWS Transcription for details.
+  -->
+  <user id="1003">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1003"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1003"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1003"/>
+      <variable name="effective_caller_id_number" value="1003"/>
+
+      <!-- ⚙️ SERVICE FLAG: AWS Transcribe Enabled -->
+      <!-- All AWS Transcribe settings (credentials, region, features) are in dialplan -->
+      <variable name="enable_aws_transcribe" value="true"/>
+    </variables>
+  </user>
+</include>

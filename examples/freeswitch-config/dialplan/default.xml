@@ -49,9 +49,34 @@
         </condition>
       </condition>
     </extension>
+    <!-- EXTENSION 4: AWS Transcription -->
+    <extension name="aws_conditional" continue="true">
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_aws_transcribe)}" expression="^true$">
+        <condition field="destination_number" expression="^(.+)$">
+          <action application="log" data="INFO [AWS] Authorized User ${caller_id_number} calling ${destination_number} -> Starting AWS Transcribe"/>
+          <action application="set" data="AWS_ACCESS_KEY_ID=your-aws-access-key-id"/>
+          <action application="set" data="AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key"/>
+          <action application="set" data="AWS_REGION=us-east-1"/>
+          <!-- Optional: Enable channel identification for agent/customer separation (100% accurate) -->
+          <action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
+          <action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
+          <!-- Optional: Enable speaker diarization (AI-based, up to 10 speakers) -->
+          <!-- <action application="set" data="AWS_SHOW_SPEAKER_LABEL=true"/> -->
+          <!-- Optional: Enable VAD to delay connection until speech detected (reduces costs) -->
+          <!-- <action application="set" data="START_RECOGNIZING_ON_VAD=true"/> -->
+          <!-- Optional: Custom vocabulary -->
+          <!-- <action application="set" data="AWS_VOCABULARY_NAME=my-custom-vocab"/> -->
+          <!-- Optional: Vocabulary filtering for profanity -->
+          <!-- <action application="set" data="AWS_VOCABULARY_FILTER_NAME=profanity-filter"/> -->
+          <!-- <action application="set" data="AWS_VOCABULARY_FILTER_METHOD=mask"/> -->
+          <action application="set" data="api_on_answer=aws_transcribe ${uuid} start en-US interim"/>
+          <action application="set" data="api_hangup_hook=aws_transcribe ${uuid} stop"/>
+        </condition>
+      </condition>
+    </extension>
 
 
-      
+
     <extension name="unloop">
       <condition field="${unroll_loops}" expression="^true$"/>
       <condition field="${sip_looped_call}" expression="^true$">
