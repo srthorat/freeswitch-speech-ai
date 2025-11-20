@@ -256,6 +256,9 @@ RUN echo "=========================================" \
 # ============================================================================
 FROM ${BASE_IMAGE} AS runtime
 
+# Re-declare ARG for runtime stage (ARGs don't persist across stages)
+ARG AWS_SDK_CPP_VERSION=1.11.345
+
 # Install runtime dependencies for AWS SDK and mod_aws_transcribe
 RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
     libcurl4 \
