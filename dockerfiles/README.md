@@ -1602,7 +1602,7 @@ await ep.set({
   AWS_SECRET_ACCESS_KEY: 'your-secret',
   AWS_REGION: 'us-east-1'
 });
-ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+ep.api('uuid_aws_transcribe', `${ep.uuid} start en-US interim stereo`);
 ```
 
 3. **IAM instance role** (when running on EC2):
@@ -1679,28 +1679,31 @@ docker rm -f fs-aws-test
 
 ```bash
 # Start transcription (mono mode)
-aws_transcribe <uuid> start en-US interim
+uuid_aws_transcribe <uuid> start en-US interim mono
+
+# Start transcription (stereo mode - recommended for telephony)
+uuid_aws_transcribe <uuid> start en-US interim stereo
 
 # Start with speaker diarization (AI-based, detects multiple speakers)
 uuid_setvar <uuid> AWS_SHOW_SPEAKER_LABEL true
-aws_transcribe <uuid> start en-US interim
+uuid_aws_transcribe <uuid> start en-US interim mono
 
 # Start with channel identification (stereo, perfect agent/customer separation)
 uuid_setvar <uuid> AWS_ENABLE_CHANNEL_IDENTIFICATION true
 uuid_setvar <uuid> AWS_NUMBER_OF_CHANNELS 2
-aws_transcribe <uuid> start en-US interim
+uuid_aws_transcribe <uuid> start en-US interim stereo
 
 # Start with custom vocabulary
 uuid_setvar <uuid> AWS_VOCABULARY_NAME my-custom-vocab
-aws_transcribe <uuid> start en-US interim
+uuid_aws_transcribe <uuid> start en-US interim stereo
 
 # Start with vocabulary filter (profanity filtering)
 uuid_setvar <uuid> AWS_VOCABULARY_FILTER_NAME profanity-filter
 uuid_setvar <uuid> AWS_VOCABULARY_FILTER_METHOD mask
-aws_transcribe <uuid> start en-US interim
+uuid_aws_transcribe <uuid> start en-US interim stereo
 
 # Stop transcription
-aws_transcribe <uuid> stop
+uuid_aws_transcribe <uuid> stop
 ```
 
 **Speaker Identification:** mod_aws_transcribe supports two methods:

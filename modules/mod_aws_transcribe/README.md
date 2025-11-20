@@ -129,15 +129,16 @@ mod_aws_transcribe is **far more advanced** than typical AWS Transcribe sample c
 The freeswitch module exposes the following API commands:
 
 ```
-aws_transcribe <uuid> start <lang-code> [interim]
+uuid_aws_transcribe <uuid> start <lang-code> [interim] [stereo|mono]
 ```
 Attaches media bug to channel and performs streaming recognize request.
 - `uuid` - unique identifier of Freeswitch channel
 - `lang-code` - a valid AWS [language code](https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html) that is supported for streaming transcription (e.g., en-US, es-US, fr-FR)
 - `interim` - If the 'interim' keyword is present then both interim and final transcription results will be returned; otherwise only final transcriptions will be returned
+- `stereo|mono` - Optional: Specify audio channel mode (default: mono). Use `stereo` for dual-channel audio with channel identification
 
 ```
-aws_transcribe <uuid> stop
+uuid_aws_transcribe <uuid> stop
 ```
 Stop transcription on the channel.
 
@@ -294,13 +295,13 @@ await ep.set({
   AWS_SHOW_SPEAKER_LABEL: 'true',
   AWS_REGION: 'us-east-1'
 });
-await ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+await ep.api('uuid_aws_transcribe', `${ep.uuid} start en-US interim stereo`);
 ```
 
 ```xml
 <!-- Via FreeSWITCH dialplan -->
 <action application="set" data="AWS_SHOW_SPEAKER_LABEL=true"/>
-<action application="aws_transcribe" data="start en-US interim"/>
+<action application="set" data="api_on_answer=uuid_aws_transcribe ${uuid} start en-US interim stereo"/>
 ```
 
 **Output:** Speakers labeled as `spk_0`, `spk_1`, `spk_2`, etc. (see [Speaker Diarization Output](#with-speaker-diarization))
@@ -343,7 +344,7 @@ await ep.set({
   AWS_NUMBER_OF_CHANNELS: '2',
   AWS_REGION: 'us-east-1'
 });
-await ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+await ep.api('uuid_aws_transcribe', `${ep.uuid} start en-US interim stereo`);
 ```
 
 ```xml
@@ -351,7 +352,7 @@ await ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
 <action application="set" data="RECORD_STEREO=true"/>
 <action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
 <action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
-<action application="aws_transcribe" data="start en-US interim"/>
+<action application="set" data="api_on_answer=uuid_aws_transcribe ${uuid} start en-US interim stereo"/>
 ```
 
 **Output:** Results include `channel_id` field:
@@ -455,7 +456,7 @@ await ep.execute('uuid_audio_fork', `${ep.uuid} start`);
     <!-- Enable AWS channel identification -->
     <action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
     <action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
-    <action application="aws_transcribe" data="start en-US interim"/>
+    <action application="set" data="api_on_answer=uuid_aws_transcribe ${uuid} start en-US interim stereo"/>
 
     <action application="park"/>
   </condition>
@@ -487,7 +488,7 @@ srf.invite(async (req, res) => {
   });
 
   // Start transcription
-  await ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+  await ep.api('uuid_aws_transcribe', `${ep.uuid} start en-US interim stereo`);
 
   // Handle transcription events
   ep.on('aws_transcribe::transcription', (evt, result) => {
@@ -510,7 +511,7 @@ await ep.set({
   AWS_REGION: 'us-east-1'
 });
 
-await ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+await ep.api('uuid_aws_transcribe', `${ep.uuid} start en-US interim stereo`);
 
 ep.on('aws_transcribe::transcription', (evt, result) => {
   const data = JSON.parse(evt.body);
@@ -598,7 +599,7 @@ await ep.set({
 ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
 
 // Stop transcription
-ep.api('aws_transcribe', `${ep.uuid} stop`);
+ep.api('uuid_aws_transcribe', `${ep.uuid} stop`);
 ```
 
 ### Using FreeSWITCH Dialplan
@@ -609,7 +610,7 @@ ep.api('aws_transcribe', `${ep.uuid} stop`);
     <action application="answer"/>
     <action application="set" data="AWS_REGION=us-east-1"/>
     <action application="set" data="AWS_SHOW_SPEAKER_LABEL=true"/>
-    <action application="aws_transcribe" data="start en-US interim"/>
+    <action application="set" data="api_on_answer=uuid_aws_transcribe ${uuid} start en-US interim stereo"/>
     <action application="park"/>
   </condition>
 </extension>
