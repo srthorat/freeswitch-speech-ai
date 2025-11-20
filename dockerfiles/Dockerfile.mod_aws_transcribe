@@ -149,6 +149,13 @@ RUN echo "=========================================" \
     && ls -1 /usr/local/lib/libaws-c-event-stream.so && echo "  ✅ c-event-stream" \
     && ls -1 /usr/local/lib/libaws-checksums.so && echo "  ✅ checksums" \
     && ls -1 /usr/local/lib/libaws-c-common.so && echo "  ✅ c-common" \
+    && echo "" \
+    && echo "Checking for AWS CRT dependencies:" \
+    && ls -1 /usr/local/lib/libaws-crt-cpp.so 2>/dev/null && echo "  ✅ aws-crt-cpp" || echo "  ⚠️  aws-crt-cpp not found (may cause runtime errors)" \
+    && ls -1 /usr/local/lib/libs2n.so* 2>/dev/null && echo "  ✅ s2n" || echo "  ⚠️  s2n not found (may cause runtime errors)" \
+    && echo "" \
+    && echo "All AWS libraries in /usr/local/lib:" \
+    && ls -1 /usr/local/lib/libaws*.so* /usr/local/lib/libs2n.so* 2>/dev/null | head -30 \
     && echo "========================================="
 
 # ============================================================================
@@ -263,7 +270,9 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 # Copy AWS SDK C++ libraries from builder
 COPY --from=builder /usr/local/lib/libaws-cpp-sdk-*.so* /usr/local/lib/
 COPY --from=builder /usr/local/lib/libaws-c-*.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libaws-crt-cpp.so* /usr/local/lib/
 COPY --from=builder /usr/local/lib/libaws-checksums.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libs2n.so* /usr/local/lib/
 
 # Copy mod_aws_transcribe module from builder
 COPY --from=builder /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so \
