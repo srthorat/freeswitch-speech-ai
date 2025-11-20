@@ -13,7 +13,7 @@
 #   - libwebsockets 4.3.3 (rebuilt for dev headers)
 #   - mod_deepgram_transcribe module build
 #
-# Build time: ~10-15 minutes
+# Build time: ~12-15 minutes
 # ============================================================================
 
 ARG BASE_IMAGE=srt2011/freeswitch-mod-audio-fork:latest
