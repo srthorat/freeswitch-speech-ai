@@ -1,26 +1,71 @@
-# FreeSWITCH Docker Images
+# FreeSWITCH Docker Images - Complete Documentation
 
-This directory contains Dockerfiles for building FreeSWITCH images with different configurations:
-
-1. **Base Image** - Complete FreeSWITCH installation with all standard modules
-2. **Individual Module Images** - Minimal FreeSWITCH with specific modules for testing
+> **Comprehensive guide for building, deploying, and running FreeSWITCH Docker images with speech transcription capabilities.**
 
 ---
 
-## 🚀 Quick Start: Running on MacBook(Local)
+## 📑 Table of Contents
 
-**Want to quickly test on your MacBook?** See the comprehensive guide:
+### Quick Navigation
+- [🚀 Quick Start](#-quick-start)
+- [🐳 Available Docker Images](#-available-docker-images)
+  - [1. FreeSWITCH Base Image](#1-freeswitch-base-image)
+  - [2. mod_audio_fork](#2-mod_audio_fork)
+  - [3. mod_deepgram_transcribe](#3-mod_deepgram_transcribe)
+  - [4. mod_azure_transcribe](#4-mod_azure_transcribe)
+- [⚙️ Configuration Guide](#️-configuration-guide)
+  - [Deepgram Configuration](#deepgram-configuration)
+  - [Azure Configuration](#azure-configuration)
+- [🧪 Testing & Verification](#-testing--verification)
+- [🔧 Troubleshooting](#-troubleshooting)
+- [🚢 Production Deployment](#-production-deployment)
+- [📚 Useful Commands Reference](#-useful-commands-reference)
 
-📘 **See [Appendix B: Complete MacBook Testing Guide](#appendix-b-complete-macbook-testing-guide)** - Complete MacBook setup guide with examples
+### Detailed Guides (Appendices)
+- [📦 Appendix A: Complete FreeSWITCH Installation Guide](#appendix-a-complete-freeswitch-installation-guide)
+  - Build dependencies, errors & solutions, multi-stage builds
+- [🍎 Appendix B: Complete MacBook Testing Guide](#appendix-b-complete-macbook-testing-guide)
+  - SIP client setup, testing procedures, platform notes
+- [☁️ Appendix C: Docker Hub Deployment Guide](#appendix-c-docker-hub-deployment-guide)
+  - Push/pull workflow, production deployment
 
-```bash
-# Example: Run with Deepgram transcription
-./dockerfiles/run-on-macbook.sh \
-  srt2011/freeswitch-mod-deepgram-transcribe:latest \
+---
+
+## 🚀 Quick Start
+
+### Running Pre-built Images
+
+\`\`\`bash
+# Base FreeSWITCH (no transcription)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-base:latest
+
+# With Deepgram transcription
+./dockerfiles/run-on-macbook.sh \\
+  srt2011/freeswitch-mod-deepgram-transcribe:latest \\
   YOUR_DEEPGRAM_API_KEY
-```
+
+# With Azure transcription (includes ALL modules)
+./dockerfiles/run-on-macbook.sh \\
+  srt2011/freeswitch-mod-azure-transcribe:latest \\
+  "" \\
+  YOUR_AZURE_SUBSCRIPTION_KEY \\
+  eastus
+\`\`\`
+
+### Building Your Own Images
+
+\`\`\`bash
+# Build base image (30-45 minutes)
+./dockerfiles/build-freeswitch-base.sh freeswitch-base:1.10.11
+
+# Build with specific module (15-25 minutes)
+./dockerfiles/docker-build-mod-audio-fork.sh
+./dockerfiles/docker-build-mod-deepgram-transcribe.sh
+./dockerfiles/docker-build-mod-azure-transcribe.sh
+\`\`\`
 
 ---
+
 
 ## 1. FreeSWITCH Base Image (Recommended Starting Point)
 
@@ -211,9 +256,14 @@ docker exec -it freeswitch fs_cli -x 'uuid_audio_fork bba5d840-47d1-4245-8319-de
 - ✅ 182-line Dockerfile (48% smaller than original)
 - ✅ Behaves identically to base image with mod_audio_fork added
 
-### Manual Verification for mod_audio_fork
+<details>
+<summary><b>Manual Verification for mod_audio_fork</b></summary>
 
 After building or pulling the mod_audio_fork image, verify it manually:
+
+
+</details>
+
 
 #### Step 1: Check Module File Exists
 
@@ -351,9 +401,14 @@ docker exec -it fs fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram'
 - ✅ Includes mod_audio_fork from base image
 - ✅ Automatic static + runtime validation during build
 
-### Manual Verification for mod_deepgram_transcribe
+<details>
+<summary><b>Manual Verification for mod_deepgram_transcribe</b></summary>
 
 After building or pulling the mod_deepgram_transcribe image, verify it manually:
+
+
+</details>
+
 
 #### Step 1: Check Module File Exists
 
@@ -462,7 +517,8 @@ For full API documentation, see: `modules/mod_deepgram_transcribe/README.md`
 
 ## Configuration Guide for mod_deepgram_transcribe
 
-### Method 1: Environment Variables (Container-Wide)
+<details>
+<summary><b>Method 1</b></summary>
 
 Set Deepgram API key and default configuration when starting the container:
 
@@ -480,9 +536,18 @@ docker run -d --name fs \
 
 ---
 
-### Method 2: Dialplan Configuration (Automatic Transcription)
+
+</details>
+
+
+<details>
+<summary><b>Method 2</b></summary>
 
 Add to `/usr/local/freeswitch/conf/dialplan/default.xml` or create a new file in `/usr/local/freeswitch/conf/dialplan/default/`:
+
+
+</details>
+
 
 #### Basic Transcription on All Inbound Calls
 
@@ -646,9 +711,14 @@ freeswitch@internal> reloadxml
 
 ---
 
-### Method 3: fs_cli Commands (Manual Per-Call Control)
+<details>
+<summary><b>Method 3</b></summary>
 
 Control transcription manually for specific calls using fs_cli:
+
+
+</details>
+
 
 #### Start Transcription on Active Call
 
@@ -687,9 +757,14 @@ docker exec -it fs fs_cli -x "uuid_deepgram_transcribe <uuid> stop"
 
 ---
 
-### Method 4: User Directory Configuration (Per-User Defaults)
+<details>
+<summary><b>Method 4</b></summary>
 
 Configure Deepgram settings per user by adding variables to user XML files. This is ideal when you want all calls from specific users/extensions to automatically have transcription capabilities with predefined settings.
+
+
+</details>
+
 
 #### Setup
 
@@ -897,7 +972,8 @@ uuid_deepgram_transcribe abc123 start en-US interim stereo
 
 ---
 
-### Method 4: FreeSWITCH Service Configuration (Supervised/Systemd)
+<details>
+<summary><b>Method 4</b></summary>
 
 #### Option A: Docker Compose with Environment Variables
 
@@ -980,6 +1056,10 @@ docker-compose logs -f freeswitch
 # Stop service
 docker-compose down
 ```
+
+
+</details>
+
 
 #### Option B: Systemd Service (Linux Host)
 
@@ -1291,9 +1371,14 @@ docker run -d \
   freeswitch-mod-azure-transcribe:latest
 ```
 
-### Manual Verification for mod_azure_transcribe
+<details>
+<summary><b>Manual Verification for mod_azure_transcribe</b></summary>
 
 After building or pulling the mod_azure_transcribe image, verify it manually:
+
+
+</details>
+
 
 #### Step 1: Check Module File Exists
 
@@ -1943,12 +2028,11 @@ docker rm freeswitch-test
 ---
 
 ## Resources
+---
 
-- [FreeSWITCH Documentation](https://freeswitch.org/confluence/)
-- [Appendix A: Complete FreeSWITCH Installation Guide](#appendix-a-complete-freeswitch-installation-guide) - Complete dependency guide with all errors documented
-- [Appendix C: Docker Hub Deployment Guide](#appendix-c-docker-hub-deployment-guide) - Deploy and test on MacBook with SIP clients
-- [Main Repository README](../README.md)
-- [Individual Module READMEs](../modules/)
+# Appendices
+
+> **The following appendices contain comprehensive, detailed guides extracted from the original documentation files.**
 
 ---
 
