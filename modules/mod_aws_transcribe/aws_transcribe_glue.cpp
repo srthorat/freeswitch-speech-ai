@@ -53,7 +53,7 @@ public:
 		responseHandler_t responseHandler
   ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_interim(interim), m_finishing(false), m_connected(false), m_connecting(false),
 	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr),
-			m_audioBuffer(320 * (samples_per_second == 8000 ? 1 : 2), 15) {
+			m_audioBuffer(320 * 2, 15) {  // Always 16kHz (640 bytes = 20ms at 16kHz)
 		Aws::Client::ClientConfiguration config;
 		if (region != nullptr && strlen(region) > 0) {
 			config.region = region;
@@ -115,8 +115,9 @@ public:
 			}
     });
 
-		// not worth resampling to 16k if we get 8k ulaw or alaw in..
-    m_request.SetMediaSampleRateHertz(samples_per_second > 8000 ? 16000 : 8000);
+		// AWS Transcribe quality is significantly better at 16kHz vs 8kHz
+		// ALWAYS resample to 16kHz for best quality (even from 8kHz telephony codecs)
+    m_request.SetMediaSampleRateHertz(16000);
     m_request.SetLanguageCode(LanguageCodeMapper::GetLanguageCodeForName(lang));
     m_request.SetMediaEncoding(MediaEncoding::pcm);
     m_request.SetEventStreamHandler(m_handler);
@@ -607,14 +608,24 @@ extern "C" {
 		strncpy(cb->lang, lang, MAX_LANG);
 		cb->samples_per_second = sampleRate;
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "sample rate of rtp stream is %d\n", samples_per_second);
-		if (sampleRate != 8000) {
+
+		// ALWAYS resample to 16kHz for AWS Transcribe (best quality)
+		// This is critical for 8kHz telephony codecs (PCMU/PCMA) which are common in VoIP
+		if (sampleRate != 16000) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+				"%s: Initializing resampler %dHz -> 16000Hz for better transcription quality\n",
+				switch_channel_get_name(channel), sampleRate);
 			cb->resampler = speex_resampler_init(1, sampleRate, 16000, SWITCH_RESAMPLE_QUALITY, &err);
 			if (0 != err) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n", 
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n",
 							switch_channel_get_name(channel), speex_resampler_strerror(err));
 				status = SWITCH_STATUS_FALSE;
 				goto done;
 			}
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+				"%s: Sample rate already 16kHz, no resampling needed\n",
+				switch_channel_get_name(channel));
 		}
 
 		// allocate vad if we are delaying connecting to the recognizer until we detect speech
