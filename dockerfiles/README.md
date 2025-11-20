@@ -1561,13 +1561,14 @@ docker exec -it fs fs_cli -x 'show modules' | grep aws_transcribe
 
 **Features**:
 - ✅ Real-time streaming transcription via AWS Transcribe Streaming API
-- ✅ Speaker diarization to identify different speakers
+- ✅ **Two speaker identification methods:**
+  - **Speaker Diarization** (AI-based): Detects up to 10 speakers (spk_0, spk_1...), 85-95% accuracy
+  - **Channel Identification** (telephony-optimized): 100% accurate agent/customer separation via stereo channels
 - ✅ Support for 30+ languages and language identification
 - ✅ Interim and final transcription results
 - ✅ Custom vocabulary support for domain-specific terminology
 - ✅ Vocabulary filtering for profanity or sensitive words
 - ✅ Medical and custom language models
-- ✅ Channel identification for stereo audio
 - ✅ Word-level timestamps and confidence scores
 - ✅ Built on stable freeswitch-base image
 - ✅ Automatic static + runtime validation during build
@@ -1680,8 +1681,13 @@ docker rm -f fs-aws-test
 # Start transcription (mono mode)
 aws_transcribe <uuid> start en-US interim
 
-# Start with speaker diarization
+# Start with speaker diarization (AI-based, detects multiple speakers)
 uuid_setvar <uuid> AWS_SHOW_SPEAKER_LABEL true
+aws_transcribe <uuid> start en-US interim
+
+# Start with channel identification (stereo, perfect agent/customer separation)
+uuid_setvar <uuid> AWS_ENABLE_CHANNEL_IDENTIFICATION true
+uuid_setvar <uuid> AWS_NUMBER_OF_CHANNELS 2
 aws_transcribe <uuid> start en-US interim
 
 # Start with custom vocabulary
@@ -1696,6 +1702,12 @@ aws_transcribe <uuid> start en-US interim
 # Stop transcription
 aws_transcribe <uuid> stop
 ```
+
+**Speaker Identification:** mod_aws_transcribe supports two methods:
+- **Speaker Diarization** (`AWS_SHOW_SPEAKER_LABEL`): AI detects speakers (spk_0, spk_1...), works with mono audio
+- **Channel Identification** (`AWS_ENABLE_CHANNEL_IDENTIFICATION`): Uses stereo channels (ch_0=agent, ch_1=customer), 100% accurate
+
+See `modules/mod_aws_transcribe/README.md` for detailed speaker identification guide with cost comparison and use cases.
 
 ### Supported Languages (Examples)
 
