@@ -218,12 +218,111 @@ Set in dialplan for per-user or per-call credentials:
 <action application="set" data="AWS_REGION=us-east-1"/>
 ```
 
-### Method 3: AWS Credentials Chain (EC2/ECS)
+### Method 3: AWS Credentials Chain (IAM Roles)
 
-For AWS EC2/ECS deployments with IAM roles:
-- No credentials needed in dialplan or environment
-- Module automatically uses instance/task IAM role
-- Requires IAM policy with `transcribe:StartStreamTranscription` permission
+**Best for production deployments on AWS infrastructure.**
+
+For AWS EC2/ECS/EKS deployments with IAM roles, no explicit credentials are needed:
+
+```bash
+# No AWS credentials needed - uses IAM role automatically
+docker run -e AWS_REGION=us-east-1 \
+           srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+Dialplan should NOT set credentials:
+```xml
+<!-- Do NOT set AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY -->
+<!-- Only set region if needed -->
+<action application="set" data="AWS_REGION=us-east-1"/>
+```
+
+**How it works:**
+1. Module detects no explicit credentials
+2. AWS SDK automatically tries:
+   - EC2 instance metadata (IAM instance profile)
+   - ECS task role (IAM task execution role)
+   - EKS service account (IRSA)
+   - `~/.aws/credentials` file
+   - `~/.aws/config` file
+
+**Required IAM Policy:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "transcribe:StartStreamTranscription"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### Credential Type Detection
+
+The module automatically detects your credential type at startup:
+
+| Access Key Prefix | Type | Session Token Required? | Log Message |
+|-------------------|------|-------------------------|-------------|
+| `AKIA*` | Permanent IAM User | No | `Permanent (AKIA*)` |
+| `ASIA*` | Temporary STS/SSO | **YES** | `Temporary (ASIA* + session token)` |
+| (empty) | IAM Role/Credentials Chain | N/A | `AWS default credentials chain` |
+
+**Watch startup logs for authentication status:**
+```
+=========================================================
+mod_aws_transcribe: Checking AWS credentials...
+  ✓ Environment credentials found: Temporary (ASIA* + session token)
+    AWS_ACCESS_KEY_ID: ASIA***
+    AWS_SESSION_TOKEN: present
+  ✓ AWS_REGION: us-east-1
+
+Authentication priority:
+  1. Channel variables (per-call)
+  2. Environment variables (container-level)
+  3. AWS credentials chain (IAM role, ~/.aws/credentials)
+=========================================================
+```
+
+### Troubleshooting Authentication
+
+**Error: "The security token included in the request is invalid"**
+
+This means your ASIA* credentials are missing the session token:
+
+```bash
+# ❌ WRONG - ASIA* without session token
+export AWS_ACCESS_KEY_ID=ASIA...
+export AWS_SECRET_ACCESS_KEY=...
+# Missing: AWS_SESSION_TOKEN
+
+# ✅ CORRECT - ASIA* with session token
+export AWS_ACCESS_KEY_ID=ASIA...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjE...  # Required!
+```
+
+**Check logs for warnings:**
+```
+⚠ WARNING: ASIA* credentials require AWS_SESSION_TOKEN!
+⚠ Authentication will likely fail without session token.
+```
+
+**Verify credentials in container:**
+```bash
+# Check what FreeSWITCH sees
+docker exec freeswitch env | grep AWS
+
+# Should show (if using env vars):
+AWS_ACCESS_KEY_ID=ASIA... or AKIA...
+AWS_SECRET_ACCESS_KEY=...
+AWS_SESSION_TOKEN=...  (only for ASIA*)
+AWS_REGION=us-east-1
+```
 
 ## Events
 
