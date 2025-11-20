@@ -196,6 +196,303 @@ Fired when the connection to AWS Transcribe is successfully established.
 
 Fired when an error occurs during transcription. Contains error details in the event body.
 
+---
+
+## Speaker Identification in Telephony
+
+mod_aws_transcribe supports **two methods** for identifying speakers in phone calls. Choose the method based on your use case and audio setup.
+
+### Method 1: Speaker Diarization (AI-Based)
+
+**What it is:** AWS AI analyzes voice patterns to distinguish different speakers in the audio.
+
+**Best for:**
+- Conference calls (3+ participants)
+- Calls where you have mono (single channel) audio
+- When you need to identify multiple speakers but don't have stereo recording
+
+**Configuration:**
+```javascript
+// Via drachtio-fsmrf
+await ep.set({
+  AWS_SHOW_SPEAKER_LABEL: 'true',
+  AWS_REGION: 'us-east-1'
+});
+await ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+```
+
+```xml
+<!-- Via FreeSWITCH dialplan -->
+<action application="set" data="AWS_SHOW_SPEAKER_LABEL=true"/>
+<action application="aws_transcribe" data="start en-US interim"/>
+```
+
+**Output:** Speakers labeled as `spk_0`, `spk_1`, `spk_2`, etc. (see [Speaker Diarization Output](#with-speaker-diarization))
+
+**Characteristics:**
+- ✅ Works with mono audio
+- ✅ Detects up to 10 speakers
+- ✅ No special audio setup required
+- ❌ Doesn't identify "who is who" (just spk_0, spk_1...)
+- ❌ Accuracy: 85-95% (can confuse similar voices)
+- ⚠️ Cost: **2x base rate** (~$0.048/minute)
+
+---
+
+### Method 2: Channel Identification (Telephony-Optimized) ⭐ RECOMMENDED
+
+**What it is:** Uses LEFT and RIGHT stereo audio channels to separate speakers physically.
+
+**Best for:**
+- **Call centers** (agent + customer)
+- **1-on-1 phone calls** (exactly 2 speakers)
+- Quality monitoring and compliance recording
+- When you control the phone system and can record stereo
+
+**How it works:**
+```
+┌──────────────────────────────────┐
+│  Phone Call                      │
+│                                  │
+│  Agent    ──→ LEFT channel (ch_0)│
+│  Customer ──→ RIGHT channel (ch_1)│
+└──────────────────────────────────┘
+```
+
+**Configuration:**
+```javascript
+// Via drachtio-fsmrf
+await ep.set({
+  AWS_ENABLE_CHANNEL_IDENTIFICATION: 'true',
+  AWS_NUMBER_OF_CHANNELS: '2',
+  AWS_REGION: 'us-east-1'
+});
+await ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+```
+
+```xml
+<!-- Via FreeSWITCH dialplan -->
+<action application="set" data="RECORD_STEREO=true"/>
+<action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
+<action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
+<action application="aws_transcribe" data="start en-US interim"/>
+```
+
+**Output:** Results include `channel_id` field:
+```json
+[
+  {
+    "is_final": true,
+    "channel_id": "ch_0",  // Left channel = Agent
+    "alternatives": [{
+      "transcript": "Hello, how can I help you today?"
+    }]
+  },
+  {
+    "is_final": true,
+    "channel_id": "ch_1",  // Right channel = Customer
+    "alternatives": [{
+      "transcript": "I need help with my order."
+    }]
+  }
+]
+```
+
+**Characteristics:**
+- ✅ **100% accurate** separation (physical channels)
+- ✅ Know exactly who is agent vs customer
+- ✅ Perfect for call center use cases
+- ✅ Lower compute cost
+- ❌ Requires stereo audio recording
+- ❌ Only works for 2 speakers
+- ⚠️ Cost: **1.25x base rate** (~$0.030/minute)
+
+---
+
+### Combining Both Methods (Advanced)
+
+For complex scenarios like conference calls with participants on each side:
+
+```javascript
+await ep.set({
+  AWS_ENABLE_CHANNEL_IDENTIFICATION: 'true',  // Separate by channel
+  AWS_SHOW_SPEAKER_LABEL: 'true',            // AND detect speakers within each channel
+  AWS_NUMBER_OF_CHANNELS: '2'
+});
+```
+
+This gives you:
+- `ch_0` + `spk_0`, `spk_1` = Multiple people on agent side
+- `ch_1` + `spk_2`, `spk_3` = Multiple people on customer side
+
+**Cost:** ~$0.054/minute (both features enabled)
+
+---
+
+### Decision Guide: Which Method to Use?
+
+| Use Case | Method | Why |
+|----------|--------|-----|
+| **Call Center (Agent + Customer)** | Channel Identification ⭐ | 100% accurate, cheaper, perfect separation |
+| **Customer Support 1-on-1** | Channel Identification ⭐ | Know exactly who said what |
+| **3-way Conference Call** | Speaker Diarization | AI detects all 3 speakers |
+| **Group Call (4+ people)** | Speaker Diarization | Only option for multiple speakers |
+| **Webinar/Panel** | Speaker Diarization | Many speakers on same audio |
+| **Compliance Recording** | Channel Identification ⭐ | Perfect accuracy required |
+
+---
+
+### Cost Comparison
+
+Based on AWS Transcribe pricing (as of 2025):
+
+| Configuration | Cost per Minute | Monthly Cost (1000 min) | Use Case |
+|--------------|-----------------|------------------------|----------|
+| Basic transcription only | $0.024 | $24.00 | No speaker identification |
+| + Channel identification | $0.030 | $30.00 | Call centers (recommended) |
+| + Speaker diarization | $0.048 | $48.00 | Conferences, multi-speaker |
+| + Both | $0.054 | $54.00 | Complex scenarios |
+
+**Recommendation:** Use channel identification when possible - it's cheaper and more accurate!
+
+---
+
+### FreeSWITCH Stereo Recording Setup
+
+To use channel identification, you need stereo audio recording:
+
+**Option 1: Using mod_audio_fork (Real-time)**
+```javascript
+// Automatically provides stereo if both sides are captured
+await ep.execute('uuid_audio_fork', `${ep.uuid} start`);
+```
+
+**Option 2: Using dialplan configuration**
+```xml
+<extension name="stereo_recording">
+  <condition field="destination_number" expression="^(\d+)$">
+    <action application="answer"/>
+    <action application="set" data="RECORD_STEREO=true"/>
+    <action application="set" data="RECORD_MIN_SEC=0"/>
+    <action application="record_session" data="/tmp/recording_${uuid}.wav"/>
+
+    <!-- Enable AWS channel identification -->
+    <action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
+    <action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
+    <action application="aws_transcribe" data="start en-US interim"/>
+
+    <action application="park"/>
+  </condition>
+</extension>
+```
+
+---
+
+### Real-World Examples
+
+#### Example 1: Call Center with Perfect Speaker Separation
+
+```javascript
+// Contact center setup
+const { Srf } = require('drachtio-srf');
+const Mrf = require('drachtio-fsmrf');
+
+srf.invite(async (req, res) => {
+  const ms = await mrf.connect(...);
+  const ep = await ms.createEndpoint();
+
+  // Configure for agent + customer separation
+  await ep.set({
+    AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+    AWS_REGION: 'us-east-1',
+    AWS_ENABLE_CHANNEL_IDENTIFICATION: 'true',
+    AWS_NUMBER_OF_CHANNELS: '2'
+  });
+
+  // Start transcription
+  await ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+
+  // Handle transcription events
+  ep.on('aws_transcribe::transcription', (evt, result) => {
+    const data = JSON.parse(evt.body);
+    if (data[0].channel_id === 'ch_0') {
+      console.log(`Agent: ${data[0].alternatives[0].transcript}`);
+    } else {
+      console.log(`Customer: ${data[0].alternatives[0].transcript}`);
+    }
+  });
+});
+```
+
+#### Example 2: Conference Call with Multiple Speakers
+
+```javascript
+// Conference call setup
+await ep.set({
+  AWS_SHOW_SPEAKER_LABEL: 'true',
+  AWS_REGION: 'us-east-1'
+});
+
+await ep.api('aws_transcribe', `${ep.uuid} start en-US interim`);
+
+ep.on('aws_transcribe::transcription', (evt, result) => {
+  const data = JSON.parse(evt.body);
+
+  // AWS groups by speaker automatically
+  if (data[0].speakers) {
+    data[0].speakers.forEach(speaker => {
+      console.log(`${speaker.speaker}: ${speaker.transcript}`);
+      // Output:
+      // spk_0: Hello everyone.
+      // spk_1: Hi, glad to be here.
+      // spk_2: Let's get started.
+    });
+  }
+});
+```
+
+---
+
+### Troubleshooting Speaker Identification
+
+#### Channel Identification Issues
+
+**Problem:** Not getting `channel_id` in results
+
+**Solutions:**
+1. Verify `AWS_ENABLE_CHANNEL_IDENTIFICATION` is set to `"true"` (string, not boolean)
+2. Confirm `AWS_NUMBER_OF_CHANNELS` is set to `2`
+3. Ensure audio is actually stereo (check FreeSWITCH recording)
+4. Check FreeSWITCH logs for "channel identification" messages
+
+**Problem:** Both speakers appear on same channel
+
+**Solutions:**
+1. Check stereo recording configuration (`RECORD_STEREO=true`)
+2. Verify media bug is capturing both channels
+3. Ensure SIP signaling preserves stereo audio
+
+#### Speaker Diarization Issues
+
+**Problem:** All words have same speaker label
+
+**Solutions:**
+1. Verify `AWS_SHOW_SPEAKER_LABEL` is set to `"true"`
+2. Ensure there are actually multiple speakers in the audio
+3. Check that speakers talk long enough (>5 seconds each)
+4. Verify language code supports speaker diarization
+
+**Problem:** Poor speaker separation accuracy
+
+**Solutions:**
+1. Use channel identification instead if you have 2 speakers
+2. Ensure good audio quality (minimize background noise)
+3. Allow speakers to talk for longer periods (AI needs data)
+4. Consider using custom vocabulary for better accuracy
+
+---
+
 ## Usage
 
 **Recommended Approach for Production:** Use per-user flag-based configuration with centralized settings in dialplan.
