@@ -176,17 +176,28 @@ The module uses a **three-tier authentication priority**:
 
 ### Credential Variables
 
-| Variable | Description |
-| --- | ----------- |
-| AWS_ACCESS_KEY_ID | The AWS access key ID |
-| AWS_SECRET_ACCESS_KEY | The AWS secret access key |
-| AWS_REGION | The AWS region (e.g., us-east-1) |
+| Variable | Description | Required |
+| --- | ----------- | -------- |
+| AWS_ACCESS_KEY_ID | The AWS access key ID (AKIA* for permanent, ASIA* for temporary) | Yes |
+| AWS_SECRET_ACCESS_KEY | The AWS secret access key | Yes |
+| AWS_SESSION_TOKEN | Session token for temporary STS credentials (only needed for ASIA* keys) | For temporary creds |
+| AWS_REGION | The AWS region (e.g., us-east-1) | Yes |
 
 ### Method 1: Environment Variables (Recommended for Docker)
 
+**For permanent IAM credentials (AKIA*):**
 ```bash
 docker run -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \
            -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+           -e AWS_REGION=us-east-1 \
+           srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+**For temporary STS credentials (ASIA*):**
+```bash
+docker run -e AWS_ACCESS_KEY_ID=ASIAIOSFODNN7EXAMPLE \
+           -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+           -e AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjE... \
            -e AWS_REGION=us-east-1 \
            srt2011/freeswitch-mod-aws-transcribe:latest
 ```

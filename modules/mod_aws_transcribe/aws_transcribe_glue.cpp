@@ -43,18 +43,20 @@ public:
     const char *sessionId,
 		const char *bugname,
 		u_int16_t channels,
-    char *lang, 
+    char *lang,
     int interim,
 		uint32_t samples_per_second,
-		const char* region, 
-		const char* awsAccessKeyId, 
+		const char* region,
+		const char* awsAccessKeyId,
 		const char* awsSecretAccessKey,
+		const char* awsSessionToken,
 		responseHandler_t responseHandler
   ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_interim(interim), m_finishing(false), m_connected(false), m_connecting(false),
-	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr), 
+	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr),
 			m_audioBuffer(320 * (samples_per_second == 8000 ? 1 : 2), 15) {
 		Aws::String key(awsAccessKeyId);
 		Aws::String secret(awsSecretAccessKey);
+		Aws::String sessionToken(awsSessionToken);
 		Aws::Client::ClientConfiguration config;
 		if (region != nullptr && strlen(region) > 0) config.region = region;
 		char keySnippet[20];
@@ -63,9 +65,20 @@ public:
 		for (int i = 4; i < 20; i++) keySnippet[i] = 'x';
 		keySnippet[19] = '\0';
 
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p ACCESS_KEY_ID %s, region %s\n", this, keySnippet, region);		
+		bool hasSessionToken = awsSessionToken && strlen(awsSessionToken) > 0;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p ACCESS_KEY_ID %s, region %s, session_token %s\n",
+			this, keySnippet, region, hasSessionToken ? "present" : "none");
+
 		if (*awsAccessKeyId && *awsSecretAccessKey) {
-			m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG, AWSCredentials(awsAccessKeyId, awsSecretAccessKey), config);
+			if (hasSessionToken) {
+				// Use temporary credentials with session token
+				m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG,
+					AWSCredentials(awsAccessKeyId, awsSecretAccessKey, awsSessionToken), config);
+			} else {
+				// Use permanent credentials without session token
+				m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG,
+					AWSCredentials(awsAccessKeyId, awsSecretAccessKey), config);
+			}
 		}
 		else {
 			m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG, config);
@@ -320,7 +333,7 @@ static void *SWITCH_THREAD_FUNC aws_transcribe_thread(switch_thread_t *thread, v
 	struct cap_cb *cb = (struct cap_cb *) obj;
 	bool ok = true;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: starting cb %p\n", (void *) cb);
-	GStreamer* pStreamer = new GStreamer(cb->sessionId, cb->bugname, cb->channels, cb->lang, cb->interim, cb->samples_per_second, cb->region, cb->awsAccessKeyId, cb->awsSecretAccessKey, 
+	GStreamer* pStreamer = new GStreamer(cb->sessionId, cb->bugname, cb->channels, cb->lang, cb->interim, cb->samples_per_second, cb->region, cb->awsAccessKeyId, cb->awsSecretAccessKey, cb->awsSessionToken,
 		cb->responseHandler);
 	if (!pStreamer) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: Error allocating streamer\n");
@@ -408,6 +421,7 @@ extern "C" {
 		memset(cb, sizeof(cb), 0);
 		const char* awsAccessKeyId = switch_channel_get_variable(channel, "AWS_ACCESS_KEY_ID");
 		const char* awsSecretAccessKey = switch_channel_get_variable(channel, "AWS_SECRET_ACCESS_KEY");
+		const char* awsSessionToken = switch_channel_get_variable(channel, "AWS_SESSION_TOKEN");
 		const char* awsRegion = switch_channel_get_variable(channel, "AWS_REGION");
 		cb->channels = channels;
 		LanguageCode code = LanguageCodeMapper::GetLanguageCodeForName(lang);
@@ -419,20 +433,31 @@ extern "C" {
 		strncpy(cb->sessionId, switch_core_session_get_uuid(session), MAX_SESSION_ID);
 		strncpy(cb->bugname, bugname, MAX_BUG_LEN);
 
+		// Initialize session token to empty string
+		cb->awsSessionToken[0] = '\0';
+
 		if (awsAccessKeyId && awsSecretAccessKey && awsRegion) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Using channel vars for aws authentication\n");
 			strncpy(cb->awsAccessKeyId, awsAccessKeyId, 128);
 			strncpy(cb->awsSecretAccessKey, awsSecretAccessKey, 128);
 			strncpy(cb->region, awsRegion, MAX_REGION);
-
+			// Optional session token for temporary credentials
+			if (awsSessionToken) {
+				strncpy(cb->awsSessionToken, awsSessionToken, sizeof(cb->awsSessionToken) - 1);
+			}
 		}
 		else if (std::getenv("AWS_ACCESS_KEY_ID") &&
 			std::getenv("AWS_SECRET_ACCESS_KEY") &&
 			std::getenv("AWS_REGION")) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Using env vars for aws authentication\n");
 			strncpy(cb->awsAccessKeyId, std::getenv("AWS_ACCESS_KEY_ID"), 128);
-			strncpy(cb->awsSecretAccessKey, std::getenv("AWS_SECRET_ACCESS_KEY"), 128);		
+			strncpy(cb->awsSecretAccessKey, std::getenv("AWS_SECRET_ACCESS_KEY"), 128);
 			strncpy(cb->region, std::getenv("AWS_REGION"), MAX_REGION);
+			// Optional session token for temporary credentials
+			const char* envSessionToken = std::getenv("AWS_SESSION_TOKEN");
+			if (envSessionToken) {
+				strncpy(cb->awsSessionToken, envSessionToken, sizeof(cb->awsSessionToken) - 1);
+			}
 		}
 		else {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "No channel vars or env vars for aws authentication..will use default profile if found\n");

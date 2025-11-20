@@ -4,7 +4,7 @@
 # ============================================================================
 #
 # Usage:
-#   ./run-on-macbook.sh <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY] [AWS_SECRET_KEY] [AWS_REGION]
+#   ./run-on-macbook.sh <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY] [AWS_SECRET_KEY] [AWS_REGION] [AWS_SESSION_TOKEN]
 #
 # Examples:
 #   ./run-on-macbook.sh srt2011/freeswitch-base:latest
@@ -17,6 +17,7 @@
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest "" YOUR_AZURE_KEY eastus
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1 YOUR_SESSION_TOKEN
 #
 # ============================================================================
 
@@ -29,6 +30,7 @@ AZURE_REGION=${4:-"eastus"}
 AWS_ACCESS_KEY_ID=${5:-""}
 AWS_SECRET_ACCESS_KEY=${6:-""}
 AWS_REGION=${7:-"us-east-1"}
+AWS_SESSION_TOKEN=${8:-""}
 CONTAINER_NAME="freeswitch"
 
 # Validation
@@ -127,6 +129,10 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     DOCKER_CMD="$DOCKER_CMD -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
     DOCKER_CMD="$DOCKER_CMD -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
     DOCKER_CMD="$DOCKER_CMD -e AWS_REGION=$AWS_REGION"
+    # Optional session token for temporary credentials (ASIA* keys)
+    if [ -n "$AWS_SESSION_TOKEN" ]; then
+        DOCKER_CMD="$DOCKER_CMD -e AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN"
+    fi
 fi
 
 DOCKER_CMD="$DOCKER_CMD $REMOTE_IMAGE"
