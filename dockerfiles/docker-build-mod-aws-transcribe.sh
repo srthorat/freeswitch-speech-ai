@@ -29,6 +29,8 @@ set -e
 
 # Configuration
 IMAGE_NAME=${1:-freeswitch-mod-aws-transcribe:latest}
+# AWS SDK version: 1.11.345 (stable, tested) | Latest: 1.11.694
+# To upgrade: ./docker-build-mod-aws-transcribe.sh IMAGE_NAME 1.11.694
 AWS_SDK_CPP_VERSION=${2:-1.11.345}
 BASE_IMAGE="srt2011/freeswitch-base:latest"
 
@@ -63,6 +65,7 @@ echo "  📂 Build Context:       $(pwd)"
 echo ""
 echo "Build includes:"
 echo "  🆕 AWS SDK C++ (core + transcribestreaming)"
+echo "  🔧 cJSON header conflict fix (prevents duplicate symbols)"
 echo "  🆕 mod_aws_transcribe"
 echo ""
 echo "⏱️  Estimated build time:"

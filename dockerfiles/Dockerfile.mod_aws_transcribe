@@ -27,6 +27,16 @@
 # ============================================================================
 
 ARG BASE_IMAGE=srt2011/freeswitch-base:latest
+
+# AWS SDK C++ Version Configuration
+# - Current default: 1.11.345 (tested and stable)
+# - Verified working: 1.11.200+ (per module README)
+# - Latest available: 1.11.694 (as of 2025-01-20)
+#
+# To use a different version, pass as build arg:
+#   --build-arg AWS_SDK_CPP_VERSION=1.11.694
+#
+# Recommendation: Use default 1.11.345 for stability, upgrade if needed
 ARG AWS_SDK_CPP_VERSION=1.11.345
 
 # ============================================================================
@@ -97,6 +107,30 @@ RUN echo "=========================================" \
 RUN mkdir -p /usr/local/lib/pkgconfig \
     && find /usr/local/src/aws-sdk-cpp/ -type f -name "*.pc" | xargs -I {} cp {} /usr/local/lib/pkgconfig/ \
     && echo "✅ AWS SDK pkg-config files installed"
+
+# ============================================================================
+# Fix cJSON header conflict between AWS SDK and FreeSWITCH
+# ============================================================================
+# AWS SDK C++ bundles its own cJSON in /usr/local/include/aws/core/external/cjson/
+# FreeSWITCH and mod_aws_transcribe use the system cJSON library
+# Without header guards, this causes duplicate symbol errors during linking
+#
+# Solution: Add header guards to AWS SDK's bundled cJSON to prevent conflicts
+RUN echo "=========================================" \
+    && echo "Fixing cJSON header conflict..." \
+    && echo "=========================================" \
+    && if [ -f /usr/local/include/aws/core/external/cjson/cJSON.h ]; then \
+        echo "Found AWS SDK cJSON header, adding header guards..."; \
+        sed -i '/#ifndef cJSON_AS4CPP__h/i #ifndef cJSON__h\n#define cJSON__h' \
+            /usr/local/include/aws/core/external/cjson/cJSON.h \
+        && echo '#endif' >> /usr/local/include/aws/core/external/cjson/cJSON.h \
+        && echo "✅ cJSON header guards added successfully"; \
+    else \
+        echo "⚠️  WARNING: AWS SDK cJSON header not found at expected location"; \
+        echo "Checking alternate locations..."; \
+        find /usr/local/include -name "cJSON.h" -type f 2>/dev/null || true; \
+    fi \
+    && echo "========================================="
 
 # Verify AWS SDK installation
 RUN echo "=========================================" \
