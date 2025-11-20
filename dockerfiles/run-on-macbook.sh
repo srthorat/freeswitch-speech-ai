@@ -4,17 +4,19 @@
 # ============================================================================
 #
 # Usage:
-#   ./run-on-macbook.sh <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION]
+#   ./run-on-macbook.sh <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY] [AWS_SECRET_KEY] [AWS_REGION]
 #
 # Examples:
 #   ./run-on-macbook.sh srt2011/freeswitch-base:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-audio-fork:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest
+#   ./run-on-macbook.sh freeswitch-mod-aws-transcribe:latest
 #
 # With API keys for transcription:
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest "" YOUR_AZURE_KEY eastus
+#   ./run-on-macbook.sh freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1
 #
 # ============================================================================
 
@@ -24,23 +26,28 @@ REMOTE_IMAGE=${1}
 DEEPGRAM_API_KEY=${2:-""}
 AZURE_SUBSCRIPTION_KEY=${3:-""}
 AZURE_REGION=${4:-"eastus"}
+AWS_ACCESS_KEY_ID=${5:-""}
+AWS_SECRET_ACCESS_KEY=${6:-""}
+AWS_REGION=${7:-"us-east-1"}
 CONTAINER_NAME="freeswitch"
 
 # Validation
 if [ -z "$REMOTE_IMAGE" ]; then
     echo "❌ Error: Docker image name is required"
     echo ""
-    echo "Usage: $0 <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION]"
+    echo "Usage: $0 <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY] [AWS_SECRET_KEY] [AWS_REGION]"
     echo ""
     echo "Examples:"
     echo "  $0 srt2011/freeswitch-base:latest"
     echo "  $0 srt2011/freeswitch-mod-audio-fork:latest"
     echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest"
     echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest"
+    echo "  $0 freeswitch-mod-aws-transcribe:latest"
     echo ""
     echo "With API keys:"
     echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY"
     echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
+    echo "  $0 freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1"
     exit 1
 fi
 
@@ -58,6 +65,11 @@ fi
 if [ -n "$AZURE_SUBSCRIPTION_KEY" ]; then
     echo "Azure Subscription Key: ${AZURE_SUBSCRIPTION_KEY:0:10}... (configured)"
     echo "Azure Region: $AZURE_REGION"
+fi
+if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+    echo "AWS Access Key ID: ${AWS_ACCESS_KEY_ID:0:10}... (configured)"
+    echo "AWS Secret Access Key: ${AWS_SECRET_ACCESS_KEY:0:10}... (configured)"
+    echo "AWS Region: $AWS_REGION"
 fi
 echo ""
 
@@ -111,6 +123,11 @@ if [ -n "$AZURE_SUBSCRIPTION_KEY" ]; then
     DOCKER_CMD="$DOCKER_CMD -e AZURE_SUBSCRIPTION_KEY=$AZURE_SUBSCRIPTION_KEY"
     DOCKER_CMD="$DOCKER_CMD -e AZURE_REGION=$AZURE_REGION"
 fi
+if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+    DOCKER_CMD="$DOCKER_CMD -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+    DOCKER_CMD="$DOCKER_CMD -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+    DOCKER_CMD="$DOCKER_CMD -e AWS_REGION=$AWS_REGION"
+fi
 
 DOCKER_CMD="$DOCKER_CMD $REMOTE_IMAGE"
 
@@ -163,7 +180,7 @@ echo ""
 echo "============================================="
 echo "Transcription Modules"
 echo "============================================="
-MODULE_CHECK=$(docker exec "$CONTAINER_NAME" /usr/local/freeswitch/bin/fs_cli -x "show modules" 2>/dev/null | grep -E "audio_fork|deepgram|azure" || echo "")
+MODULE_CHECK=$(docker exec "$CONTAINER_NAME" /usr/local/freeswitch/bin/fs_cli -x "show modules" 2>/dev/null | grep -E "audio_fork|deepgram|azure|aws" || echo "")
 if [ -z "$MODULE_CHECK" ]; then
     echo "No transcription modules detected (base image)"
 else
@@ -181,6 +198,13 @@ else
             echo "✅ Azure transcription is configured and ready"
         else
             echo "⚠️  Azure module loaded but API key not configured"
+        fi
+    fi
+    if echo "$MODULE_CHECK" | grep -q "aws"; then
+        if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            echo "✅ AWS transcription is configured and ready"
+        else
+            echo "⚠️  AWS module loaded but API key not configured"
         fi
     fi
 fi
@@ -240,6 +264,14 @@ if [ -n "$MODULE_CHECK" ]; then
         echo "    freeswitch@internal> uuid_setvar <uuid> AZURE_SUBSCRIPTION_KEY your-key"
         echo "    freeswitch@internal> uuid_setvar <uuid> AZURE_REGION eastus"
         echo "    freeswitch@internal> uuid_azure_transcribe <uuid> start en-US interim"
+    fi
+    if echo "$MODULE_CHECK" | grep -q "aws"; then
+        echo "  AWS Transcribe:"
+        echo "    docker exec -it $CONTAINER_NAME fs_cli"
+        echo "    freeswitch@internal> uuid_setvar <uuid> AWS_ACCESS_KEY_ID your-access-key"
+        echo "    freeswitch@internal> uuid_setvar <uuid> AWS_SECRET_ACCESS_KEY your-secret-key"
+        echo "    freeswitch@internal> uuid_setvar <uuid> AWS_REGION us-east-1"
+        echo "    freeswitch@internal> aws_transcribe <uuid> start en-US interim"
     fi
 fi
 
