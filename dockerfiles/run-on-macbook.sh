@@ -37,7 +37,7 @@ CONTAINER_NAME="freeswitch"
 if [ -z "$REMOTE_IMAGE" ]; then
     echo "❌ Error: Docker image name is required"
     echo ""
-    echo "Usage: $0 <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY] [AWS_SECRET_KEY] [AWS_REGION]"
+    echo "Usage: $0 <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY] [AWS_SECRET_KEY] [AWS_REGION] [AWS_SESSION_TOKEN]"
     echo ""
     echo "Examples:"
     echo "  $0 srt2011/freeswitch-base:latest"
@@ -49,7 +49,15 @@ if [ -z "$REMOTE_IMAGE" ]; then
     echo "With API keys:"
     echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY"
     echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
+    echo ""
+    echo "AWS Transcribe - Permanent credentials (AKIA*):"
     echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1"
+    echo ""
+    echo "AWS Transcribe - Temporary credentials (ASIA*):"
+    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1 YOUR_SESSION_TOKEN"
+    echo ""
+    echo "AWS Transcribe - IAM Role (on EC2/ECS):"
+    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest"
     exit 1
 fi
 
@@ -69,9 +77,23 @@ if [ -n "$AZURE_SUBSCRIPTION_KEY" ]; then
     echo "Azure Region: $AZURE_REGION"
 fi
 if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-    echo "AWS Access Key ID: ${AWS_ACCESS_KEY_ID:0:10}... (configured)"
-    echo "AWS Secret Access Key: ${AWS_SECRET_ACCESS_KEY:0:10}... (configured)"
-    echo "AWS Region: $AWS_REGION"
+    # Detect credential type
+    if [[ "$AWS_ACCESS_KEY_ID" == AKIA* ]]; then
+        echo "AWS Credentials: Permanent (AKIA*)"
+    elif [[ "$AWS_ACCESS_KEY_ID" == ASIA* ]]; then
+        if [ -n "$AWS_SESSION_TOKEN" ]; then
+            echo "AWS Credentials: Temporary (ASIA* + session token)"
+        else
+            echo "⚠️  AWS Credentials: Temporary (ASIA* - MISSING SESSION TOKEN!)"
+        fi
+    else
+        echo "AWS Credentials: Configured"
+    fi
+    echo "  Access Key ID: ${AWS_ACCESS_KEY_ID:0:10}..."
+    echo "  Region: $AWS_REGION"
+    if [ -n "$AWS_SESSION_TOKEN" ]; then
+        echo "  Session Token: ${AWS_SESSION_TOKEN:0:20}... (present)"
+    fi
 fi
 echo ""
 
@@ -273,11 +295,34 @@ if [ -n "$MODULE_CHECK" ]; then
     fi
     if echo "$MODULE_CHECK" | grep -q "aws"; then
         echo "  AWS Transcribe:"
-        echo "    docker exec -it $CONTAINER_NAME fs_cli"
-        echo "    freeswitch@internal> uuid_setvar <uuid> AWS_ACCESS_KEY_ID your-access-key"
-        echo "    freeswitch@internal> uuid_setvar <uuid> AWS_SECRET_ACCESS_KEY your-secret-key"
-        echo "    freeswitch@internal> uuid_setvar <uuid> AWS_REGION us-east-1"
-        echo "    freeswitch@internal> uuid_aws_transcribe <uuid> start en-US interim stereo"
+        if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            # Already configured via environment variables
+            if [[ "$AWS_ACCESS_KEY_ID" == ASIA* ]] && [ -z "$AWS_SESSION_TOKEN" ]; then
+                echo "    ⚠️  WARNING: ASIA* credentials require AWS_SESSION_TOKEN!"
+                echo "    Restart container with session token parameter"
+            else
+                echo "    ✓ Credentials configured via environment variables"
+            fi
+            echo "    docker exec -it $CONTAINER_NAME fs_cli"
+            echo "    freeswitch@internal> uuid_aws_transcribe <uuid> start en-US interim stereo"
+        else
+            # Need to set credentials manually
+            echo "    docker exec -it $CONTAINER_NAME fs_cli"
+            echo ""
+            echo "    For permanent credentials (AKIA*):"
+            echo "    freeswitch@internal> uuid_setvar <uuid> AWS_ACCESS_KEY_ID AKIA..."
+            echo "    freeswitch@internal> uuid_setvar <uuid> AWS_SECRET_ACCESS_KEY ..."
+            echo "    freeswitch@internal> uuid_setvar <uuid> AWS_REGION us-east-1"
+            echo ""
+            echo "    For temporary credentials (ASIA*):"
+            echo "    freeswitch@internal> uuid_setvar <uuid> AWS_ACCESS_KEY_ID ASIA..."
+            echo "    freeswitch@internal> uuid_setvar <uuid> AWS_SECRET_ACCESS_KEY ..."
+            echo "    freeswitch@internal> uuid_setvar <uuid> AWS_SESSION_TOKEN IQoJ..."
+            echo "    freeswitch@internal> uuid_setvar <uuid> AWS_REGION us-east-1"
+            echo ""
+            echo "    Then start transcription:"
+            echo "    freeswitch@internal> uuid_aws_transcribe <uuid> start en-US interim stereo"
+        fi
     fi
 fi
 

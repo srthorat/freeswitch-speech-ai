@@ -1675,6 +1675,91 @@ docker rm -f fs-aws-test
 
 </details>
 
+### Authentication
+
+mod_aws_transcribe supports **three authentication methods** with automatic credential type detection:
+
+#### 1. Permanent IAM Credentials (AKIA*)
+
+Best for development and testing:
+
+```bash
+docker run -d --name freeswitch \\
+  -p 5060:5060/udp \\
+  -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \\
+  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \\
+  -e AWS_REGION=us-east-1 \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+#### 2. Temporary STS Credentials (ASIA*)
+
+For SSO or STS temporary credentials (requires session token):
+
+```bash
+docker run -d --name freeswitch \\
+  -p 5060:5060/udp \\
+  -e AWS_ACCESS_KEY_ID=ASIAIOSFODNN7EXAMPLE \\
+  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \\
+  -e AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjE... \\
+  -e AWS_REGION=us-east-1 \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+⚠️ **Critical**: ASIA* credentials **require** `AWS_SESSION_TOKEN` or you'll get authentication errors.
+
+#### 3. IAM Roles (Production)
+
+Best for EC2/ECS/EKS deployments - no credentials needed:
+
+```bash
+# On EC2/ECS/EKS with IAM role attached
+docker run -d --name freeswitch \\
+  -p 5060:5060/udp \\
+  -e AWS_REGION=us-east-1 \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+The module automatically uses EC2 instance metadata, ECS task role, or EKS service account.
+
+#### Using run-on-macbook.sh
+
+```bash
+# Permanent credentials (AKIA*)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest \\
+  "" "" "" YOUR_ACCESS_KEY YOUR_SECRET_KEY us-east-1
+
+# Temporary credentials (ASIA* + session token)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest \\
+  "" "" "" YOUR_ACCESS_KEY YOUR_SECRET_KEY us-east-1 YOUR_SESSION_TOKEN
+
+# IAM role (on EC2/ECS)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+#### Startup Diagnostics
+
+The module logs detailed authentication status at startup:
+
+```
+=========================================================
+mod_aws_transcribe: Checking AWS credentials...
+  ✓ Environment credentials found: Temporary (ASIA* + session token)
+    AWS_ACCESS_KEY_ID: ASIA***
+    AWS_SESSION_TOKEN: present
+  ✓ AWS_REGION: us-east-1
+
+Authentication priority:
+  1. Channel variables (per-call)
+  2. Environment variables (container-level)
+  3. AWS credentials chain (IAM role, ~/.aws/credentials)
+=========================================================
+```
+
+**Warning signs to watch for:**
+- `Temporary (ASIA* - MISSING SESSION TOKEN!)` - You need to add `AWS_SESSION_TOKEN`
+- `Environment credentials: not found` - Module will use IAM role or fail
+
 ### API Commands
 
 ```bash
