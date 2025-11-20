@@ -7,7 +7,7 @@ This directory contains Dockerfiles for building FreeSWITCH images with differen
 
 ---
 
-## 🚀 Quick Start: Running on MacBook
+## 🚀 Quick Start: Running on MacBook(Local)
 
 **Want to quickly test on your MacBook?** See the comprehensive guide:
 
