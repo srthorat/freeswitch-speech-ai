@@ -146,7 +146,7 @@ RUN ldconfig
 RUN sed -i '/<\/modules>/i \    <load module="mod_azure_transcribe"/>' \
     /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml 2>/dev/null || true
 
-# Copy example configuration files
+# Copy example configuration files - already tested
 COPY examples/freeswitch-config/dialplan/default.xml \
     /usr/local/freeswitch/conf/dialplan/default.xml
 COPY examples/freeswitch-config/directory/1000.xml \
