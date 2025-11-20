@@ -164,15 +164,55 @@ The following channel variables can be set to configure the AWS transcription se
 
 ## Authentication
 
-The plugin will first look for channel variables, then environment variables. If neither are found, then the default AWS credentials chain will be used (EC2 instance role, ~/.aws/credentials, etc.).
+### Credential Priority (IMPORTANT)
 
-The names of the channel variables and environment variables for authentication are:
+The module uses a **three-tier authentication priority**:
+
+1. **Channel Variables** (HIGHEST PRIORITY) - Set in dialplan via `<action application="set">`
+2. **Environment Variables** - Passed to FreeSWITCH process (e.g., Docker `-e` flags)
+3. **AWS Credentials Chain** (FALLBACK) - EC2/ECS IAM role, ~/.aws/credentials, ~/.aws/config
+
+⚠️ **Critical**: If you set AWS credentials in the dialplan (even with placeholder values), they will **override** environment variables. To use environment variables, **comment out** or **remove** credential lines from the dialplan.
+
+### Credential Variables
 
 | Variable | Description |
 | --- | ----------- |
 | AWS_ACCESS_KEY_ID | The AWS access key ID |
 | AWS_SECRET_ACCESS_KEY | The AWS secret access key |
 | AWS_REGION | The AWS region (e.g., us-east-1) |
+
+### Method 1: Environment Variables (Recommended for Docker)
+
+```bash
+docker run -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \
+           -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+           -e AWS_REGION=us-east-1 \
+           srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+Dialplan should NOT set these variables (comment them out):
+```xml
+<!-- <action application="set" data="AWS_ACCESS_KEY_ID=..."/> -->
+<!-- <action application="set" data="AWS_SECRET_ACCESS_KEY=..."/> -->
+<!-- <action application="set" data="AWS_REGION=us-east-1"/> -->
+```
+
+### Method 2: Channel Variables (Per-Call Credentials)
+
+Set in dialplan for per-user or per-call credentials:
+```xml
+<action application="set" data="AWS_ACCESS_KEY_ID=${user_data(${caller_id_number}@${domain_name} var aws_key)}"/>
+<action application="set" data="AWS_SECRET_ACCESS_KEY=${user_data(${caller_id_number}@${domain_name} var aws_secret)}"/>
+<action application="set" data="AWS_REGION=us-east-1"/>
+```
+
+### Method 3: AWS Credentials Chain (EC2/ECS)
+
+For AWS EC2/ECS deployments with IAM roles:
+- No credentials needed in dialplan or environment
+- Module automatically uses instance/task IAM role
+- Requires IAM policy with `transcribe:StartStreamTranscription` permission
 
 ## Events
 

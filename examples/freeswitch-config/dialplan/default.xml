@@ -54,9 +54,11 @@
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_aws_transcribe)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
           <action application="log" data="INFO [AWS] Authorized User ${caller_id_number} calling ${destination_number} -> Starting AWS Transcribe"/>
-          <action application="set" data="AWS_ACCESS_KEY_ID=your-aws-access-key-id"/>
-          <action application="set" data="AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key"/>
-          <action application="set" data="AWS_REGION=us-east-1"/>
+          <!-- AWS Credentials: Set here OR pass as Docker environment variables -->
+          <!-- Priority: Channel variables (here) > Environment variables > Default AWS credentials chain -->
+          <!-- <action application="set" data="AWS_ACCESS_KEY_ID=your-aws-access-key-id"/> -->
+          <!-- <action application="set" data="AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key"/> -->
+          <!-- <action application="set" data="AWS_REGION=us-east-1"/> -->
           <!-- Optional: Enable channel identification for agent/customer separation (100% accurate) -->
           <action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
           <action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
