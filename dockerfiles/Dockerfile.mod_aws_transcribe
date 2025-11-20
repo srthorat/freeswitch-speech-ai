@@ -297,6 +297,8 @@ COPY examples/freeswitch-config/directory/1001.xml \
     /usr/local/freeswitch/conf/directory/default/1001.xml
 COPY examples/freeswitch-config/directory/1002.xml \
     /usr/local/freeswitch/conf/directory/default/1002.xml
+COPY examples/freeswitch-config/directory/1003.xml \
+    /usr/local/freeswitch/conf/directory/default/1003.xml
 
 # Runtime validation
 RUN echo "=========================================" \

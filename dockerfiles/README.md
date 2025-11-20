@@ -1578,10 +1578,11 @@ docker exec -it fs fs_cli -x 'show modules' | grep aws_transcribe
 
 The Docker image includes pre-configured FreeSWITCH configuration files ready for testing:
 
-- **`/usr/local/freeswitch/conf/dialplan/default.xml`** - Complete dialplan with examples
+- **`/usr/local/freeswitch/conf/dialplan/default.xml`** - Complete dialplan with AWS Transcribe extension (EXTENSION 4)
 - **`/usr/local/freeswitch/conf/directory/default/1000.xml`** - User 1000 configuration
 - **`/usr/local/freeswitch/conf/directory/default/1001.xml`** - User 1001 configuration
 - **`/usr/local/freeswitch/conf/directory/default/1002.xml`** - User 1002 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1003.xml`** - User 1003 with AWS Transcribe enabled
 
 **Authentication Methods**:
 
