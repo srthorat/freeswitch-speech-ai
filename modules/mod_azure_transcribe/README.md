@@ -35,17 +35,112 @@ apt-get install -y libwebsockets-dev
 The freeswitch module exposes the following API commands:
 
 ```
-azure_transcribe <uuid> start <lang-code> [interim]
+uuid_azure_transcribe <uuid> start <lang-code> [interim] [stereo|mono] [bugname]
 ```
 Attaches media bug to channel and performs streaming recognize request.
 - `uuid` - unique identifier of Freeswitch channel
 - `lang-code` - a valid Azure [language code](https://docs.microsoft.com/en-us/azure/cognitive-services/speech-service/language-support) that is supported for streaming transcription (e.g., en-US, es-ES, fr-FR)
-- `interim` - If the 'interim' keyword is present then both interim and final transcription results will be returned; otherwise only final transcriptions will be returned
+- `interim` - (optional) If the 'interim' keyword is present then both interim and final transcription results will be returned; otherwise only final transcriptions will be returned
+- `stereo|mono` - (optional) Capture mode: 'stereo' captures both caller (channel 0) and callee (channel 1) separately; 'mono' captures mixed audio (default: mono)
+- `bugname` - (optional) Custom name for the media bug (default: azure_transcribe)
 
 ```
-azure_transcribe <uuid> stop
+uuid_azure_transcribe <uuid> stop [bugname]
 ```
 Stop transcription on the channel.
+
+**Stereo Mode and Channel Identification:**
+
+When using `stereo` mode, the module automatically uses Azure's **ConversationTranscriber** API instead of SpeechRecognizer. This provides proper channel identification in transcription results:
+
+- **Mono mode** (default): Uses `SpeechRecognizer` - all transcriptions show `"Channel":0`
+- **Stereo mode**: Uses `ConversationTranscriber` - transcriptions include correct channel number:
+  - `"Channel":0` = Caller (the person who initiated the call)
+  - `"Channel":1` = Callee (the person who received the call)
+
+**Important stereo mode limitations:**
+- `AZURE_SPEECH_HINTS` is not supported with ConversationTranscriber (stereo mode only)
+- `AZURE_SPEECH_ALTERNATIVE_LANGUAGE_CODES` is not supported in stereo mode
+- Speech start/end detection events are not available in stereo mode
+
+**Example stereo transcription result:**
+```json
+{
+  "Id":"552502b2ed704e48940207fbe64ff3fe",
+  "RecognitionStatus":"Success",
+  "DisplayText":"Hello.",
+  "Offset":241100000,
+  "Duration":4400000,
+  "Channel":1
+}
+```
+
+### Advanced Features
+
+**Speaker Diarization**
+
+Azure Speech Services provides speaker diarization using `ConversationTranscriber`, which separates speakers in audio (e.g., "Guest-1", "Guest-2") using AI-based speaker recognition.
+
+**Important Notes:**
+- **Not Channel-Based**: Azure's streaming SDK doesn't split recognition by audio channels. Instead, it uses speaker diarization to identify different speakers in the conversation, even from mono or mixed audio.
+- **Preview Feature**: Speaker diarization is a preview feature. For production use or access to advanced diarization capabilities, you may need to request access by emailing `diarizationrequest@microsoft.com`.
+- **ConversationTranscriber API**: Our implementation uses `ConversationTranscriber` (stereo mode) which provides speaker identification in the transcription results.
+- **Alternative**: For true channel-based separation, Azure's [Batch Transcription API](https://docs.microsoft.com/azure/cognitive-services/speech-service/batch-transcription) supports multi-channel audio, but not in real-time streaming.
+
+**Configuration:**
+
+```xml
+<action application="set" data="AZURE_DIARIZE_INTERIM_RESULTS=true"/>
+<action application="set" data="AZURE_DIARIZATION_SPEAKER_COUNT=2"/>
+<action application="set" data="AZURE_DIARIZATION_MIN_SPEAKER_COUNT=1"/>
+<action application="set" data="AZURE_DIARIZATION_MAX_SPEAKER_COUNT=2"/>
+```
+
+**Example Output:**
+```json
+{
+  "Type": "ConversationTranscription",
+  "SpeakerId": "Guest-1",
+  "Channel": 0,
+  "DisplayText": "Hello, how are you?"
+}
+```
+
+These settings help Azure better identify different speakers in the conversation. The speaker identification (e.g., "Guest-1", "Guest-2") appears in transcription results.
+
+**References:**
+- [GitHub Issue #1485](https://github.com/Azure-Samples/cognitive-services-speech-sdk/issues/1485) - Streaming SDK doesn't split by channels
+- [GitHub Issue #1748](https://github.com/Azure-Samples/cognitive-services-speech-sdk/issues/1748) - Speaker diarization preview feature
+
+**Word-Level Timestamps**
+
+Enable detailed timing information for each word in the transcription:
+
+```xml
+<action application="set" data="AZURE_WORD_LEVEL_TIMESTAMPS=true"/>
+```
+
+When enabled with detailed output format, you'll get offset and duration for each word.
+
+**Sentiment Analysis**
+
+Enable sentiment analysis to understand the emotional tone of transcribed speech:
+
+```xml
+<action application="set" data="AZURE_SENTIMENT_ANALYSIS=true"/>
+```
+
+Sentiment scores will be included in transcription results when available.
+
+**Dictation Mode**
+
+Enable dictation mode for better punctuation and formatting:
+
+```xml
+<action application="set" data="AZURE_DICTATION_MODE=true"/>
+```
+
+This mode is optimized for dictation scenarios with improved punctuation insertion.
 
 ### Channel Variables
 
@@ -58,8 +153,15 @@ The following channel variables can be set to configure the Azure Speech-to-Text
 | AZURE_PROFANITY_OPTION | Profanity filtering mode: "masked", "removed", or "raw" | raw |
 | AZURE_REQUEST_SNR | If set to "1" or "true", enables signal-to-noise ratio reporting | off |
 | AZURE_INITIAL_SPEECH_TIMEOUT_MS | Initial time to wait for speech before returning no match (milliseconds) | none |
-| AZURE_SPEECH_HINTS | Comma-separated list of phrases or words to expect for improved recognition | none |
+| AZURE_SPEECH_HINTS | Comma-separated list of phrases or words to expect for improved recognition (mono mode only) | none |
 | AZURE_USE_OUTPUT_FORMAT_DETAILED | If set to "true" or "1", provides N-best alternatives and confidence levels | off |
+| AZURE_DIARIZE_INTERIM_RESULTS | If set to "true" or "1", enables speaker identification in interim results (stereo mode only) | true |
+| AZURE_DIARIZATION_SPEAKER_COUNT | Exact number of speakers expected in the conversation (stereo mode only) | 2 |
+| AZURE_DIARIZATION_MIN_SPEAKER_COUNT | Minimum number of speakers in the conversation (stereo mode only) | 1 |
+| AZURE_DIARIZATION_MAX_SPEAKER_COUNT | Maximum number of speakers in the conversation (stereo mode only) | 2 |
+| AZURE_WORD_LEVEL_TIMESTAMPS | If set to "true" or "1", provides word-level timing information | off |
+| AZURE_SENTIMENT_ANALYSIS | If set to "true" or "1", enables sentiment analysis for transcribed text | off |
+| AZURE_DICTATION_MODE | If set to "true" or "1", enables dictation mode for better punctuation and formatting | off |
 
 ## Authentication
 
@@ -179,17 +281,35 @@ Fired when an error occurs during transcription. Contains error details in the e
 
 ## Usage
 
+**Recommended Approach for Production:** Use per-user flag-based configuration with centralized settings in dialplan.
+
+📖 **See:** [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+
+This approach provides:
+- Clean user files (flags only)
+- Centralized Azure credentials management in dialplan
+- Easy per-user service control
+- Works seamlessly with Audio Fork and Deepgram transcription
+
+**Quick Start:**
+- [Complete dialplan example](../../examples/freeswitch-config/dialplan/default.xml)
+- [User 1002 example (Azure enabled)](../../examples/freeswitch-config/directory/1002.xml)
+
+**Docker Users:** The Azure Docker image (`freeswitch-mod-azure-transcribe:latest`) includes these configuration files pre-installed and ready to use. See [Docker documentation](../../dockerfiles/README.md#mod_azure_transcribe) for details.
+
+---
+
 ### Using drachtio-fsmrf
 
 When using [drachtio-fsmrf](https://www.npmjs.com/package/drachtio-fsmrf), you can access this API command via the api method on the 'endpoint' object.
 
 ```javascript
-// Basic transcription
+// Basic transcription with stereo audio
 await ep.set({
   AZURE_SUBSCRIPTION_KEY: 'your-subscription-key',
   AZURE_REGION: 'eastus'
 });
-ep.api('azure_transcribe', `${ep.uuid} start en-US interim`);
+ep.api('uuid_azure_transcribe', `${ep.uuid} start en-US interim stereo`);
 
 // With detailed output and profanity filtering
 await ep.set({
@@ -199,16 +319,51 @@ await ep.set({
   AZURE_PROFANITY_OPTION: 'masked',
   AZURE_SPEECH_HINTS: 'weather,forecast,temperature'
 });
-ep.api('azure_transcribe', `${ep.uuid} start en-US interim`);
+ep.api('uuid_azure_transcribe', `${ep.uuid} start en-US interim stereo`);
 
 // Stop transcription
-ep.api('azure_transcribe', `${ep.uuid} stop`);
+ep.api('uuid_azure_transcribe', `${ep.uuid} stop`);
 ```
 
 ### Using FreeSWITCH Dialplan
 
+**Recommended: Per-User Flag-Based Approach**
+
+See: [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+
 ```xml
-<extension name="azure_transcribe">
+<!-- In dialplan: Check flag and start transcription AFTER answer -->
+<extension name="azure_conditional" continue="true">
+  <condition field="${user_data(${caller_id_number}@${domain_name} var enable_azure)}" expression="^true$">
+    <condition field="destination_number" expression="^(.+)$">
+      <action application="log" data="INFO [AZURE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Azure"/>
+
+      <!-- Set Azure configuration (centralized) -->
+      <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-key"/>
+      <action application="set" data="AZURE_REGION=eastus"/>
+
+      <!-- Start transcription AFTER call is answered (api_on_answer for API command) -->
+      <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim stereo"/>
+      <action application="set" data="api_hangup_hook=uuid_azure_transcribe ${uuid} stop"/>
+    </condition>
+  </condition>
+</extension>
+```
+
+**Benefits:**
+- Uses `user_data()` function for reliable flag checking (production-proven)
+- Starts transcription AFTER call is answered (not during routing)
+- Stereo mode properly identifies caller (Channel 0) vs callee (Channel 1) using ConversationTranscriber
+- User files contain only flags (`enable_azure=true`)
+- Azure credentials centralized in dialplan
+- Works with Audio Fork and Deepgram transcription
+
+---
+
+**Legacy: Direct Application Usage**
+
+```xml
+<extension name="azure_transcribe_test">
   <condition field="destination_number" expression="^transcribe$">
     <action application="answer"/>
     <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-subscription-key"/>

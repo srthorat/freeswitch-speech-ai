@@ -1,0 +1,40 @@
+<include>
+  <!--
+    AUTOMATIC AUDIO FORKING FOR ALL CALLS (AFTER ANSWER)
+
+    This dialplan extension automatically forks audio for ALL calls
+    to a WebSocket server for real-time processing AFTER the call is answered.
+
+    IMPORTANT:
+    - The "00_" prefix ensures this runs BEFORE other dialplan extensions
+    - continue="true" allows the call to proceed to other extensions
+    - The condition field="destination_number" with expression="^.*$" matches ALL calls
+    - api_on_answer ensures audio fork starts AFTER call is answered (not during early media)
+    - uuid_audio_fork is an API command, so use api_on_answer (NOT execute_on_answer)
+
+    Installation:
+    1. Copy this file to: /usr/local/freeswitch/conf/dialplan/default/00_audio_fork_all_calls.xml
+    2. Update the WebSocket URL (ws://20.244.30.42:8077/stream) to match your server
+    3. Reload: fs_cli -x 'reloadxml'
+    4. Test by making any call
+
+    For inline execution (starts during early media/ringing):
+    - Replace the api_on_answer line with:
+      <action application="uuid_audio_fork" data="${uuid} start ws://..."/>
+  -->
+  <extension name="audio_fork_all_calls" continue="true">
+    <!-- Match ALL calls - the condition MUST have a field attribute -->
+    <condition field="destination_number" expression="^.*$">
+
+      <!-- Log the call setup for debugging -->
+      <action application="log" data="INFO [AUDIO_FORK] Setting up auto-fork for: ${caller_id_number} → ${destination_number}"/>
+
+      <!-- Start audio forking AFTER call is answered (API command, use api_on_answer) -->
+      <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
+
+      <!-- Set hangup hook to stop audio forking when call ends -->
+      <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop {'end_time':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
+
+    </condition>
+  </extension>
+</include>

@@ -33,7 +33,24 @@ Wait for the build to complete. You should see:
 ✅ Sample configuration installed
 ```
 
-### Step 2: Tag the Image for Docker Hub
+### Step 2: Verify Local Image Exists
+
+Before pushing, verify the image was built successfully:
+
+```bash
+# Check if image already exists
+docker images | grep "freeswitch-base.*1.10.11"
+
+# Get image size
+docker images freeswitch-base:1.10.11 --format "{{.Repository}}:{{.Tag}}\t{{.Size}}"
+```
+
+If the image is not found, build it first:
+```bash
+./dockerfiles/build-freeswitch-base.sh freeswitch-base:1.10.11
+```
+
+### Step 3: Tag the Image for Docker Hub
 
 Replace `YOUR_DOCKERHUB_USERNAME` with your actual Docker Hub username:
 
@@ -51,13 +68,19 @@ docker tag freeswitch-base:1.10.11 johndoe/freeswitch-base:1.10.11
 docker tag freeswitch-base:1.10.11 johndoe/freeswitch-base:latest
 ```
 
-### Step 3: Login to Docker Hub
+### Step 4: Login to Docker Hub
 
 ```bash
 docker login
 ```
 
 Enter your Docker Hub username and password when prompted.
+
+**Check if already logged in**:
+```bash
+docker info 2>/dev/null | grep Username
+# If you see a username, you're already logged in
+```
 
 **Alternative** (using access token for better security):
 ```bash
@@ -66,7 +89,7 @@ docker login -u YOUR_DOCKERHUB_USERNAME
 # Paste access token when prompted for password
 ```
 
-### Step 4: Push to Docker Hub
+### Step 5: Push to Docker Hub
 
 ```bash
 # Push the versioned tag
@@ -87,9 +110,36 @@ abc123def456: Pushed
 1.10.11: digest: sha256:xxxxx size: 1234
 ```
 
-### Step 5: Verify on Docker Hub
+### Step 6: Verify on Docker Hub
 
 Visit https://hub.docker.com/r/YOUR_DOCKERHUB_USERNAME/freeswitch-base to confirm the image is published.
+
+**You should see**:
+- Image name: `YOUR_DOCKERHUB_USERNAME/freeswitch-base`
+- Tags: `1.10.11` and `latest`
+- Image size: ~800 MB - 1 GB
+- Push timestamp
+
+### Pull Command for Others
+
+Once published, share this command with your team:
+```bash
+docker pull YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+```
+
+**Run on any machine** (including MacBook with Apple Silicon):
+```bash
+docker run -d \
+    --name freeswitch \
+    --platform linux/amd64 \
+    -p 5060:5060/tcp \
+    -p 5060:5060/udp \
+    -p 5080:5080/tcp \
+    -p 5080:5080/udp \
+    -p 8021:8021/tcp \
+    -p 16384-16484:16384-16484/udp \
+    YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+```
 
 ---
 

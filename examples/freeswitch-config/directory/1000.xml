@@ -1,0 +1,32 @@
+<include>
+  <!--
+    USER 1000: Audio Fork Enabled
+
+    This user has Audio Fork (WebSocket streaming) enabled.
+    All audio from calls made by or to this user will be streamed
+    to the WebSocket server configured in dialplan.
+
+    Installation:
+      cp examples/freeswitch-config/directory/1000.xml.complete \
+         /usr/local/freeswitch/conf/directory/default/1000.xml
+
+      fs_cli -x 'reloadxml'
+  -->
+  <user id="1000">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1000"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1000"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+      <variable name="effective_caller_id_number" value="1000"/>
+
+      <!-- ⚙️ SERVICE FLAG: Audio Fork Enabled -->
+      <!-- All audio fork settings (WebSocket URL, mix type) are in dialplan -->
+      <variable name="enable_audio_fork" value="true"/>
+    </variables>
+  </user>
+</include>

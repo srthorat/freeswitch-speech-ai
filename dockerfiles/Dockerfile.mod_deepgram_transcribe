@@ -1,0 +1,197 @@
+# ============================================================================
+# Dockerfile for mod_deepgram_transcribe - Based on mod_audio_fork Image
+# ============================================================================
+# This Dockerfile builds mod_deepgram_transcribe on top of
+# srt2011/freeswitch-mod-audio-fork:latest which already includes:
+#   - FreeSWITCH 1.10.11 fully built and configured
+#   - All required configs for SIP calls (extensions 1000-1001)
+#   - Event Socket configured for fs_cli
+#   - Production patches and optimizations
+#   - libwebsockets 4.3.3 (required dependency)
+#
+# This Dockerfile ONLY adds:
+#   - libwebsockets 4.3.3 (rebuilt for dev headers)
+#   - mod_deepgram_transcribe module build
+#
+# Build time: ~12-15 minutes
+# ============================================================================
+
+ARG BASE_IMAGE=srt2011/freeswitch-mod-audio-fork:latest
+FROM ${BASE_IMAGE} AS builder
+
+# Build argument for CPUs
+ARG BUILD_CPUS=4
+
+# Print build configuration
+RUN echo "=============================================" \
+    && echo "Building mod_deepgram_transcribe" \
+    && echo "=============================================" \
+    && echo "Base Image: ${BASE_IMAGE}" \
+    && echo "Dependencies: libwebsockets (rebuilt for headers), speexdsp" \
+    && echo "Build CPUs: ${BUILD_CPUS}" \
+    && echo "============================================="
+
+# Install build dependencies (minimal - just build tools)
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    build-essential \
+    git \
+    cmake \
+    libssl-dev \
+    libspeexdsp-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set library path
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# ============================================================================
+# Build libwebsockets (need headers for compilation)
+# ============================================================================
+ARG LIBWEBSOCKETS_VERSION=4.3.3
+WORKDIR /usr/local/src
+RUN echo "=========================================" \
+    && echo "Building libwebsockets ${LIBWEBSOCKETS_VERSION}..." \
+    && echo "=========================================" \
+    && git clone --depth 1 -b v${LIBWEBSOCKETS_VERSION} https://github.com/warmcat/libwebsockets.git \
+    && cd libwebsockets \
+    && mkdir -p build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && ldconfig \
+    && echo "✅ libwebsockets ${LIBWEBSOCKETS_VERSION} built (headers available for compilation)"
+
+# ============================================================================
+# Copy mod_deepgram_transcribe source and build it
+# ============================================================================
+WORKDIR /usr/local/src
+COPY ./modules/mod_deepgram_transcribe /usr/local/src/mod_deepgram_transcribe
+
+RUN echo "=========================================" \
+    && echo "Building mod_deepgram_transcribe..." \
+    && echo "=========================================" \
+    && cd /usr/local/src/mod_deepgram_transcribe \
+    && echo "" \
+    && echo "Source files:" \
+    && ls -lh *.c *.cpp 2>/dev/null || true \
+    && echo "" \
+    && echo "Compiling C file with gcc..." \
+    && gcc -fPIC -c \
+        -I/usr/local/freeswitch/include/freeswitch \
+        -I/usr/local/include \
+        mod_deepgram_transcribe.c \
+    && echo "✅ mod_deepgram_transcribe.c compiled" \
+    && echo "" \
+    && echo "Compiling C++ files with g++ (C++11)..." \
+    && g++ -fPIC -c -std=c++11 \
+        -I/usr/local/freeswitch/include/freeswitch \
+        -I/usr/local/include \
+        dg_transcribe_glue.cpp \
+    && echo "✅ dg_transcribe_glue.cpp compiled" \
+    && g++ -fPIC -c -std=c++11 \
+        -I/usr/local/freeswitch/include/freeswitch \
+        -I/usr/local/include \
+        audio_pipe.cpp \
+    && echo "✅ audio_pipe.cpp compiled" \
+    && g++ -fPIC -c -std=c++11 \
+        -I/usr/local/freeswitch/include/freeswitch \
+        -I/usr/local/include \
+        parser.cpp \
+    && echo "✅ parser.cpp compiled" \
+    && echo "" \
+    && echo "Linking module..." \
+    && mkdir -p /usr/local/freeswitch/lib/freeswitch/mod \
+    && g++ -shared \
+        -o /usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so \
+        mod_deepgram_transcribe.o \
+        dg_transcribe_glue.o \
+        audio_pipe.o \
+        parser.o \
+        -lwebsockets \
+        -lpthread \
+        -lssl \
+        -lcrypto \
+    && echo "✅ mod_deepgram_transcribe compiled successfully" \
+    && echo "" \
+    && echo "Module location:" \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so
+
+# ============================================================================
+# Validation Stage: Verify module dependencies
+# ============================================================================
+RUN echo "=========================================" \
+    && echo "Module Validation" \
+    && echo "=========================================" \
+    && MODULE_PATH="/usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so" \
+    && echo "" \
+    && echo "1. Check module file exists:" \
+    && if [ -f "$MODULE_PATH" ]; then \
+        echo "✅ Module file exists"; ls -lh "$MODULE_PATH"; \
+    else \
+        echo "❌ ERROR: Module file not found: $MODULE_PATH"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "2. Check module dependencies with ldd:" \
+    && ldd "$MODULE_PATH" \
+    && echo "" \
+    && echo "3. Verify libwebsockets linkage:" \
+    && if ldd "$MODULE_PATH" | grep -q "libwebsockets"; then \
+        echo "✅ Module correctly linked with libwebsockets"; \
+        ldd "$MODULE_PATH" | grep libwebsockets; \
+    else \
+        echo "❌ ERROR: Module not linked with libwebsockets"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "4. Check for missing dependencies:" \
+    && if ldd "$MODULE_PATH" | grep -q "not found"; then \
+        echo "❌ ERROR: Missing dependencies:"; \
+        ldd "$MODULE_PATH" | grep "not found"; exit 1; \
+    else \
+        echo "✅ No missing dependencies"; \
+    fi \
+    && echo "=========================================" \
+    && echo "✅ Static validation passed!" \
+    && echo "========================================="
+
+# ============================================================================
+# Update FreeSWITCH modules.conf.xml to load mod_deepgram_transcribe
+# ============================================================================
+RUN sed -i '/<\/modules>/i \    <load module="mod_deepgram_transcribe"/>' \
+    /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml \
+    && echo "✅ Added mod_deepgram_transcribe to modules.conf.xml"
+
+# ============================================================================
+# Runtime Validation: Quick module load test
+# ============================================================================
+RUN export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH \
+    && timeout 60s /usr/local/freeswitch/bin/freeswitch -nonat -nc -nf >/dev/null 2>&1 & FS_PID=$! \
+    && sleep 15 \
+    && grep -q "mod_deepgram_transcribe" /usr/local/freeswitch/log/freeswitch.log \
+    && ! grep "mod_deepgram_transcribe" /usr/local/freeswitch/log/freeswitch.log | grep -qiE "error|fail|cannot|unable" \
+    && kill $FS_PID 2>/dev/null || true \
+    && echo "✅ Runtime validation passed - mod_deepgram_transcribe loaded successfully"
+
+# ============================================================================
+# Final Stage: Clean Runtime Image
+# ============================================================================
+FROM ${BASE_IMAGE} AS runtime
+
+# Copy mod_deepgram_transcribe module
+COPY --from=builder /usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so /usr/local/freeswitch/lib/freeswitch/mod/
+
+# Copy updated modules.conf.xml
+COPY --from=builder /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml /usr/local/freeswitch/conf/autoload_configs/
+
+# Update library cache
+RUN ldconfig
+
+# Set environment
+ENV PATH="/usr/local/freeswitch/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib"
+
+# Labels
+LABEL maintainer="FreeSWITCH mod_deepgram_transcribe"
+LABEL description="FreeSWITCH with mod_deepgram_transcribe - based on srt2011/freeswitch-mod-audio-fork:latest"
+LABEL base.image="srt2011/freeswitch-mod-audio-fork:latest"
+LABEL module="mod_deepgram_transcribe"
+LABEL dependency="libwebsockets-4.3.3 (from base)"
