@@ -11,12 +11,12 @@
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-audio-fork:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest
-#   ./run-on-macbook.sh freeswitch-mod-aws-transcribe:latest
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest
 #
 # With API keys for transcription:
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest "" YOUR_AZURE_KEY eastus
-#   ./run-on-macbook.sh freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1
 #
 # ============================================================================
 
@@ -42,12 +42,12 @@ if [ -z "$REMOTE_IMAGE" ]; then
     echo "  $0 srt2011/freeswitch-mod-audio-fork:latest"
     echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest"
     echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest"
-    echo "  $0 freeswitch-mod-aws-transcribe:latest"
+    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest"
     echo ""
     echo "With API keys:"
     echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY"
     echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
-    echo "  $0 freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1"
+    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY YOUR_AWS_SECRET_KEY us-east-1"
     exit 1
 fi
 
