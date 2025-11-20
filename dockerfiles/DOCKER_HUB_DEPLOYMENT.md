@@ -38,7 +38,7 @@ Wait for the build to complete. You should see:
 Before pushing, verify the image was built successfully:
 
 ```bash
-# Check if image exists
+# Check if image already exists
 docker images | grep "freeswitch-base.*1.10.11"
 
 # Get image size
