@@ -1709,6 +1709,154 @@ aws_transcribe <uuid> stop
 
 See `modules/mod_aws_transcribe/README.md` for detailed speaker identification guide with cost comparison and use cases.
 
+### Build Issues and Solutions
+
+During development, we encountered and resolved several critical build issues:
+
+#### 1. cJSON Header Conflict ⚠️ CRITICAL
+
+**Problem:** Duplicate symbol errors during linking
+```
+duplicate symbol '_cJSON_CreateObject' in:
+    mod_aws_transcribe.o
+    libaws-cpp-sdk-core.so (via bundled cJSON)
+```
+
+**Root Cause:**
+- AWS SDK C++ v1.11.345 bundles its own cJSON in `/usr/local/include/aws/core/external/cjson/cJSON.h`
+- mod_aws_transcribe uses FreeSWITCH's system cJSON library
+- Without header guards, both symbols conflict during linking
+
+**Solution Applied** (Dockerfile lines 101-123):
+```dockerfile
+# Add header guards to AWS SDK's bundled cJSON
+RUN sed -i '/#ifndef cJSON_AS4CPP__h/i #ifndef cJSON__h\n#define cJSON__h' \
+        /usr/local/include/aws/core/external/cjson/cJSON.h \
+    && echo '#endif' >> /usr/local/include/aws/core/external/cjson/cJSON.h
+```
+
+This fix wraps AWS SDK's cJSON with additional header guards to prevent conflicts.
+
+#### 2. Missing libspeexdsp Dependency
+
+**Problem:** Compilation error
+```
+fatal error: speex/speex_resampler.h: No such file or directory
+```
+
+**Root Cause:**
+- mod_aws_transcribe uses `speex_resampler` for automatic audio resampling (8kHz → 16kHz)
+- Required for converting various codec sample rates to AWS Transcribe's 16kHz requirement
+- `libspeexdsp-dev` was missing from builder stage
+
+**Solution Applied** (Dockerfile line 61):
+```dockerfile
+# Builder stage dependencies
+RUN apt-get install -y libspeexdsp-dev  # Provides speex/speex_resampler.h
+
+# Runtime stage dependencies
+RUN apt-get install -y libspeexdsp1     # Provides libspeexdsp.so.1
+```
+
+#### 3. Missing AWS Common Runtime (CRT) Libraries
+
+**Problem:** Runtime dependency errors
+```
+libaws-crt-cpp.so => not found
+libs2n.so.1 => not found
+```
+
+**Root Cause:**
+- AWS SDK 1.11.345 depends on AWS Common Runtime libraries
+- Wildcard pattern `libaws-c-*.so*` didn't match `libaws-crt-cpp` or `libs2n`
+- Libraries were built but not copied to runtime stage
+
+**Solution Applied** (Dockerfile lines 234, 236):
+```dockerfile
+# Copy additional AWS CRT libraries to runtime stage
+COPY --from=builder /usr/local/lib/libaws-crt-cpp.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libs2n.so* /usr/local/lib/
+```
+
+**Why This Happened:**
+- `libaws-c-*.so*` matches: `libaws-c-common`, `libaws-c-event-stream`, etc.
+- Does NOT match: `libaws-crt-cpp` (has "crt" in middle, not "c-" prefix)
+- Does NOT match: `libs2n` (doesn't start with "libaws")
+
+#### 4. Undefined ARG Variable Warning
+
+**Problem:** Docker build warning
+```
+UndefinedVar: Usage of undefined variable '$AWS_SDK_CPP_VERSION' (line 337)
+```
+
+**Root Cause:**
+- ARG variables are scoped to the build stage where they're defined
+- Runtime stage used `${AWS_SDK_CPP_VERSION}` in a LABEL but ARG wasn't re-declared
+
+**Solution Applied** (Dockerfile line 218):
+```dockerfile
+# Runtime Stage
+FROM ${BASE_IMAGE} AS runtime
+
+# Re-declare ARG for runtime stage (ARGs don't persist across stages)
+ARG AWS_SDK_CPP_VERSION=1.11.345
+```
+
+### AWS SDK Version Strategy
+
+**Current Default:** `1.11.345` (tested and stable)
+
+**Verified Compatible Versions:**
+- ✅ **1.11.200+** - All versions from 1.11.200 onwards work
+- ✅ **1.11.345** - Default in Docker builds (recommended)
+- ✅ **1.11.694** - Latest as of 2025-01 (upgrade available)
+
+**To use a different version:**
+```bash
+# Via build script
+./dockerfiles/docker-build-mod-aws-transcribe.sh \
+  my-image:latest \
+  1.11.694
+
+# Via docker build
+docker build \
+  --build-arg AWS_SDK_CPP_VERSION=1.11.694 \
+  -f dockerfiles/Dockerfile.mod_aws_transcribe \
+  -t my-image:latest .
+```
+
+**Recommendation:** Use 1.11.345 for stability. Upgrade to newer versions only if you need specific features or bug fixes.
+
+### Complete Dependency List
+
+**Builder Stage:**
+- `build-essential` - gcc, g++, make
+- `git` - Clone AWS SDK
+- `cmake` - Build AWS SDK
+- `libcurl4-openssl-dev` - HTTP client for AWS
+- `libssl-dev` - TLS/SSL support
+- `uuid-dev` - UUID generation
+- `zlib1g-dev` - Compression
+- `libpulse-dev` - PulseAudio support (AWS SDK)
+- `libspeexdsp-dev` - Audio resampling (NEW - added for this module)
+
+**Runtime Stage:**
+- `libcurl4` - HTTP client runtime
+- `libssl1.1` - TLS/SSL runtime
+- `zlib1g` - Compression runtime
+- `libpulse0` - PulseAudio runtime
+- `libspeexdsp1` - Audio resampling runtime (NEW - added for this module)
+
+**AWS Libraries (copied from builder):**
+- `libaws-cpp-sdk-transcribestreaming.so` - AWS Transcribe Streaming API
+- `libaws-cpp-sdk-core.so` - AWS SDK core
+- `libaws-c-event-stream.so` - Event stream handling
+- `libaws-checksums.so` - Data checksums
+- `libaws-c-common.so` - Common AWS utilities
+- `libaws-crt-cpp.so` - AWS Common Runtime C++ (NEW - explicit copy needed)
+- `libs2n.so.1` - AWS s2n TLS library (NEW - explicit copy needed)
+
 ### Supported Languages (Examples)
 
 - **English**: en-US, en-GB, en-AU, en-IN
