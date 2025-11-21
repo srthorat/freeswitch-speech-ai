@@ -1694,8 +1694,8 @@ Best for development and testing:
 ```bash
 docker run -d --name freeswitch \\
   -p 5060:5060/udp \\
-  -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \\
-  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \\
+  -e AWS_ACCESS_KEY_ID=AKIA**************** \\
+  -e AWS_SECRET_ACCESS_KEY=**************************************** \\
   -e AWS_REGION=us-east-1 \\
   srt2011/freeswitch-mod-aws-transcribe:latest
 ```
@@ -1707,14 +1707,16 @@ For SSO or STS temporary credentials (requires session token):
 ```bash
 docker run -d --name freeswitch \\
   -p 5060:5060/udp \\
-  -e AWS_ACCESS_KEY_ID=ASIAIOSFODNN7EXAMPLE \\
-  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \\
+  -e AWS_ACCESS_KEY_ID=ASIA**************** \\
+  -e AWS_SECRET_ACCESS_KEY=**************************************** \\
   -e AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjE... \\
   -e AWS_REGION=us-east-1 \\
   srt2011/freeswitch-mod-aws-transcribe:latest
 ```
 
 ⚠️ **Critical**: ASIA* credentials **require** `AWS_SESSION_TOKEN` or you'll get authentication errors.
+
+> **Security Note**: Replace masked values with your actual AWS credentials. Never commit real credentials to git or documentation.
 
 #### 3. IAM Roles (Production)
 

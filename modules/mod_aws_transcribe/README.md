@@ -187,20 +187,22 @@ The module uses a **three-tier authentication priority**:
 
 **For permanent IAM credentials (AKIA*):**
 ```bash
-docker run -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \
-           -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+docker run -e AWS_ACCESS_KEY_ID=AKIA**************** \
+           -e AWS_SECRET_ACCESS_KEY=**************************************** \
            -e AWS_REGION=us-east-1 \
            srt2011/freeswitch-mod-aws-transcribe:latest
 ```
 
 **For temporary STS credentials (ASIA*):**
 ```bash
-docker run -e AWS_ACCESS_KEY_ID=ASIAIOSFODNN7EXAMPLE \
-           -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+docker run -e AWS_ACCESS_KEY_ID=ASIA**************** \
+           -e AWS_SECRET_ACCESS_KEY=**************************************** \
            -e AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjE... \
            -e AWS_REGION=us-east-1 \
            srt2011/freeswitch-mod-aws-transcribe:latest
 ```
+
+> **Note**: Replace the masked values with your actual AWS credentials. Never commit real credentials to git.
 
 Dialplan should NOT set these variables (comment them out):
 ```xml
