@@ -796,6 +796,111 @@ If experiencing connection problems:
 3. Ensure DNS can resolve Deepgram endpoints
 4. Check network latency - Deepgram has global endpoints
 
+## Outbound Call Handling
+
+When making outbound calls from FreeSWITCH (originating calls to external numbers), the channel mapping for speaker identification remains consistent with inbound calls:
+
+### Channel Mapping for Outbound Calls
+
+**Stereo Mode Channel Assignment:**
+- **Channel 0** (Left audio) = Caller/Originator (FreeSWITCH side / A-leg)
+- **Channel 1** (Right audio) = Callee/Destination (External party / B-leg)
+
+This mapping is the same regardless of call direction (inbound vs outbound).
+
+### Dialplan Configuration for Outbound Calls
+
+**Using `api_on_answer` for outbound calls:**
+
+```xml
+<extension name="outbound_call_with_transcription">
+  <condition field="destination_number" expression="^9(\d{10})$">
+    <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+    <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+    <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+
+    <!-- Start transcription AFTER call is answered -->
+    <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
+    <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
+
+    <!-- Bridge to external number -->
+    <action application="bridge" data="sofia/external/1$1@sip-provider.com"/>
+  </condition>
+</extension>
+```
+
+**Using JavaScript/Lua for outbound calls:**
+
+```javascript
+// Using drachtio-fsmrf for outbound calls
+const ms = await mrf.connect({...});
+const ep = await ms.createEndpoint();
+
+// Set transcription config before making call
+await ep.set({
+  DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY,
+  DEEPGRAM_SPEECH_MODEL: 'phonecall',
+  DEEPGRAM_SPEECH_TIER: 'nova'
+});
+
+// Make outbound call
+await ep.execute('bridge', 'sofia/external/15551234567@provider.com');
+
+// Start transcription after answer
+await ep.api('uuid_deepgram_transcribe', `${ep.uuid} start en-US interim stereo`);
+```
+
+### Metadata and Speaker Identification for Outbound Calls
+
+The module automatically extracts caller/callee information from FreeSWITCH channel variables:
+
+**For Outbound Calls:**
+- `caller_id_name` / `caller_id_number` → Channel 0 (FreeSWITCH/Originator)
+- `destination_number` / `callee_id_name` → Channel 1 (External party/Destination)
+
+**Example metadata for outbound call to +15551234567:**
+
+```json
+{
+  "callerName": "Extension 1000",
+  "callerNumber": "1000",
+  "calleeName": "Unknown",
+  "calleeNumber": "15551234567",
+  "call-Id": "abc123-def456@domain.com"
+}
+```
+
+### Pusher Integration for Outbound Calls
+
+When using Pusher for real-time transcription delivery, outbound calls work identically to inbound calls:
+
+**Transformed format sent to Pusher:**
+
+```json
+{
+  "type": "final",
+  "speaker_id": "Extension 1000(1000)",
+  "text": "Hello, this is John calling about...",
+  "timestamp": "2025-11-21T10:30:45Z"
+}
+```
+
+```json
+{
+  "type": "interim",
+  "speaker_id": "Unknown(15551234567)",
+  "text": "Hi John, how can I help you?",
+  "timestamp": "2025-11-21T10:30:52Z"
+}
+```
+
+**Key Points:**
+- Speaker mapping uses `channel_index` ONLY (not AI speaker detection)
+- Channel 0 always maps to caller (originator)
+- Channel 1 always maps to callee (destination)
+- Metadata is extracted automatically from channel variables
+- Works with both inbound and outbound call scenarios
+
 ## Examples
 
 See the examples directory for sample applications demonstrating Deepgram transcription with FreeSWITCH.

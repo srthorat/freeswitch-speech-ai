@@ -722,6 +722,137 @@ ep.on('aws_transcribe::transcription', (evt, result) => {
 
 ---
 
+## Outbound Call Handling
+
+When making outbound calls from FreeSWITCH (originating calls to external numbers), the channel mapping for speaker identification remains consistent with inbound calls:
+
+### Channel Mapping for Outbound Calls
+
+**Stereo Mode Channel Assignment:**
+- **Channel 0** (ch_0) = Caller/Originator (FreeSWITCH side / A-leg)
+- **Channel 1** (ch_1) = Callee/Destination (External party / B-leg)
+
+This mapping is the same regardless of call direction (inbound vs outbound).
+
+### Dialplan Configuration for Outbound Calls
+
+**Using `api_on_answer` for outbound calls:**
+
+```xml
+<extension name="outbound_call_with_transcription">
+  <condition field="destination_number" expression="^9(\d{10})$">
+    <action application="set" data="AWS_REGION=us-east-1"/>
+    <action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
+    <action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
+
+    <!-- Start transcription AFTER call is answered -->
+    <action application="set" data="api_on_answer=uuid_aws_transcribe ${uuid} start en-US interim stereo"/>
+    <action application="set" data="api_hangup_hook=uuid_aws_transcribe ${uuid} stop"/>
+
+    <!-- Bridge to external number -->
+    <action application="bridge" data="sofia/external/1$1@sip-provider.com"/>
+  </condition>
+</extension>
+```
+
+**Using JavaScript/Lua for outbound calls:**
+
+```javascript
+// Using drachtio-fsmrf for outbound calls
+const ms = await mrf.connect({...});
+const ep = await ms.createEndpoint();
+
+// Set transcription config before making call
+await ep.set({
+  AWS_REGION: 'us-east-1',
+  AWS_ENABLE_CHANNEL_IDENTIFICATION: 'true',
+  AWS_NUMBER_OF_CHANNELS: '2'
+});
+
+// Make outbound call
+await ep.execute('bridge', 'sofia/external/15551234567@provider.com');
+
+// Start transcription after answer
+await ep.api('uuid_aws_transcribe', `${ep.uuid} start en-US interim stereo`);
+```
+
+### Metadata and Speaker Identification for Outbound Calls
+
+The module automatically extracts caller/callee information from FreeSWITCH channel variables:
+
+**For Outbound Calls:**
+- `caller_id_name` / `caller_id_number` → Channel 0 (ch_0) (FreeSWITCH/Originator)
+- `destination_number` / `callee_id_name` → Channel 1 (ch_1) (External party/Destination)
+
+**Example metadata for outbound call to +15551234567:**
+
+```json
+{
+  "callerName": "Extension 1000",
+  "callerNumber": "1000",
+  "calleeName": "Unknown",
+  "calleeNumber": "15551234567",
+  "call-Id": "abc123-def456@domain.com"
+}
+```
+
+### AWS Transcription Output for Outbound Calls
+
+When using channel identification, AWS returns results with `channel_id`:
+
+```json
+[
+  {
+    "is_final": true,
+    "channel_id": "ch_0",
+    "alternatives": [{
+      "transcript": "Hello, this is John from ABC Company."
+    }]
+  },
+  {
+    "is_final": true,
+    "channel_id": "ch_1",
+    "alternatives": [{
+      "transcript": "Hi John, how can I help you today?"
+    }]
+  }
+]
+```
+
+### Pusher Integration for Outbound Calls
+
+When using Pusher for real-time transcription delivery, outbound calls work identically to inbound calls:
+
+**Transformed format sent to Pusher:**
+
+```json
+{
+  "type": "final",
+  "speaker_id": "Extension 1000(1000)",
+  "text": "Hello, this is John from ABC Company.",
+  "timestamp": "2025-11-21T10:30:45Z"
+}
+```
+
+```json
+{
+  "type": "interim",
+  "speaker_id": "Unknown(15551234567)",
+  "text": "Hi John, how can I help you today?",
+  "timestamp": "2025-11-21T10:30:52Z"
+}
+```
+
+**Key Points:**
+- Speaker mapping uses `ChannelId` (ch_0, ch_1) for accurate separation
+- Channel 0 (ch_0) always maps to caller (originator)
+- Channel 1 (ch_1) always maps to callee (destination)
+- Metadata is extracted automatically from channel variables
+- Works with both inbound and outbound call scenarios
+- 100% accurate speaker separation (physical channel-based, not AI)
+
+---
+
 ## Usage
 
 **Recommended Approach for Production:** Use per-user flag-based configuration with centralized settings in dialplan.
