@@ -1,34 +1,93 @@
-# FreeSWITCH Docker Images
+# FreeSWITCH Docker Images - Complete Documentation
 
-This directory contains Dockerfiles for building FreeSWITCH images with different configurations:
-
-1. **Base Image** - Complete FreeSWITCH installation with all standard modules
-2. **Individual Module Images** - Minimal FreeSWITCH with specific modules for testing
+> **Comprehensive guide for building, deploying, and running FreeSWITCH Docker images with speech transcription capabilities.**
 
 ---
 
-## 🚀 Quick Start: Running on MacBook(Local)
+## 📑 Table of Contents
 
-**Want to quickly test on your MacBook?** See the comprehensive guide:
+### Quick Navigation
+- [🚀 Quick Start](#-quick-start)
+- [🐳 Available Docker Images](#-available-docker-images)
+  - [1. FreeSWITCH Base Image](#1-freeswitch-base-image)
+  - [2. mod_audio_fork](#2-mod_audio_fork)
+  - [3. mod_deepgram_transcribe](#3-mod_deepgram_transcribe)
+  - [4. mod_azure_transcribe](#4-mod_azure_transcribe)
+  - [5. mod_aws_transcribe](#5-mod_aws_transcribe)
+  - [6. mod_google_transcribe](#6-mod_google_transcribe)
+- [⚙️ Configuration Guide](#️-configuration-guide)
+  - [Deepgram Configuration](#deepgram-configuration)
+  - [Azure Configuration](#azure-configuration)
+  - [AWS Configuration](#aws-configuration)
+  - [Google Configuration](#google-configuration)
+- [🧪 Testing & Verification](#-testing--verification)
+- [🔧 Troubleshooting](#-troubleshooting)
+- [🚢 Production Deployment](#-production-deployment)
+- [📚 Useful Commands Reference](#-useful-commands-reference)
 
-📘 **[RUN_ON_MACBOOK.md](RUN_ON_MACBOOK.md)** - Complete MacBook setup guide with examples
+### Detailed Guides (Appendices)
+- [📦 Appendix A: Complete FreeSWITCH Installation Guide](#appendix-a-complete-freeswitch-installation-guide)
+  - Build dependencies, errors & solutions, multi-stage builds
+- [🍎 Appendix B: Complete MacBook Testing Guide](#appendix-b-complete-macbook-testing-guide)
+  - SIP client setup, testing procedures, platform notes
+- [☁️ Appendix C: Docker Hub Deployment Guide](#appendix-c-docker-hub-deployment-guide)
+  - Push/pull workflow, production deployment
 
-```bash
-# Example: Run with Deepgram transcription
-./dockerfiles/run-on-macbook.sh \
-  srt2011/freeswitch-mod-deepgram-transcribe:latest \
+---
+
+## 🚀 Quick Start
+
+### Running Pre-built Images
+
+\`\`\`bash
+# Base FreeSWITCH (no transcription)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-base:latest
+
+# With Deepgram transcription
+./dockerfiles/run-on-macbook.sh \\
+  srt2011/freeswitch-mod-deepgram-transcribe:latest \\
   YOUR_DEEPGRAM_API_KEY
-```
+
+# With Azure transcription (includes ALL modules)
+./dockerfiles/run-on-macbook.sh \\
+  srt2011/freeswitch-mod-azure-transcribe:latest \\
+  "" \\
+  YOUR_AZURE_SUBSCRIPTION_KEY \\
+  eastus
+
+# With AWS transcription
+./dockerfiles/run-on-macbook.sh \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
+
+# With Google transcription
+./dockerfiles/run-on-macbook.sh \\
+  srt2011/freeswitch-mod-google-transcribe:latest
+\`\`\`
+
+### Building Your Own Images
+
+\`\`\`bash
+# Build base image (30-45 minutes)
+./dockerfiles/build-freeswitch-base.sh freeswitch-base:1.10.11
+
+# Build with specific module (15-45 minutes)
+./dockerfiles/docker-build-mod-audio-fork.sh
+./dockerfiles/docker-build-mod-deepgram-transcribe.sh
+./dockerfiles/docker-build-mod-azure-transcribe.sh
+./dockerfiles/docker-build-mod-aws-transcribe.sh
+./dockerfiles/docker-build-mod-google-transcribe.sh
+\`\`\`
 
 ---
+
 
 ## 1. FreeSWITCH Base Image (Recommended Starting Point)
 
 **Files**:
 - Dockerfile: `Dockerfile.freeswitch-base`
 - Build Script: `build-freeswitch-base.sh`
-- Detailed Install Guide: `FREESWITCH_INSTALL.md`
-- Deployment Guide: `DOCKER_HUB_DEPLOYMENT.md`
+- Detailed Install Guide: See [Appendix A: Complete FreeSWITCH Installation Guide](#appendix-a-complete-freeswitch-installation-guide)
+- Deployment Guide: See [Appendix C: Docker Hub Deployment Guide](#appendix-c-docker-hub-deployment-guide)
 
 ### Features
 - ✅ FreeSWITCH 1.10.11 (production release) built from source
@@ -211,9 +270,14 @@ docker exec -it freeswitch fs_cli -x 'uuid_audio_fork bba5d840-47d1-4245-8319-de
 - ✅ 182-line Dockerfile (48% smaller than original)
 - ✅ Behaves identically to base image with mod_audio_fork added
 
-### Manual Verification for mod_audio_fork
+<details>
+<summary><b>Manual Verification for mod_audio_fork</b></summary>
 
 After building or pulling the mod_audio_fork image, verify it manually:
+
+
+</details>
+
 
 #### Step 1: Check Module File Exists
 
@@ -351,9 +415,14 @@ docker exec -it fs fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram'
 - ✅ Includes mod_audio_fork from base image
 - ✅ Automatic static + runtime validation during build
 
-### Manual Verification for mod_deepgram_transcribe
+<details>
+<summary><b>Manual Verification for mod_deepgram_transcribe</b></summary>
 
 After building or pulling the mod_deepgram_transcribe image, verify it manually:
+
+
+</details>
+
 
 #### Step 1: Check Module File Exists
 
@@ -462,7 +531,8 @@ For full API documentation, see: `modules/mod_deepgram_transcribe/README.md`
 
 ## Configuration Guide for mod_deepgram_transcribe
 
-### Method 1: Environment Variables (Container-Wide)
+<details>
+<summary><b>Method 1</b></summary>
 
 Set Deepgram API key and default configuration when starting the container:
 
@@ -480,9 +550,18 @@ docker run -d --name fs \
 
 ---
 
-### Method 2: Dialplan Configuration (Automatic Transcription)
+
+</details>
+
+
+<details>
+<summary><b>Method 2</b></summary>
 
 Add to `/usr/local/freeswitch/conf/dialplan/default.xml` or create a new file in `/usr/local/freeswitch/conf/dialplan/default/`:
+
+
+</details>
+
 
 #### Basic Transcription on All Inbound Calls
 
@@ -646,9 +725,14 @@ freeswitch@internal> reloadxml
 
 ---
 
-### Method 3: fs_cli Commands (Manual Per-Call Control)
+<details>
+<summary><b>Method 3</b></summary>
 
 Control transcription manually for specific calls using fs_cli:
+
+
+</details>
+
 
 #### Start Transcription on Active Call
 
@@ -687,9 +771,14 @@ docker exec -it fs fs_cli -x "uuid_deepgram_transcribe <uuid> stop"
 
 ---
 
-### Method 4: User Directory Configuration (Per-User Defaults)
+<details>
+<summary><b>Method 4</b></summary>
 
 Configure Deepgram settings per user by adding variables to user XML files. This is ideal when you want all calls from specific users/extensions to automatically have transcription capabilities with predefined settings.
+
+
+</details>
+
 
 #### Setup
 
@@ -897,7 +986,8 @@ uuid_deepgram_transcribe abc123 start en-US interim stereo
 
 ---
 
-### Method 4: FreeSWITCH Service Configuration (Supervised/Systemd)
+<details>
+<summary><b>Method 4</b></summary>
 
 #### Option A: Docker Compose with Environment Variables
 
@@ -980,6 +1070,10 @@ docker-compose logs -f freeswitch
 # Stop service
 docker-compose down
 ```
+
+
+</details>
+
 
 #### Option B: Systemd Service (Linux Host)
 
@@ -1291,9 +1385,14 @@ docker run -d \
   freeswitch-mod-azure-transcribe:latest
 ```
 
-### Manual Verification for mod_azure_transcribe
+<details>
+<summary><b>Manual Verification for mod_azure_transcribe</b></summary>
 
 After building or pulling the mod_azure_transcribe image, verify it manually:
+
+
+</details>
+
 
 #### Step 1: Check Module File Exists
 
@@ -1424,6 +1523,694 @@ uuid_azure_transcribe <call-uuid> stop
 ```
 
 For full API documentation, see: `modules/mod_azure_transcribe/README.md`
+
+---
+
+## 5. mod_aws_transcribe
+
+**File**: `Dockerfile.mod_aws_transcribe`
+**Build Script**: `docker-build-mod-aws-transcribe.sh`
+**Base Image**: `srt2011/freeswitch-base:latest` (FreeSWITCH 1.10.11)
+
+**Dependencies Built**:
+- AWS SDK C++ v1.11.345 (core and transcribestreaming)
+- AWS C Common, Event Stream, and Checksums libraries
+
+**Build Time**:
+- Intel/AMD64: **25-35 minutes** (includes AWS SDK C++ build from source)
+- Apple Silicon: **40-50 minutes** (with emulation)
+
+**Usage**:
+```bash
+# Build the image (with custom tag and AWS SDK version)
+./dockerfiles/docker-build-mod-aws-transcribe.sh \\
+  srt2011/freeswitch-mod-aws-transcribe:latest \\
+  1.11.345
+
+# Or use defaults
+./dockerfiles/docker-build-mod-aws-transcribe.sh
+
+# Run FreeSWITCH with AWS credentials
+docker run -d --name fs \\
+  -p 5060:5060/udp \\
+  -p 8021:8021/tcp \\
+  -e AWS_ACCESS_KEY_ID=your-aws-access-key \\
+  -e AWS_SECRET_ACCESS_KEY=your-aws-secret-key \\
+  -e AWS_REGION=us-east-1 \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
+
+# Access fs_cli
+docker exec -it fs fs_cli
+
+# Verify module loaded
+docker exec -it fs fs_cli -x 'show modules' | grep aws_transcribe
+```
+
+**Features**:
+- ✅ Real-time streaming transcription via AWS Transcribe Streaming API
+- ✅ **Two speaker identification methods:**
+  - **Speaker Diarization** (AI-based): Detects up to 10 speakers (spk_0, spk_1...), 85-95% accuracy
+  - **Channel Identification** (telephony-optimized): 100% accurate agent/customer separation via stereo channels
+- ✅ Support for 30+ languages and language identification
+- ✅ Interim and final transcription results
+- ✅ Custom vocabulary support for domain-specific terminology
+- ✅ Vocabulary filtering for profanity or sensitive words
+- ✅ Medical and custom language models
+- ✅ Word-level timestamps and confidence scores
+- ✅ Built on stable freeswitch-base image
+- ✅ Automatic static + runtime validation during build
+- ✅ Pre-configured example configuration files
+
+**Included Configuration Files**:
+
+The Docker image includes pre-configured FreeSWITCH configuration files ready for testing:
+
+- **`/usr/local/freeswitch/conf/dialplan/default.xml`** - Complete dialplan with AWS Transcribe extension (EXTENSION 4)
+- **`/usr/local/freeswitch/conf/directory/default/1000.xml`** - User 1000 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1001.xml`** - User 1001 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1002.xml`** - User 1002 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1003.xml`** - User 1003 with AWS Transcribe enabled
+
+**Authentication Methods**:
+
+1. **Environment variables** (recommended for Docker):
+```bash
+docker run -d \\
+  -e AWS_ACCESS_KEY_ID=your-key \\
+  -e AWS_SECRET_ACCESS_KEY=your-secret \\
+  -e AWS_REGION=us-east-1 \\
+  freeswitch-mod-aws-transcribe:latest
+```
+
+2. **Channel variables** (per-call):
+```javascript
+// Via drachtio-fsmrf
+await ep.set({
+  AWS_ACCESS_KEY_ID: 'your-key',
+  AWS_SECRET_ACCESS_KEY: 'your-secret',
+  AWS_REGION: 'us-east-1'
+});
+ep.api('uuid_aws_transcribe', `${ep.uuid} start en-US interim stereo`);
+```
+
+3. **IAM instance role** (when running on EC2):
+   - No credentials needed, uses EC2 instance metadata
+
+<details>
+<summary><b>Manual Verification for mod_aws_transcribe</b></summary>
+
+After building or pulling the mod_aws_transcribe image, verify it manually:
+
+#### Step 1: Check Module File Exists
+
+```bash
+# Verify mod_aws_transcribe.so exists
+docker run --rm freeswitch-mod-aws-transcribe:latest \\
+  ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so
+
+# Should show file with size around 200-400 KB
+```
+
+#### Step 2: Check AWS SDK Libraries
+
+```bash
+# Verify AWS SDK libraries are installed
+docker run --rm freeswitch-mod-aws-transcribe:latest \\
+  ls -lh /usr/local/lib/libaws-cpp-sdk-*.so
+
+# Should list:
+# - libaws-cpp-sdk-transcribestreaming.so
+# - libaws-cpp-sdk-core.so
+# - libaws-c-event-stream.so
+# - libaws-checksums.so
+# - libaws-c-common.so
+```
+
+#### Step 3: Check Module Dependencies
+
+```bash
+# Check module dependencies are satisfied
+docker run --rm freeswitch-mod-aws-transcribe:latest \\
+  ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so
+
+# Should show all AWS libraries linked correctly with no "not found" errors
+```
+
+#### Step 4: Runtime Test
+
+```bash
+# Start FreeSWITCH
+docker run -d --name fs-aws-test \\
+  -p 5060:5060/udp \\
+  -p 8021:8021/tcp \\
+  -e AWS_ACCESS_KEY_ID=test \\
+  -e AWS_SECRET_ACCESS_KEY=test \\
+  -e AWS_REGION=us-east-1 \\
+  freeswitch-mod-aws-transcribe:latest
+
+# Wait for startup
+sleep 30
+
+# Verify module loaded
+docker exec fs-aws-test fs_cli -x "show modules" | grep aws_transcribe
+
+# Expected output:
+# api,aws_transcribe,mod_aws_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so
+
+# Cleanup
+docker rm -f fs-aws-test
+```
+
+</details>
+
+### Authentication
+
+mod_aws_transcribe supports **three authentication methods** with automatic credential type detection:
+
+#### 1. Permanent IAM Credentials (AKIA*)
+
+Best for development and testing:
+
+```bash
+docker run -d --name freeswitch \\
+  -p 5060:5060/udp \\
+  -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \\
+  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \\
+  -e AWS_REGION=us-east-1 \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+#### 2. Temporary STS Credentials (ASIA*)
+
+For SSO or STS temporary credentials (requires session token):
+
+```bash
+docker run -d --name freeswitch \\
+  -p 5060:5060/udp \\
+  -e AWS_ACCESS_KEY_ID=ASIAIOSFODNN7EXAMPLE \\
+  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \\
+  -e AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjE... \\
+  -e AWS_REGION=us-east-1 \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+⚠️ **Critical**: ASIA* credentials **require** `AWS_SESSION_TOKEN` or you'll get authentication errors.
+
+#### 3. IAM Roles (Production)
+
+Best for EC2/ECS/EKS deployments - no credentials needed:
+
+```bash
+# On EC2/ECS/EKS with IAM role attached
+docker run -d --name freeswitch \\
+  -p 5060:5060/udp \\
+  -e AWS_REGION=us-east-1 \\
+  srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+The module automatically uses EC2 instance metadata, ECS task role, or EKS service account.
+
+#### Using run-on-macbook.sh
+
+```bash
+# Permanent credentials (AKIA*)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest \\
+  "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1
+
+# Temporary credentials (ASIA* + session token)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest \\
+  "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1 YOUR_SESSION_TOKEN
+
+# IAM role (on EC2/ECS)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest
+```
+
+#### Startup Diagnostics
+
+The module logs detailed authentication status at startup:
+
+```
+=========================================================
+mod_aws_transcribe: Checking AWS credentials...
+  ✓ Environment credentials found: Temporary (ASIA* + session token)
+    AWS_ACCESS_KEY_ID: ASIA***
+    AWS_SESSION_TOKEN: present
+  ✓ AWS_REGION: us-east-1
+
+Authentication priority:
+  1. Channel variables (per-call)
+  2. Environment variables (container-level)
+  3. AWS credentials chain (IAM role, ~/.aws/credentials)
+=========================================================
+```
+
+**Warning signs to watch for:**
+- `Temporary (ASIA* - MISSING SESSION TOKEN!)` - You need to add `AWS_SESSION_TOKEN`
+- `Environment credentials: not found` - Module will use IAM role or fail
+
+### API Commands
+
+```bash
+# Start transcription (mono mode)
+uuid_aws_transcribe <uuid> start en-US interim mono
+
+# Start transcription (stereo mode - recommended for telephony)
+uuid_aws_transcribe <uuid> start en-US interim stereo
+
+# Start with speaker diarization (AI-based, detects multiple speakers)
+uuid_setvar <uuid> AWS_SHOW_SPEAKER_LABEL true
+uuid_aws_transcribe <uuid> start en-US interim mono
+
+# Start with channel identification (stereo, perfect agent/customer separation)
+uuid_setvar <uuid> AWS_ENABLE_CHANNEL_IDENTIFICATION true
+uuid_setvar <uuid> AWS_NUMBER_OF_CHANNELS 2
+uuid_aws_transcribe <uuid> start en-US interim stereo
+
+# Start with custom vocabulary
+uuid_setvar <uuid> AWS_VOCABULARY_NAME my-custom-vocab
+uuid_aws_transcribe <uuid> start en-US interim stereo
+
+# Start with vocabulary filter (profanity filtering)
+uuid_setvar <uuid> AWS_VOCABULARY_FILTER_NAME profanity-filter
+uuid_setvar <uuid> AWS_VOCABULARY_FILTER_METHOD mask
+uuid_aws_transcribe <uuid> start en-US interim stereo
+
+# Stop transcription
+uuid_aws_transcribe <uuid> stop
+```
+
+**Speaker Identification:** mod_aws_transcribe supports two methods:
+- **Speaker Diarization** (`AWS_SHOW_SPEAKER_LABEL`): AI detects speakers (spk_0, spk_1...), works with mono audio
+- **Channel Identification** (`AWS_ENABLE_CHANNEL_IDENTIFICATION`): Uses stereo channels (ch_0=agent, ch_1=customer), 100% accurate
+
+See `modules/mod_aws_transcribe/README.md` for detailed speaker identification guide with cost comparison and use cases.
+
+### Build Issues and Solutions
+
+During development, we encountered and resolved several critical build issues:
+
+#### 1. cJSON Header Conflict ⚠️ CRITICAL
+
+**Problem:** Duplicate symbol errors during linking
+```
+duplicate symbol '_cJSON_CreateObject' in:
+    mod_aws_transcribe.o
+    libaws-cpp-sdk-core.so (via bundled cJSON)
+```
+
+**Root Cause:**
+- AWS SDK C++ v1.11.345 bundles its own cJSON in `/usr/local/include/aws/core/external/cjson/cJSON.h`
+- mod_aws_transcribe uses FreeSWITCH's system cJSON library
+- Without header guards, both symbols conflict during linking
+
+**Solution Applied** (Dockerfile lines 101-123):
+```dockerfile
+# Add header guards to AWS SDK's bundled cJSON
+RUN sed -i '/#ifndef cJSON_AS4CPP__h/i #ifndef cJSON__h\n#define cJSON__h' \
+        /usr/local/include/aws/core/external/cjson/cJSON.h \
+    && echo '#endif' >> /usr/local/include/aws/core/external/cjson/cJSON.h
+```
+
+This fix wraps AWS SDK's cJSON with additional header guards to prevent conflicts.
+
+#### 2. Missing libspeexdsp Dependency
+
+**Problem:** Compilation error
+```
+fatal error: speex/speex_resampler.h: No such file or directory
+```
+
+**Root Cause:**
+- mod_aws_transcribe uses `speex_resampler` for automatic audio resampling (8kHz → 16kHz)
+- Required for converting various codec sample rates to AWS Transcribe's 16kHz requirement
+- `libspeexdsp-dev` was missing from builder stage
+
+**Solution Applied** (Dockerfile line 61):
+```dockerfile
+# Builder stage dependencies
+RUN apt-get install -y libspeexdsp-dev  # Provides speex/speex_resampler.h
+
+# Runtime stage dependencies
+RUN apt-get install -y libspeexdsp1     # Provides libspeexdsp.so.1
+```
+
+#### 3. Missing AWS Common Runtime (CRT) Libraries
+
+**Problem:** Runtime dependency errors
+```
+libaws-crt-cpp.so => not found
+libs2n.so.1 => not found
+```
+
+**Root Cause:**
+- AWS SDK 1.11.345 depends on AWS Common Runtime libraries
+- Wildcard pattern `libaws-c-*.so*` didn't match `libaws-crt-cpp` or `libs2n`
+- Libraries were built but not copied to runtime stage
+
+**Solution Applied** (Dockerfile lines 234, 236):
+```dockerfile
+# Copy additional AWS CRT libraries to runtime stage
+COPY --from=builder /usr/local/lib/libaws-crt-cpp.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libs2n.so* /usr/local/lib/
+```
+
+**Why This Happened:**
+- `libaws-c-*.so*` matches: `libaws-c-common`, `libaws-c-event-stream`, etc.
+- Does NOT match: `libaws-crt-cpp` (has "crt" in middle, not "c-" prefix)
+- Does NOT match: `libs2n` (doesn't start with "libaws")
+
+#### 4. Undefined ARG Variable Warning
+
+**Problem:** Docker build warning
+```
+UndefinedVar: Usage of undefined variable '$AWS_SDK_CPP_VERSION' (line 337)
+```
+
+**Root Cause:**
+- ARG variables are scoped to the build stage where they're defined
+- Runtime stage used `${AWS_SDK_CPP_VERSION}` in a LABEL but ARG wasn't re-declared
+
+**Solution Applied** (Dockerfile line 218):
+```dockerfile
+# Runtime Stage
+FROM ${BASE_IMAGE} AS runtime
+
+# Re-declare ARG for runtime stage (ARGs don't persist across stages)
+ARG AWS_SDK_CPP_VERSION=1.11.345
+```
+
+### AWS SDK Version Strategy
+
+**Current Default:** `1.11.345` (tested and stable)
+
+**Verified Compatible Versions:**
+- ✅ **1.11.200+** - All versions from 1.11.200 onwards work
+- ✅ **1.11.345** - Default in Docker builds (recommended)
+- ✅ **1.11.694** - Latest as of 2025-01 (upgrade available)
+
+**To use a different version:**
+```bash
+# Via build script
+./dockerfiles/docker-build-mod-aws-transcribe.sh \
+  my-image:latest \
+  1.11.694
+
+# Via docker build
+docker build \
+  --build-arg AWS_SDK_CPP_VERSION=1.11.694 \
+  -f dockerfiles/Dockerfile.mod_aws_transcribe \
+  -t my-image:latest .
+```
+
+**Recommendation:** Use 1.11.345 for stability. Upgrade to newer versions only if you need specific features or bug fixes.
+
+### Complete Dependency List
+
+**Builder Stage:**
+- `build-essential` - gcc, g++, make
+- `git` - Clone AWS SDK
+- `cmake` - Build AWS SDK
+- `libcurl4-openssl-dev` - HTTP client for AWS
+- `libssl-dev` - TLS/SSL support
+- `uuid-dev` - UUID generation
+- `zlib1g-dev` - Compression
+- `libpulse-dev` - PulseAudio support (AWS SDK)
+- `libspeexdsp-dev` - Audio resampling (NEW - added for this module)
+
+**Runtime Stage:**
+- `libcurl4` - HTTP client runtime
+- `libssl1.1` - TLS/SSL runtime
+- `zlib1g` - Compression runtime
+- `libpulse0` - PulseAudio runtime
+- `libspeexdsp1` - Audio resampling runtime (NEW - added for this module)
+
+**AWS Libraries (copied from builder):**
+- `libaws-cpp-sdk-transcribestreaming.so` - AWS Transcribe Streaming API
+- `libaws-cpp-sdk-core.so` - AWS SDK core
+- `libaws-c-event-stream.so` - Event stream handling
+- `libaws-checksums.so` - Data checksums
+- `libaws-c-common.so` - Common AWS utilities
+- `libaws-crt-cpp.so` - AWS Common Runtime C++ (NEW - explicit copy needed)
+- `libs2n.so.1` - AWS s2n TLS library (NEW - explicit copy needed)
+
+### Supported Languages (Examples)
+
+- **English**: en-US, en-GB, en-AU, en-IN
+- **Spanish**: es-US, es-ES
+- **French**: fr-FR, fr-CA
+- **German**: de-DE
+- **Portuguese**: pt-BR, pt-PT
+- **Japanese**: ja-JP
+- **Korean**: ko-KR
+- **Chinese**: zh-CN
+- **Arabic**: ar-AE, ar-SA
+- **Hindi**: hi-IN
+- And 20+ more languages...
+
+For the complete list, see: [AWS Transcribe Supported Languages](https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html)
+
+For full API documentation, see: `modules/mod_aws_transcribe/README.md`
+
+---
+
+## 6. mod_google_transcribe
+
+**File**: `Dockerfile.mod_google_transcribe`
+**Build Script**: `docker-build-mod-google-transcribe.sh`
+**Base Image**: `srt2011/freeswitch-base:latest` (FreeSWITCH 1.10.11)
+
+**Dependencies Built**:
+- gRPC v1.64.2 (with Protocol Buffers)
+- googleapis (Google Cloud Speech API protobuf definitions)
+
+**Build Time**:
+- Intel/AMD64: **30-45 minutes** (includes gRPC build from source)
+- Apple Silicon: **50-60 minutes** (with emulation)
+
+**Usage**:
+```bash
+# Build the image (with custom tag and gRPC version)
+./dockerfiles/docker-build-mod-google-transcribe.sh \
+  srt2011/freeswitch-mod-google-transcribe:latest \
+  1.64.2
+
+# Or use defaults
+./dockerfiles/docker-build-mod-google-transcribe.sh
+
+# Run FreeSWITCH with Google Cloud credentials
+docker run -d --name fs \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/creds/service-account.json \
+  -v /path/to/service-account.json:/creds/service-account.json:ro \
+  srt2011/freeswitch-mod-google-transcribe:latest
+
+# Access fs_cli
+docker exec -it fs fs_cli
+
+# Verify module loaded
+docker exec -it fs fs_cli -x 'show modules' | grep google_transcribe
+```
+
+**Features**:
+- ✅ Real-time streaming transcription via gRPC
+- ✅ High accuracy with automatic punctuation
+- ✅ **Speaker diarization support** (AI-based speaker identification)
+- ✅ **Separate recognition per channel** for stereo audio (agent/customer separation)
+- ✅ Alternative language detection
+- ✅ Voice activity detection (VAD) for cost optimization
+- ✅ Word-level timing offsets
+- ✅ Multiple model options:
+  - `phone_call` - Optimized for telephony audio (8kHz-16kHz)
+  - `video` - Optimized for video conferencing
+  - `command_and_search` - Short voice commands
+  - `default` - General-purpose model
+- ✅ Enhanced models for premium accuracy
+- ✅ Phrase hints for domain-specific vocabulary
+- ✅ Support for 125+ languages
+- ✅ Profanity filtering
+- ✅ Built on stable freeswitch-base image
+- ✅ Automatic static + runtime validation during build
+- ✅ Pre-configured example configuration files
+
+**Included Configuration Files**:
+
+The Docker image includes pre-configured FreeSWITCH configuration files ready for testing:
+
+- **`/usr/local/freeswitch/conf/dialplan/default.xml`** - Complete dialplan with Google Transcribe extension (EXTENSION 5)
+- **`/usr/local/freeswitch/conf/directory/default/1000.xml`** - User 1000 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1001.xml`** - User 1001 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1002.xml`** - User 1002 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1003.xml`** - User 1003 with AWS Transcribe enabled
+- **`/usr/local/freeswitch/conf/directory/default/1004.xml`** - User 1004 with Google Transcribe enabled
+
+**Authentication**:
+
+Google Cloud Speech-to-Text API uses service account JSON key files:
+
+1. **Create a Google Cloud service account**:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select existing
+   - Enable "Cloud Speech-to-Text API"
+   - Create a service account with "Cloud Speech-to-Text API User" role
+   - Download JSON key file
+
+2. **Mount credentials into container**:
+```bash
+docker run -d \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/creds/service-account.json \
+  -v /local/path/to/service-account.json:/creds/service-account.json:ro \
+  freeswitch-mod-google-transcribe:latest
+```
+
+3. **Or set per-call via channel variable**:
+```javascript
+// Via drachtio-fsmrf
+await ep.set({
+  GOOGLE_APPLICATION_CREDENTIALS: '/creds/service-account.json'
+});
+ep.api('uuid_google_transcribe', `${ep.uuid} start en-US interim stereo`);
+```
+
+<details>
+<summary><b>Manual Verification for mod_google_transcribe</b></summary>
+
+After building or pulling the mod_google_transcribe image, verify it manually:
+
+#### Step 1: Check Module File Exists
+
+```bash
+# Verify mod_google_transcribe.so exists
+docker run --rm freeswitch-mod-google-transcribe:latest \
+  ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so
+
+# Expected output:
+# -rwxr-xr-x 1 root root 2.5M ... mod_google_transcribe.so
+```
+
+#### Step 2: Verify gRPC Dependencies
+
+```bash
+# Check gRPC libraries
+docker run --rm freeswitch-mod-google-transcribe:latest \
+  ls -lh /usr/local/lib/libgrpc++.so
+
+# Check protobuf libraries
+docker run --rm freeswitch-mod-google-transcribe:latest \
+  ls -lh /usr/local/lib/libprotobuf.so
+
+# Expected: Both libraries should exist
+```
+
+#### Step 3: Verify Module Dependencies (ldd)
+
+```bash
+# Check all module dependencies are satisfied
+docker run --rm freeswitch-mod-google-transcribe:latest \
+  ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so
+
+# Expected output (all lines should show paths, NO "not found"):
+# libgrpc++.so.1 => /usr/local/lib/libgrpc++.so.1 (0x...)
+# libgrpc.so.41 => /usr/local/lib/libgrpc.so.41 (0x...)
+# libprotobuf.so.25 => /usr/local/lib/libprotobuf.so.25 (0x...)
+# libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x...)
+# ... (many more libraries)
+```
+
+#### Step 4: Start Container and Verify Module Loads
+
+```bash
+# Start container
+docker run -d --name fs-test \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  freeswitch-mod-google-transcribe:latest
+
+# Wait for FreeSWITCH to start
+sleep 30
+
+# Check FreeSWITCH status
+docker exec fs-test fs_cli -x "status"
+
+# Verify module is loaded
+docker exec fs-test fs_cli -x "show modules" | grep google_transcribe
+
+# Expected output:
+# api,google_transcribe,mod_google_transcribe,...
+
+# Check FreeSWITCH logs for any errors
+docker logs fs-test | grep -i "google\|error"
+
+# Clean up
+docker rm -f fs-test
+```
+
+#### Step 5: Test API Command (With Google Credentials)
+
+```bash
+# Start container with Google credentials
+docker run -d --name fs-google \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/creds/sa.json \
+  -v /path/to/service-account.json:/creds/sa.json:ro \
+  freeswitch-mod-google-transcribe:latest
+
+# Wait for startup
+sleep 30
+
+# Connect with fs_cli
+docker exec -it fs-google fs_cli
+
+# In fs_cli, test the command (without a real call, it will fail gracefully):
+# freeswitch@internal> uuid_google_transcribe test-uuid start en-US interim
+# Expected: Command recognized, error about invalid UUID (normal without real call)
+
+# Clean up
+docker rm -f fs-google
+```
+
+</details>
+
+**Configuration Options**:
+
+Key channel variables for Google Speech-to-Text (set in dialplan or via API):
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON | `/creds/service-account.json` |
+| `GOOGLE_SPEECH_MODEL` | Speech recognition model | `phone_call`, `video`, `command_and_search`, `default` |
+| `GOOGLE_SPEECH_USE_ENHANCED` | Use enhanced model (premium) | `true` or `false` |
+| `GOOGLE_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION` | Add punctuation to transcripts | `true` or `false` |
+| `GOOGLE_SPEECH_ENABLE_WORD_TIME_OFFSETS` | Include word-level timestamps | `true` or `false` |
+| `GOOGLE_SPEECH_SPEAKER_DIARIZATION` | Enable speaker identification | `1` or `0` |
+| `GOOGLE_SPEECH_SPEAKER_DIARIZATION_MIN_SPEAKER_COUNT` | Minimum speakers | `2` |
+| `GOOGLE_SPEECH_SPEAKER_DIARIZATION_MAX_SPEAKER_COUNT` | Maximum speakers | `10` |
+| `GOOGLE_SPEECH_SEPARATE_RECOGNITION_PER_CHANNEL` | Separate stereo channels | `true` or `false` |
+| `GOOGLE_SPEECH_PROFANITY_FILTER` | Filter profanity | `true` or `false` |
+| `GOOGLE_SPEECH_HINTS` | Comma-separated phrase hints | `hello,goodbye,thank you` |
+| `GOOGLE_SPEECH_ALTERNATIVE_LANGUAGE_CODES` | Alternative languages | `en-GB,fr-FR` |
+| `START_RECOGNIZING_ON_VAD` | Delay until voice detected | `true` or `false` |
+| `RECOGNIZER_VAD_MODE` | VAD aggressiveness (0-3) | `2` |
+
+**Supported Languages** (125+ languages):
+
+Popular languages include:
+- **English**: en-US, en-GB, en-AU, en-CA, en-IN
+- **Spanish**: es-ES, es-US, es-MX, es-AR
+- **French**: fr-FR, fr-CA
+- **German**: de-DE
+- **Italian**: it-IT
+- **Portuguese**: pt-BR, pt-PT
+- **Chinese**: zh-CN, zh-TW
+- **Japanese**: ja-JP
+- **Korean**: ko-KR
+- **Hindi**: hi-IN
+- And 115+ more languages...
+
+For the complete list, see: [Google Cloud Speech-to-Text Supported Languages](https://cloud.google.com/speech-to-text/docs/languages)
+
+For full API documentation, see: `modules/mod_google_transcribe/README.md`
 
 ---
 
@@ -1943,9 +2730,2559 @@ docker rm freeswitch-test
 ---
 
 ## Resources
+---
 
-- [FreeSWITCH Documentation](https://freeswitch.org/confluence/)
-- [Installation Guide](FREESWITCH_INSTALL.md) - Complete dependency guide with all errors documented
-- [Docker Hub Deployment](DOCKER_HUB_DEPLOYMENT.md) - Deploy and test on MacBook with SIP clients
-- [Main Repository README](../README.md)
-- [Individual Module READMEs](../modules/)
+# Appendices
+
+> **The following appendices contain comprehensive, detailed guides extracted from the original documentation files.**
+
+---
+
+# Appendix A: Complete FreeSWITCH Installation Guide
+
+This section provides comprehensive details on building FreeSWITCH from source, including all dependencies, common errors, and solutions.
+
+# FreeSWITCH 1.10.11 Installation Guide - Build from Source
+
+This document provides a comprehensive guide to building FreeSWITCH 1.10.11 from source in a Docker container, including all dependencies, common errors, and their solutions.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Build Dependencies](#build-dependencies)
+- [Runtime Dependencies](#runtime-dependencies)
+- [Multi-Stage Build Process](#multi-stage-build-process)
+- [Common Build Errors and Solutions](#common-build-errors-and-solutions)
+- [Module Configuration](#module-configuration)
+- [Build Process](#build-process)
+- [Verification](#verification)
+
+---
+
+## Overview
+
+FreeSWITCH 1.10.11 is a production-ready telephony platform released in August 2019. Building from source ensures you get all modules and can customize the build for your specific needs.
+
+**Key Features:**
+- Full SIP and WebRTC support
+- 100+ modules for telephony, codecs, applications
+- Event Socket for external control
+- Database support (PostgreSQL, ODBC, SQLite)
+- Video support (VP8, VP9, H.264)
+- Audio codecs (Opus, G.711, G.722, etc.)
+- Lua scripting for dialplan logic
+
+**Build Time:**
+- Native x86_64: 30-45 minutes (with 8-16 CPU cores)
+- Apple Silicon (emulated): 60-90 minutes
+
+---
+
+## Build Dependencies
+
+### Essential Build Tools
+
+| Package | Purpose | Required For |
+|---------|---------|--------------|
+| `build-essential` | GCC, G++, make, and other compilation tools | All C/C++ compilation |
+| `cmake` | Build system generator | Some modules and dependencies |
+| `autoconf` | Generate configure scripts | FreeSWITCH and dependencies |
+| `automake` | Makefile generation | FreeSWITCH and dependencies |
+| `libtool` | Shared library support | Library creation |
+| `libtool-bin` | Libtool executable | **Critical**: Provides `/usr/bin/libtool` binary |
+| `pkg-config` | Library dependency resolution | Finding installed libraries |
+| `nasm` | x86 assembler | **Critical**: libvpx video codec optimization |
+| `git` | Version control | Cloning source repositories |
+| `wget` | File downloads | Downloading assets |
+| `ca-certificates` | SSL certificates | HTTPS connections |
+
+### FreeSWITCH Core Dependencies
+
+| Package | Purpose | Component |
+|---------|---------|-----------|
+| `libssl-dev` | OpenSSL development headers | TLS/SSL encryption |
+| `libcurl4-openssl-dev` | HTTP client library | API calls, webhooks |
+| `libpcre3-dev` | Perl-compatible regex | Pattern matching in dialplan |
+| `libspeex1` | Speex codec runtime | Audio codec |
+| `libspeexdsp-dev` | Speex DSP library | Echo cancellation, noise suppression |
+| `libedit-dev` | Command-line editing | fs_cli interactive features |
+| `libtiff-dev` | TIFF image support | Fax (T.38) support |
+| `libldns-dev` | DNS resolution | SIP DNS SRV lookups |
+| `uuid-dev` | UUID generation | **Critical**: Unique call IDs, UUIDs |
+
+### Audio/Video Codecs
+
+| Package | Purpose | Codec/Feature |
+|---------|---------|---------------|
+| `libopus-dev` | Opus codec | High-quality VoIP audio (WebRTC) |
+| `libsndfile1-dev` | Audio file I/O | WAV, FLAC, OGG file support |
+| `libshout3-dev` | Icecast streaming | Audio streaming |
+| `libmpg123-dev` | MP3 decoder | MP3 playback |
+| `libmp3lame-dev` | MP3 encoder | MP3 recording |
+| `libavformat-dev` | FFmpeg container formats | Video container support |
+| `libswscale-dev` | FFmpeg video scaling | Video format conversion |
+
+### Database Support
+
+| Package | Purpose | Database |
+|---------|---------|----------|
+| `libsqlite3-dev` | SQLite development | Default database (call logs, voicemail) |
+| `libpq-dev` | PostgreSQL client | PostgreSQL backend |
+| `unixodbc-dev` | ODBC driver manager | **Critical**: Generic database connectivity |
+
+### SIP and WebRTC
+
+| Package | Purpose | Protocol |
+|---------|---------|----------|
+| `libsofia-sip-ua-dev` | SIP stack (packaged version) | SIP protocol (supplementary) |
+| `libsrtp2-dev` | Secure RTP | WebRTC media encryption |
+
+**Note**: We build sofia-sip v1.13.17 from source for better compatibility with FreeSWITCH 1.10.11.
+
+### Additional Dependencies
+
+| Package | Purpose | Feature |
+|---------|---------|---------|
+| `libxml2-dev` | XML parsing | Configuration files, dialplan XML |
+| `liblua5.2-dev` | Lua scripting | mod_lua (recommended for dialplan) |
+| `libgoogle-perftools-dev` | tcmalloc allocator | Performance optimization |
+| `python3` | Python interpreter | Build scripts |
+| `python-is-python3` | Python symlink | Legacy script compatibility |
+| `zlib1g-dev` | Compression library | Data compression |
+| `libjpeg-dev` | JPEG image support | Video snapshots, caller ID photos |
+
+### Dependencies Built from Source
+
+These are built in separate Docker stages before FreeSWITCH:
+
+#### 1. spandsp (v0d2e6ac)
+
+**Purpose**: DSP library for telephony applications
+
+**Features**:
+- T.38 fax support
+- DTMF tone detection/generation
+- Echo cancellation
+- Modem emulation
+
+**Why from source**: Debian package version may be outdated or missing features needed by FreeSWITCH 1.10.11
+
+**Build process**:
+```dockerfile
+RUN git clone https://github.com/freeswitch/spandsp.git \
+    && cd spandsp \
+    && git checkout 0d2e6ac \
+    && ./bootstrap.sh \
+    && ./configure \
+    && make -j ${BUILD_CPUS} \
+    && make install
+```
+
+#### 2. sofia-sip (v1.13.17)
+
+**Purpose**: SIP protocol stack
+
+**Features**:
+- SIP message parsing/generation
+- Transaction layer
+- Dialog management
+- SDP (Session Description Protocol)
+
+**Why from source**: FreeSWITCH requires specific version for optimal compatibility
+
+**Build process**:
+```dockerfile
+RUN git clone --depth 1 -b v1.13.17 https://github.com/freeswitch/sofia-sip.git \
+    && cd sofia-sip \
+    && ./bootstrap.sh \
+    && ./configure \
+    && make -j ${BUILD_CPUS} \
+    && make install
+```
+
+---
+
+## Runtime Dependencies
+
+Runtime dependencies are the shared libraries needed to **run** FreeSWITCH (without development headers):
+
+### Core Runtime Libraries
+
+| Package | Build Dependency | Purpose |
+|---------|------------------|---------|
+| `libssl1.1` | libssl-dev | OpenSSL runtime |
+| `libcurl4` | libcurl4-openssl-dev | HTTP client runtime |
+| `libpcre3` | libpcre3-dev | Regex runtime |
+| `libspeex1` | libspeex1 | Speex codec runtime |
+| `libspeexdsp1` | libspeexdsp-dev | Speex DSP runtime |
+| `libedit2` | libedit-dev | Command-line editing |
+| `libtiff5` | libtiff-dev | TIFF runtime |
+| `libldns3` | libldns-dev | DNS runtime |
+| `libuuid1` | uuid-dev | **Critical**: UUID runtime library |
+
+### Codec Runtime Libraries
+
+| Package | Build Dependency |
+|---------|------------------|
+| `libopus0` | libopus-dev |
+| `libsndfile1` | libsndfile1-dev |
+| `libshout3` | libshout3-dev |
+| `libmpg123-0` | libmpg123-dev |
+| `libmp3lame0` | libmp3lame-dev |
+| `libavformat58` | libavformat-dev |
+| `libswscale5` | libswscale-dev |
+
+### Database Runtime Libraries
+
+| Package | Build Dependency |
+|---------|------------------|
+| `libsqlite3-0` | libsqlite3-dev |
+| `libpq5` | libpq-dev |
+| `unixodbc` | unixodbc-dev |
+
+### Other Runtime Libraries
+
+| Package | Purpose |
+|---------|---------|
+| `libsofia-sip-ua0` | SIP stack runtime |
+| `libsrtp2-1` | SRTP runtime |
+| `libxml2` | XML parsing |
+| `liblua5.2-0` | Lua runtime |
+| `libtcmalloc-minimal4` | tcmalloc runtime |
+
+### System Utilities
+
+As requested by user:
+
+| Package | Purpose |
+|---------|---------|
+| `procps` | ps, top, kill commands |
+| `net-tools` | netstat, ifconfig |
+| `iputils-ping` | ping command |
+| `iproute2` | ip command |
+| `lsof` | List open files |
+| `vim` | Text editor |
+| `curl` | HTTP client |
+| `wget` | File downloader |
+| `ca-certificates` | SSL certificates |
+
+### Process Management
+
+| Package | Purpose |
+|---------|---------|
+| `supervisor` | Process manager (systemd alternative for Docker) |
+
+---
+
+## Multi-Stage Build Process
+
+The Dockerfile uses a multi-stage build to minimize final image size:
+
+### Stage 1: Builder Base
+- Install all build dependencies
+- Serves as base for subsequent build stages
+
+### Stage 1.5: Build spandsp
+- Clone spandsp repository
+- Build and install spandsp v0d2e6ac
+- Install to `/usr/local`
+
+### Stage 1.6: Build sofia-sip
+- Clone sofia-sip repository
+- Build and install sofia-sip v1.13.17
+- Install to `/usr/local`
+
+### Stage 2: Build FreeSWITCH
+- Copy spandsp and sofia-sip from previous stages
+- Clone FreeSWITCH v1.10.11 source
+- Run `bootstrap.sh` to generate configure scripts
+- Disable optional modules (Python, Java, Perl, mod_verto, etc.)
+- Configure with flags:
+  - `--prefix=/usr/local/freeswitch`
+  - `--enable-core-pgsql-support`
+  - `--enable-core-odbc-support`
+  - `--enable-tcmalloc`
+  - `--without-python`, `--without-python3`, `--without-java`, `--without-perl`
+- Compile with `make -j ${BUILD_CPUS}`
+- Install with `make install`
+- Install sounds and sample configuration
+
+### Stage 3: Runtime Image
+- Start from clean Debian base
+- Install only runtime dependencies (no build tools)
+- Copy spandsp, sofia-sip, and FreeSWITCH from build stages
+- Configure extensions 1000 and 1001
+- Set up supervisor for process management
+- Create entrypoint script
+
+**Image Size Comparison**:
+- Build stage: ~3-4 GB (with all build tools and source code)
+- Runtime image: ~800 MB - 1 GB (only binaries and runtime libraries)
+
+---
+
+## Common Build Errors and Solutions
+
+Below are all errors encountered during the build process, with explanations and solutions.
+
+### Error 1: libyuv-dev Package Not Found
+
+**Error Message**:
+```
+E: Unable to locate package libyuv-dev
+```
+
+**Explanation**:
+- `libyuv` is Google's library for YUV image format conversion (used in video processing)
+- Not available in Debian Bullseye repositories
+- FreeSWITCH can use alternative libraries for video support
+
+**Solution**:
+- Removed `libyuv-dev` from dependency list
+- Video support still works via `libavformat-dev` and `libswscale-dev` (FFmpeg libraries)
+
+**Impact**: None - video features still fully functional
+
+---
+
+### Error 2: libtool Executable Not Found
+
+**Error Message**:
+```
+build-requirements: libtool not found.
+You need libtool version 1.5.14 or newer to build FreeSWITCH from source.
+```
+
+**Explanation**:
+- `libtool` package provides libtool library files
+- `libtool-bin` package provides the `/usr/bin/libtool` executable
+- FreeSWITCH bootstrap requires the executable, not just the library
+
+**Solution**:
+- Added `libtool-bin` package to build dependencies
+
+**Why this happens**: Debian split libtool into two packages for modularity
+
+---
+
+### Error 3: ODBC Support Missing
+
+**Error Message**:
+```
+configure: error: no usable libodbc; please install unixodbc devel package or equivalent
+```
+
+**Explanation**:
+- ODBC (Open Database Connectivity) provides generic database interface
+- FreeSWITCH uses ODBC for database backends (MySQL, PostgreSQL, SQL Server, etc.)
+- Enabled by default in FreeSWITCH configure
+
+**Solution**:
+- Added `unixodbc-dev` to build dependencies
+- Added `unixodbc` to runtime dependencies
+
+**Why needed**: Allows FreeSWITCH to connect to various databases without database-specific code
+
+---
+
+### Error 4: spandsp Library Missing
+
+**Error Message**:
+```
+checking for spandsp >= 3.0... configure: error: no usable spandsp; please install spandsp3 devel package or equivalent
+```
+
+**Explanation**:
+- spandsp provides DSP (Digital Signal Processing) for telephony
+- Critical for fax support (T.38), DTMF detection, echo cancellation
+- Debian package version may be outdated or incompatible with FreeSWITCH 1.10.11
+
+**Solution**:
+- Created separate Docker build stage to compile spandsp v0d2e6ac from source
+- Copied compiled libraries to FreeSWITCH build and runtime stages
+
+**Build stage**:
+```dockerfile
+FROM builder AS spandsp
+RUN git clone https://github.com/freeswitch/spandsp.git \
+    && cd spandsp \
+    && git checkout 0d2e6ac \
+    && ./bootstrap.sh \
+    && ./configure \
+    && make -j ${BUILD_CPUS} \
+    && make install
+```
+
+**Why from source**: Ensures exact version compatibility with FreeSWITCH 1.10.11
+
+---
+
+### Error 5: sofia-sip Library Missing
+
+**Error Message** (implied from spandsp pattern):
+```
+checking for sofia-sip >= 1.13... configure: error: no usable sofia-sip
+```
+
+**Explanation**:
+- sofia-sip is the SIP protocol stack used by FreeSWITCH
+- Handles all SIP message parsing, generation, and protocol logic
+- FreeSWITCH requires specific version for compatibility
+
+**Solution**:
+- Created separate Docker build stage to compile sofia-sip v1.13.17 from source
+- Copied compiled libraries to FreeSWITCH build and runtime stages
+
+**Build stage**:
+```dockerfile
+FROM builder AS sofia-sip
+RUN git clone --depth 1 -b v1.13.17 https://github.com/freeswitch/sofia-sip.git \
+    && cd sofia-sip \
+    && ./bootstrap.sh \
+    && ./configure \
+    && make -j ${BUILD_CPUS} \
+    && make install
+```
+
+**Why from source**: Debian package may be too old or have incompatible patches
+
+---
+
+### Error 6: mod_verto Requires libks2/libks
+
+**Error Message**:
+```
+checking for libks2 >= 2.0.0... checking for libks >= 1.8.2... no
+configure: error: You need to either install libks2 or libks or disable mod_verto in modules.conf
+```
+
+**Explanation**:
+- `mod_verto` implements the Verto protocol (deprecated WebRTC signaling protocol)
+- Verto was FreeSWITCH's original WebRTC solution before SIP over WebSocket became standard
+- Requires `libks` (Kite Signaling library), which is complex to build
+- **Verto is deprecated** - modern WebRTC uses SIP over WebSocket + SRTP
+
+**Solution**:
+- Disabled `mod_verto` in `modules.conf`
+- Also disabled other optional modules requiring complex dependencies:
+  - `mod_skinny` - Cisco SCCP protocol (niche use case)
+  - `mod_signalwire` - SignalWire cloud integration (proprietary)
+  - `mod_av` - Advanced video (requires additional libraries)
+
+**Code**:
+```dockerfile
+RUN sed -i 's|^endpoints/mod_verto$|#endpoints/mod_verto|' modules.conf \
+    && sed -i 's|^endpoints/mod_skinny$|#endpoints/mod_skinny|' modules.conf \
+    && sed -i 's|^applications/mod_signalwire$|#applications/mod_signalwire|' modules.conf \
+    && sed -i 's|^applications/mod_av$|#applications/mod_av|' modules.conf
+```
+
+**Impact**: None - use standard SIP over WebSocket for WebRTC instead of deprecated Verto
+
+**WebRTC still works via**:
+- mod_sofia (SIP over WebSocket on port 5080/5081)
+- mod_srtp (SRTP encryption)
+- mod_opus, mod_vp8, mod_h264 (WebRTC codecs)
+
+---
+
+### Error 7: Python 2.x Detection Failing
+
+**Error Message**:
+```
+checking location of site-packages... Traceback (most recent call last):
+File "<string>", line 1, in <module>
+ImportError: cannot import name 'sysconfig' from 'distutils'
+configure: error: Unable to detect python site-packages path
+```
+
+**Explanation**:
+- FreeSWITCH configure script tries to detect Python for `mod_python`
+- Python 3.9+ removed `distutils.sysconfig` (deprecated module)
+- We don't need Python modules - better to use Event Socket Library (ESL) for external control
+
+**Solution**:
+- Added `--without-python` flag to configure
+- Disabled `mod_python` in `modules.conf`
+
+**Code**:
+```dockerfile
+RUN sed -i 's|^languages/mod_python$|#languages/mod_python|' modules.conf
+
+RUN ./configure \
+    --prefix=/usr/local/freeswitch \
+    --without-python \
+    ...
+```
+
+**Why disable Python modules**:
+- **Stability**: Embedded interpreters can cause crashes
+- **Better alternative**: Use Event Socket Library (ESL) to control FreeSWITCH from external Python scripts
+- **Separation**: FreeSWITCH and application code run in separate processes
+- **Flexibility**: Can restart application without restarting FreeSWITCH
+
+---
+
+### Error 8: Python 3.x Still Being Detected
+
+**Error Message**:
+```
+configure: WARNING: python support disabled, building mod_python will fail!
+checking for python3... /usr/bin/python3
+checking python3 version... 3.9.2
+checking for python3 distutils... yes
+checking location of python3 site-packages... Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ImportError: cannot import name 'sysconfig' from 'distutils'
+configure: error: Unable to detect python3 site-packages path
+```
+
+**Explanation**:
+- `--without-python` only disables Python 2.x checks
+- FreeSWITCH configure script separately checks for Python 3.x for `mod_python3`
+- Same `distutils.sysconfig` issue with Python 3.9+
+
+**Solution**:
+- Added `--without-python3` flag to configure
+- Disabled `mod_python3` in `modules.conf`
+
+**Code**:
+```dockerfile
+RUN sed -i 's|^languages/mod_python3$|#languages/mod_python3|' modules.conf
+
+RUN ./configure \
+    --prefix=/usr/local/freeswitch \
+    --without-python \
+    --without-python3 \
+    ...
+```
+
+---
+
+### Error 9: libvpx Requires yasm or nasm
+
+**Error Message**:
+```
+Neither yasm nor nasm have been found. See the prerequisites section in the README for more info.
+
+Configuration failed. This could reflect a misconfiguration of your
+toolchains, improper options selected, or another problem.
+make: *** [Makefile:4487: libs/libvpx/Makefile] Error 1
+```
+
+**Explanation**:
+- `libvpx` provides VP8 and VP9 video codecs (critical for WebRTC video)
+- Requires assembly optimizations for acceptable performance
+- `yasm` or `nasm` assemblers needed to compile assembly code
+
+**Solution**:
+- Added `nasm` package to build dependencies
+
+**Code**:
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build tools
+    build-essential \
+    ...
+    nasm \
+    ...
+```
+
+**Why nasm**: Modern, actively maintained, supports both x86 and x86_64
+
+**Impact**: Enables high-performance VP8/VP9 video codecs for WebRTC
+
+---
+
+### Error 10: UUID Header Missing
+
+**Error Message**:
+```
+src/switch_apr.c:90:10: fatal error: uuid/uuid.h: No such file or directory
+   90 | #include <uuid/uuid.h>
+      |          ^~~~~~~~~~~~~
+compilation terminated.
+make[1]: *** [Makefile:2310: src/libfreeswitch_la-switch_apr.lo] Error 1
+```
+
+**Explanation**:
+- FreeSWITCH uses UUIDs (Universally Unique Identifiers) extensively:
+  - Unique call IDs
+  - Channel UUIDs
+  - Session identifiers
+- `uuid/uuid.h` provided by `uuid-dev` package
+- `libuuid1` provides runtime library
+
+**Solution**:
+- Added `uuid-dev` to build dependencies
+- Added `libuuid1` to runtime dependencies
+
+**Code**:
+```dockerfile
+# Build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ...
+    uuid-dev \
+    ...
+
+# Runtime dependencies (in runtime stage)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ...
+    libuuid1 \
+    ...
+```
+
+**Why critical**: Without UUIDs, FreeSWITCH cannot generate unique call identifiers
+
+---
+
+### Error 11: Configuration Directory Not Created
+
+**Error Message**:
+```
+cp: target '/usr/local/freeswitch/conf/' is not a directory
+make: *** [Makefile:xxx] Error 1
+```
+
+**Explanation**:
+- After successful compilation and `make install`, configuration directory doesn't exist
+- `make install` creates main directories (`/usr/local/freeswitch/bin`, `/usr/local/freeswitch/lib`) but not `conf/`
+- The vanilla configuration from source needs to be copied to this directory
+- `cp` fails because target directory doesn't exist
+
+**Solution**:
+- Create `/usr/local/freeswitch/conf` directory before copying configuration
+
+**Code**:
+```dockerfile
+# Install sample configuration
+RUN mkdir -p /usr/local/freeswitch/conf \
+    && cp -r /usr/local/src/freeswitch/conf/vanilla/* /usr/local/freeswitch/conf/ \
+    && echo "✅ Sample configuration installed"
+```
+
+**Why this happens**:
+- `make install` only creates directories for binaries and libraries
+- Configuration is meant to be installed via `make samples` or manually
+- We manually install vanilla config for better control
+
+**Impact**: Without vanilla configuration, FreeSWITCH won't start (missing vars.xml, dialplan, SIP profiles, etc.)
+
+---
+
+### Error 12: Event Socket Module Not Built (fs_cli Can't Connect)
+
+**Error Message**:
+```bash
+# fs_cli
+[ERROR] fs_cli.c:1699 main() Error Connecting []
+Usage: fs_cli [-H <host>] [-P <port>] [-p <secret>]...
+```
+
+**Symptoms**:
+- `fs_cli` shows "Error Connecting []"
+- Port 8021 is not listening: `netstat -an | grep 8021` shows nothing
+- Module file missing: `/usr/local/freeswitch/mod/mod_event_socket.so` doesn't exist
+- FreeSWITCH runs but Event Socket interface unavailable
+- SIP profiles work normally (ports 5060, 5080)
+
+**Explanation**:
+- `mod_event_socket` provides the Event Socket Layer (ESL) interface
+- Required for `fs_cli` to connect and control FreeSWITCH
+- Default FreeSWITCH `modules.conf` may not include it in `event_handlers/` section
+- If not in `modules.conf`, the module won't be compiled during `make`
+- Without this module, fs_cli has no way to connect to FreeSWITCH
+
+**Solution**:
+- Explicitly ensure `mod_event_socket` is enabled in `modules.conf` before building
+- Configure Event Socket to bind to IPv4 instead of IPv6
+
+**Code**:
+```dockerfile
+# 1. Enable module in modules.conf (after bootstrap, before disabling optional modules)
+RUN grep -q "^event_handlers/mod_event_socket$" modules.conf || \
+    echo "event_handlers/mod_event_socket" >> modules.conf \
+    && echo "✅ Ensured critical modules are enabled (mod_event_socket)"
+
+# 2. Configure Event Socket for IPv4 binding (in runtime stage)
+RUN cat > /usr/local/freeswitch/conf/autoload_configs/event_socket.conf.xml <<'EOF'
+<configuration name="event_socket.conf" description="Socket Client">
+  <settings>
+    <param name="nat-map" value="false"/>
+    <!-- Bind to all IPv4 interfaces for fs_cli access -->
+    <param name="listen-ip" value="0.0.0.0"/>
+    <param name="listen-port" value="8021"/>
+    <param name="password" value="ClueCon"/>
+    <!--<param name="apply-inbound-acl" value="loopback.auto"/>-->
+    <!--<param name="stop-on-bind-error" value="true"/>-->
+  </settings>
+</configuration>
+EOF
+```
+
+**IPv4 vs IPv6 Binding**:
+- Default config uses `::` (IPv6 all interfaces)
+- We use `0.0.0.0` (all IPv4 interfaces) for Docker compatibility
+- This allows fs_cli to connect from both inside container and host machine
+- For security, use `127.0.0.1` (localhost only) or enable ACL
+
+**Why this happens**:
+- FreeSWITCH source's default `modules.conf` varies by version
+- Some versions don't include `mod_event_socket` by default
+- The module must be explicitly listed under `event_handlers/` section
+- Without it, configure/make skip the module entirely
+
+**Verification**:
+```bash
+# Check if module exists after build
+ls -la /usr/local/freeswitch/mod/mod_event_socket.so
+
+# Check if port 8021 is listening
+netstat -an | grep 8021
+
+# Test fs_cli connection
+fs_cli -x "status"
+```
+
+**Impact**: Without Event Socket:
+- ❌ Can't use `fs_cli` for management
+- ❌ Can't use Event Socket Library (ESL) for external applications
+- ❌ Can't execute API commands remotely
+- ✅ SIP calling still works (different module)
+
+---
+
+### Error 13: FreeSWITCH Not Loading Configuration (Module Exists But Won't Load)
+
+**Error Message**:
+```bash
+# fs_cli still fails even though module exists
+docker exec freeswitch ls -la /usr/local/freeswitch/lib/freeswitch/mod/mod_event_socket.so
+# Shows: -rw-r--r-- 1 root root ... mod_event_socket.so (FILE EXISTS!)
+
+docker exec freeswitch netstat -an | grep 8021
+# Shows: (nothing - port not listening)
+
+docker exec -it freeswitch fs_cli
+# [ERROR] fs_cli.c:1699 main() Error Connecting []
+```
+
+**Symptoms**:
+- `mod_event_socket.so` binary **exists** in `/usr/local/freeswitch/lib/freeswitch/mod/`
+- Port 8021 is **not listening**
+- `fs_cli` shows "Error Connecting []"
+- FreeSWITCH **is running** (SIP works on port 5060)
+- No `freeswitch.log` created in `/usr/local/freeswitch/log/`
+- FreeSWITCH appears to run with minimal/fallback configuration
+
+**Root Cause**:
+FreeSWITCH was started **without specifying configuration paths**. The supervisor command was:
+```bash
+command=/usr/local/freeswitch/bin/freeswitch -nonat -nc -nf
+```
+
+Without `-conf`, `-log`, and `-db` flags, FreeSWITCH uses **default search paths** (`/etc/freeswitch`, `/usr/local/etc/freeswitch`) which don't match our custom prefix `/usr/local/freeswitch`.
+
+Result:
+- FreeSWITCH starts but doesn't load `/usr/local/freeswitch/conf/`
+- `event_socket.conf.xml` is never loaded
+- Module binary exists but is never activated
+- No logs are written to the expected location
+
+**Solution**:
+Start FreeSWITCH with **explicit configuration paths** in supervisor command:
+
+**Code**:
+```dockerfile
+# Supervisor configuration with explicit paths
+RUN mkdir -p /etc/supervisor/conf.d && cat > /etc/supervisor/conf.d/freeswitch.conf <<'EOF'
+[program:freeswitch]
+command=/usr/local/freeswitch/bin/freeswitch -nonat -nc -nf \
+  -conf /usr/local/freeswitch/conf \
+  -log  /usr/local/freeswitch/log \
+  -db   /usr/local/freeswitch/db
+autostart=true
+autorestart=true
+startretries=3
+user=freeswitch
+stdout_logfile=/var/log/supervisor/freeswitch.log
+stderr_logfile=/var/log/supervisor/freeswitch_err.log
+EOF
+```
+
+**Why This Happens**:
+- FreeSWITCH has **hardcoded default paths** in its source code
+- When built with `--prefix=/usr/local/freeswitch`, binaries go to custom location
+- BUT: without explicit `-conf` flag, FreeSWITCH searches default paths first
+- This is a common issue with custom FreeSWITCH installations
+
+**FreeSWITCH Default Search Order** (without `-conf`):
+1. `/etc/freeswitch/` (doesn't exist)
+2. `/usr/local/etc/freeswitch/` (doesn't exist)
+3. Fallback to minimal embedded config
+4. Never checks `/usr/local/freeswitch/conf/` (our actual config location!)
+
+**Verification After Fix**:
+```bash
+# Check module loads correctly
+docker exec freeswitch bash -c "ls /usr/local/freeswitch/lib/freeswitch/mod/mod_event_socket.so"
+# Should exist
+
+# Check port 8021 is listening
+docker exec freeswitch netstat -an | grep 8021
+# Should show: tcp 0 0 0.0.0.0:8021 0.0.0.0:* LISTEN
+
+# Check logs are being created
+docker exec freeswitch ls -la /usr/local/freeswitch/log/freeswitch.log
+# Should exist and grow over time
+
+# Test fs_cli connection
+docker exec -it freeswitch fs_cli
+# Should show FreeSWITCH CLI prompt
+```
+
+**Impact**:
+- ❌ Without explicit paths: FreeSWITCH runs but with wrong/minimal config
+- ❌ Modules exist but don't load
+- ❌ No proper logging
+- ❌ Event Socket never activates
+- ✅ With explicit paths: All modules load correctly, fs_cli works, full functionality
+
+**Best Practice**:
+Always start FreeSWITCH in Docker with explicit paths:
+- `-conf /usr/local/freeswitch/conf` (configuration directory)
+- `-log /usr/local/freeswitch/log` (log directory)
+- `-db /usr/local/freeswitch/db` (database directory)
+
+This makes the system **predictable**, **debuggable**, and **production-ready**.
+
+---
+
+### Error 14: Language Bindings (Java, Perl, PHP)
+
+**Not yet encountered, but proactively disabled**
+
+**Why disabled**:
+```dockerfile
+RUN sed -i 's|^languages/mod_java$|#languages/mod_java|' modules.conf \
+    && sed -i 's|^languages/mod_perl$|#languages/mod_perl|' modules.conf \
+    && sed -i 's|^languages/mod_php$|#languages/mod_php|' modules.conf
+
+RUN ./configure \
+    --without-java \
+    --without-perl \
+    ...
+```
+
+**Reasons to disable**:
+- **Java**: Requires JDK, JNI setup, large memory footprint
+- **Perl**: Requires Perl dev headers, CPAN modules
+- **PHP**: Requires PHP dev headers, unstable with FreeSWITCH
+
+**Best practice**: Use Event Socket Library (ESL) for external control in any language
+
+---
+
+## Module Configuration
+
+### Modules Disabled
+
+The following modules are disabled in `modules.conf` to avoid complex dependencies:
+
+| Module | Category | Reason |
+|--------|----------|--------|
+| `mod_verto` | Endpoint | Deprecated WebRTC protocol, requires libks |
+| `mod_skinny` | Endpoint | Cisco SCCP, niche use case |
+| `mod_signalwire` | Application | SignalWire cloud integration, proprietary |
+| `mod_av` | Application | Advanced video, requires additional libraries |
+| `mod_python` | Language | Python 2.x binding, deprecated |
+| `mod_python3` | Language | Python 3.x binding, use ESL instead |
+| `mod_java` | Language | Java binding, use ESL instead |
+| `mod_perl` | Language | Perl binding, use ESL instead |
+| `mod_php` | Language | PHP binding, use ESL instead |
+
+### Critical Modules Enabled
+
+The following critical modules are enabled and verified in testing:
+
+**Endpoints**:
+- `mod_sofia` - SIP and SIP over WebSocket (primary signaling)
+
+**Applications**:
+- `mod_conference` - Conference bridging
+- `mod_dptools` - Dialplan tools
+- `mod_commands` - API commands
+- `mod_voicemail` - Voicemail system
+
+**Dialplan**:
+- `mod_dialplan_xml` - XML dialplan (default)
+- `mod_lua` - Lua scripting (recommended)
+
+**Codecs - Audio**:
+- `mod_opus` - Opus codec (WebRTC)
+- `mod_g711` - G.711 (PCMU/PCMA)
+- `mod_g722` - G.722 wideband
+
+**Codecs - Video**:
+- `mod_vp8` - VP8 codec (WebRTC)
+- `mod_vp9` - VP9 codec (WebRTC)
+- `mod_h264` - H.264 codec
+
+**Formats**:
+- `mod_sndfile` - Audio file I/O
+- `mod_local_stream` - Local audio streaming
+
+**Event Handlers**:
+- `mod_event_socket` - Event Socket (for fs_cli and ESL)
+
+**Total Modules**: 100+ modules enabled by default (minus disabled language bindings and optional modules)
+
+---
+
+## Build Process
+
+### Build Script Usage
+
+```bash
+./dockerfiles/build-freeswitch-base.sh [image-name]
+```
+
+**Default image name**: `freeswitch-base:1.10.11`
+
+**Example**:
+```bash
+./dockerfiles/build-freeswitch-base.sh freeswitch-base:latest
+```
+
+### Build Script Features
+
+1. **Platform Detection**: Automatically detects ARM64 (Apple Silicon) and uses x86_64 emulation
+2. **CPU Detection**: Uses all available CPU cores for parallel compilation
+3. **Version Management**: Reads spandsp and sofia-sip versions from `.env` file
+4. **Progress Display**: Shows estimated build time and configuration
+
+### Build Stages Timing
+
+| Stage | Time (x86_64) | Time (ARM64 emulated) |
+|-------|---------------|----------------------|
+| Base builder dependencies | 2-3 min | 3-5 min |
+| Build spandsp | 1-2 min | 2-4 min |
+| Build sofia-sip | 2-3 min | 3-6 min |
+| Configure FreeSWITCH | 2-3 min | 3-5 min |
+| Compile FreeSWITCH | 20-30 min | 40-60 min |
+| Install sounds | 2-3 min | 3-5 min |
+| Runtime stage | 2-3 min | 3-5 min |
+| **Total** | **30-45 min** | **60-90 min** |
+
+### Build Optimization
+
+The build uses parallel compilation:
+- `make -j ${BUILD_CPUS}` - Uses all available CPU cores
+- Docker BuildKit for layer caching
+- Multi-stage build to minimize final image size
+
+---
+
+## Verification
+
+### Automated Testing
+
+Use the provided test script:
+
+```bash
+./dockerfiles/test-freeswitch-base.sh freeswitch-base:1.10.11
+```
+
+### Manual Testing
+
+**Start container**:
+```bash
+docker run -d \
+    --name freeswitch-test \
+    -p 5060:5060/tcp \
+    -p 5060:5060/udp \
+    -p 5080:5080/tcp \
+    -p 8021:8021/tcp \
+    freeswitch-base:1.10.11
+```
+
+**Connect with fs_cli**:
+```bash
+docker exec -it freeswitch-test fs_cli
+```
+
+**Check status**:
+```
+fs_cli> status
+fs_cli> show modules
+fs_cli> sofia status
+```
+
+**Expected results**:
+- FreeSWITCH uptime displayed
+- 100+ modules loaded
+- SIP profiles running on port 5060/5080
+
+### Extension Testing
+
+Extensions 1000 and 1001 are pre-configured with password `1234`.
+
+**Using softphone** (like Zoiper, Linphone, or Bria):
+1. Register extension 1000: `sip:1000@<container-ip>:5060` (password: 1234)
+2. Register extension 1001: `sip:1001@<container-ip>:5060` (password: 1234)
+3. Call from 1000 to 1001 by dialing `1001`
+4. Verify two-way audio
+
+---
+
+## Troubleshooting
+
+### Build Fails at Configure Stage
+
+**Check**:
+```bash
+# View full build log
+docker build -f dockerfiles/Dockerfile.freeswitch-base -t test . 2>&1 | tee build.log
+
+# Search for "error" in log
+grep -i "error" build.log | grep -v "NORMAL_CLEARING"
+```
+
+**Common causes**:
+- Missing development package (check "Common Build Errors" section)
+- Wrong package version for Debian release
+- Network issues cloning repositories
+
+### Build Fails at Compilation Stage
+
+**Symptoms**: Errors like "No such file or directory" for header files
+
+**Solution**: Add missing `-dev` package to build dependencies and corresponding runtime package
+
+### FreeSWITCH Won't Start
+
+**Check logs**:
+```bash
+docker logs freeswitch-test
+docker exec freeswitch-test cat /usr/local/freeswitch/log/freeswitch.log
+```
+
+**Common issues**:
+- Missing runtime library (add to runtime dependencies)
+- Configuration file syntax error
+- Permissions issue (files should be owned by `freeswitch:freeswitch`)
+
+### fs_cli Cannot Connect
+
+**Check**:
+```bash
+# Verify event socket configuration
+docker exec freeswitch-test cat /usr/local/freeswitch/conf/autoload_configs/event_socket.conf.xml
+
+# Verify port is listening
+docker exec freeswitch-test netstat -an | grep 8021
+```
+
+**Default event socket**: Port 8021, password "ClueCon"
+
+### SIP Clients Cannot Register
+
+**Check**:
+```bash
+# Verify SIP profile is running
+docker exec freeswitch-test fs_cli -x "sofia status"
+
+# Check for binding errors
+docker exec freeswitch-test cat /usr/local/freeswitch/log/freeswitch.log | grep -i "bind"
+```
+
+**Common issues**:
+- Port 5060 already in use on host
+- Firewall blocking UDP 5060
+- NAT configuration needed for external clients
+
+---
+
+## Performance Optimization
+
+### Build Time Optimization
+
+**Use more CPU cores**:
+```bash
+# Manually set CPU cores
+docker build --build-arg BUILD_CPUS=32 ...
+```
+
+**Enable BuildKit caching**:
+```bash
+export DOCKER_BUILDKIT=1
+```
+
+### Runtime Optimization
+
+**tcmalloc enabled**: FreeSWITCH is configured with `--enable-tcmalloc` for better memory allocation performance
+
+**Supervisor**: Uses supervisor instead of running FreeSWITCH as PID 1 for better signal handling
+
+---
+
+## Additional Resources
+
+- **FreeSWITCH Official Docs**: https://freeswitch.org/confluence/
+- **Installation Guide**: https://freeswitch.org/confluence/display/FREESWITCH/Installation
+- **Modules Documentation**: https://freeswitch.org/confluence/display/FREESWITCH/Modules
+- **Event Socket Library**: https://freeswitch.org/confluence/display/FREESWITCH/Event+Socket+Library
+- **WebRTC Guide**: https://freeswitch.org/confluence/display/FREESWITCH/WebRTC
+
+---
+
+## Summary
+
+Building FreeSWITCH 1.10.11 from source requires careful attention to dependencies. This guide documents all dependencies discovered through the build process and provides solutions to common errors.
+
+**Key takeaways**:
+1. **Multi-stage builds** minimize final image size (3-4 GB build → 800 MB runtime)
+2. **Build from source** for spandsp and sofia-sip ensures version compatibility
+3. **Disable language bindings** - use Event Socket Library instead for better stability
+4. **Test thoroughly** - use provided test script to verify all components
+5. **Document everything** - this guide helps future builds and troubleshooting
+
+**Next steps**: After successful build, add custom modules one by one using the module testing approach in `dockerfiles/Dockerfile.mod-test`.
+
+---
+
+
+# Appendix B: Complete MacBook Testing Guide
+
+This section provides detailed instructions for running and testing FreeSWITCH images on MacBook with SIP clients.
+
+# Running FreeSWITCH with Transcription Modules on MacBook
+
+This guide shows how to quickly run FreeSWITCH Docker images on your MacBook using the `run-on-macbook.sh` script.
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+1. **Docker Desktop** installed and running
+2. **MacBook** (Intel or Apple Silicon)
+3. **API Keys** (optional, for transcription features):
+   - Deepgram API Key: https://console.deepgram.com/
+   - Azure Speech Services Key: https://portal.azure.com/
+
+---
+
+## Available Images
+
+### 1. Base Image (No Transcription)
+
+```bash
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-base:latest
+```
+
+**Includes:**
+- ✅ FreeSWITCH 1.10.11
+- ✅ Extensions 1000 & 1001 (password: 1234)
+- ✅ Echo test, voicemail, conference
+
+**Size:** ~850 MB
+**Use Case:** Basic SIP calling, testing, learning FreeSWITCH
+
+---
+
+### 2. Audio Fork Module
+
+```bash
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-audio-fork:latest
+```
+
+**Includes:**
+- ✅ Everything from base image
+- ✅ mod_audio_fork (audio streaming via WebSocket)
+- ✅ libwebsockets 4.3.3
+
+**Size:** ~900 MB
+**Use Case:** Real-time audio streaming, custom audio processing
+
+---
+
+### 3. Deepgram Transcription
+
+```bash
+# Without API key (configure later)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest
+
+# With API key (ready to use)
+./dockerfiles/run-on-macbook.sh \
+  srt2011/freeswitch-mod-deepgram-transcribe:latest \
+  YOUR_DEEPGRAM_API_KEY
+```
+
+**Includes:**
+- ✅ Everything from audio fork image
+- ✅ mod_deepgram_transcribe
+- ✅ Speaker diarization, NER, keyword boosting
+
+**Size:** ~950 MB
+**Use Case:** Real-time Deepgram speech-to-text transcription
+
+---
+
+### 4. Azure Transcription (Includes ALL Modules!)
+
+```bash
+# Without API keys
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest
+
+# With Azure only
+./dockerfiles/run-on-macbook.sh \
+  srt2011/freeswitch-mod-azure-transcribe:latest \
+  "" \
+  YOUR_AZURE_SUBSCRIPTION_KEY \
+  eastus
+
+# With both Deepgram AND Azure
+./dockerfiles/run-on-macbook.sh \
+  srt2011/freeswitch-mod-azure-transcribe:latest \
+  YOUR_DEEPGRAM_API_KEY \
+  YOUR_AZURE_SUBSCRIPTION_KEY \
+  eastus
+```
+
+**Includes:**
+- ✅ Everything from deepgram image
+- ✅ mod_azure_transcribe
+- ✅ Microsoft Azure Speech SDK 1.47.0
+- ✅ **ALL THREE TRANSCRIPTION MODULES**
+- ✅ **Pre-configured example configuration files** (dialplan, user directories 1000-1002)
+
+**Size:** ~1.2 GB
+**Use Case:** Azure speech-to-text, or using both Deepgram and Azure
+
+**Note:** The Azure image includes ready-to-use configuration files:
+- Complete dialplan with Azure transcription examples
+- User directories (1000, 1001, 1002) with example Azure configuration
+- No manual configuration needed for basic testing
+
+---
+
+## Script Usage
+
+### Basic Syntax
+
+```bash
+./dockerfiles/run-on-macbook.sh <IMAGE> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION]
+```
+
+### Parameters
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `IMAGE` | ✅ Yes | - | Docker Hub image name |
+| `DEEPGRAM_KEY` | ❌ No | - | Deepgram API key |
+| `AZURE_KEY` | ❌ No | - | Azure subscription key |
+| `AZURE_REGION` | ❌ No | `eastus` | Azure region |
+
+---
+
+## Testing After Launch
+
+### 1. Verify Container Running
+
+```bash
+docker ps | grep freeswitch
+```
+
+**Expected:** Container status "Up X minutes (healthy)"
+
+### 2. Check FreeSWITCH Status
+
+```bash
+docker exec -it freeswitch fs_cli -x "status"
+```
+
+**Expected:** Shows FreeSWITCH version, uptime, active sessions
+
+### 3. Verify Loaded Modules
+
+```bash
+docker exec -it freeswitch fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram|azure'
+```
+
+**Expected (for azure image):**
+```
+api,uuid_audio_fork,mod_audio_fork,...
+api,uuid_deepgram_transcribe,mod_deepgram_transcribe,...
+api,uuid_azure_transcribe,mod_azure_transcribe,...
+```
+
+---
+
+## SIP Client Setup
+
+### Install a SIP Client
+
+Choose one:
+- **Zoiper** (Recommended): https://www.zoiper.com/
+- **Linphone** (Open Source): https://www.linphone.org/
+- **Telephone** (Mac Native): https://www.64characters.com/telephone/
+
+### Configure Extension 1000
+
+| Setting | Value |
+|---------|-------|
+| **Username** | 1000 |
+| **Password** | 1234 |
+| **Domain/Host** | localhost |
+| **Port** | 5060 |
+| **Transport** | UDP |
+
+### Configure Extension 1001
+
+Same settings but with username `1001`.
+
+**Tip:** Use two different SIP clients (e.g., Zoiper for 1000, Linphone for 1001) to test calling between extensions.
+
+---
+
+## Making Calls
+
+### Test Basic Calling
+
+1. **Register both extensions** (1000 and 1001)
+2. **From 1000**: Dial `1001`
+3. **Answer on 1001**
+4. **Verify two-way audio**
+
+### Test Echo Service
+
+From any extension, dial `9196`:
+- Speak into microphone
+- Should hear your voice echoed back
+- Confirms audio path is working
+
+### Test Conference
+
+From both extensions, dial `3000`:
+- Both join the same conference room
+- Test multi-party audio
+
+---
+
+## Using Transcription Features
+
+### Deepgram Transcription
+
+#### Option 1: Pre-configured (if API key passed to script)
+
+Get active call UUID:
+```bash
+docker exec -it freeswitch fs_cli
+freeswitch@internal> show channels
+```
+
+Start transcription (mono - caller only):
+```bash
+freeswitch@internal> uuid_deepgram_transcribe <call-uuid> start en-US interim
+```
+
+Start transcription (stereo - both caller and callee on separate channels):
+```bash
+freeswitch@internal> uuid_deepgram_transcribe <call-uuid> start en-US interim stereo
+```
+
+#### Option 2: Configure per-call
+
+```bash
+docker exec -it freeswitch fs_cli
+freeswitch@internal> uuid_setvar <call-uuid> DEEPGRAM_API_KEY your-api-key
+freeswitch@internal> uuid_setvar <call-uuid> DEEPGRAM_SPEECH_MODEL phonecall
+freeswitch@internal> uuid_setvar <call-uuid> DEEPGRAM_SPEECH_TIER nova
+freeswitch@internal> uuid_deepgram_transcribe <call-uuid> start en-US interim
+```
+
+Stop transcription:
+```bash
+freeswitch@internal> uuid_deepgram_transcribe <call-uuid> stop
+```
+
+#### Option 3: User Directory Configuration (Persistent)
+
+Configure Deepgram settings per user so they're automatically applied to all calls.
+
+**1. Access the container:**
+```bash
+docker exec -it freeswitch bash
+```
+
+**2. Edit user configuration** (e.g., for extension 1000):
+```bash
+vi /usr/local/freeswitch/conf/directory/default/1000.xml
+```
+
+**3. Add Deepgram variables:**
+```xml
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="1234"/>
+    </params>
+    <variables>
+      <!-- Standard variables -->
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+
+      <!-- Deepgram Transcription Variables -->
+      <variable name="DEEPGRAM_API_KEY" value="your-deepgram-api-key"/>
+      <variable name="DEEPGRAM_SPEECH_MODEL" value="phonecall"/>
+      <variable name="DEEPGRAM_SPEECH_TIER" value="nova"/>
+      <variable name="DEEPGRAM_SPEECH_DIARIZE" value="true"/>
+      <variable name="DEEPGRAM_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION" value="true"/>
+    </variables>
+  </user>
+</include>
+```
+
+**4. Reload configuration:**
+```bash
+docker exec -it freeswitch fs_cli -x 'reloadxml'
+```
+
+**5. Start transcription on any call from that user:**
+```bash
+# Get call UUID
+docker exec -it freeswitch fs_cli -x 'show calls'
+
+# Start transcription (mono)
+docker exec -it freeswitch fs_cli -x 'uuid_deepgram_transcribe <uuid> start en-US interim'
+
+# Or start transcription (stereo - both parties)
+docker exec -it freeswitch fs_cli -x 'uuid_deepgram_transcribe <uuid> start en-US interim stereo'
+```
+
+**Benefits:**
+- Variables automatically applied to all calls from that user
+- No need to set per-call or pass to script
+- Persistent across container restarts if directory is mounted as volume
+- Different settings per user/department
+
+---
+
+### Azure Transcription
+
+#### Option 1: Pre-configured (if API key passed to script)
+
+```bash
+docker exec -it freeswitch fs_cli
+freeswitch@internal> show channels  # Get call UUID
+freeswitch@internal> uuid_azure_transcribe <call-uuid> start en-US interim
+```
+
+#### Option 2: Configure per-call
+
+```bash
+docker exec -it freeswitch fs_cli
+freeswitch@internal> uuid_setvar <call-uuid> AZURE_SUBSCRIPTION_KEY your-key
+freeswitch@internal> uuid_setvar <call-uuid> AZURE_REGION eastus
+freeswitch@internal> uuid_setvar <call-uuid> AZURE_USE_OUTPUT_FORMAT_DETAILED true
+freeswitch@internal> uuid_azure_transcribe <call-uuid> start en-US interim
+```
+
+Stop transcription:
+```bash
+freeswitch@internal> uuid_azure_transcribe <call-uuid> stop
+```
+
+---
+
+## Advanced Features
+
+### Deepgram Features
+
+#### Stereo Mode (Both Caller and Callee)
+```bash
+# Transcribe both parties on separate channels
+# Channel 0: Caller, Channel 1: Callee
+uuid_deepgram_transcribe <uuid> start en-US interim stereo
+```
+
+Use stereo mode for:
+- Call center recordings with separate agent/customer channels
+- Quality monitoring and compliance
+- Better speaker separation than diarization
+
+#### Speaker Diarization
+```bash
+uuid_setvar <uuid> DEEPGRAM_SPEECH_DIARIZE true
+uuid_deepgram_transcribe <uuid> start en-US interim
+```
+
+Use diarization in mono mode to identify different speakers in a single audio channel.
+
+#### Keyword Boosting
+```bash
+uuid_setvar <uuid> DEEPGRAM_SPEECH_KEYWORDS "payment:5,refund:4,account:3"
+uuid_deepgram_transcribe <uuid> start en-US interim
+```
+
+#### PCI Redaction
+```bash
+uuid_setvar <uuid> DEEPGRAM_SPEECH_REDACT "pci,ssn,numbers"
+uuid_deepgram_transcribe <uuid> start en-US interim
+```
+
+#### Named Entity Recognition
+```bash
+uuid_setvar <uuid> DEEPGRAM_SPEECH_NER true
+uuid_deepgram_transcribe <uuid> start en-US interim
+```
+
+---
+
+### Azure Features
+
+#### ConversationTranscriber Mode
+```bash
+# Start transcription using ConversationTranscriber (stereo mode)
+# Uses AI-based speaker identification (Guest-1, Guest-2, etc.)
+uuid_azure_transcribe <uuid> start en-US interim stereo
+```
+
+**Important**: Azure's streaming SDK uses AI-based speaker diarization to identify speakers, not true channel separation. The "Channel" field in results indicates audio source, but speaker identification (e.g., "Guest-1") is done via AI analysis.
+
+#### Speaker Diarization
+```bash
+# Enable AI-based speaker diarization with ConversationTranscriber
+uuid_setvar <uuid> AZURE_DIARIZE_INTERIM_RESULTS true
+uuid_setvar <uuid> AZURE_DIARIZATION_SPEAKER_COUNT 2
+uuid_setvar <uuid> AZURE_DIARIZATION_MIN_SPEAKER_COUNT 1
+uuid_setvar <uuid> AZURE_DIARIZATION_MAX_SPEAKER_COUNT 2
+uuid_azure_transcribe <uuid> start en-US interim stereo
+```
+
+**Note**: Speaker diarization is a preview feature. For production use or advanced capabilities, you may need to request access by emailing `diarizationrequest@microsoft.com`. See [module README](../modules/mod_azure_transcribe/README.md#advanced-features) for details.
+
+#### Word-Level Timestamps
+```bash
+# Get detailed timing information for each word
+uuid_setvar <uuid> AZURE_WORD_LEVEL_TIMESTAMPS true
+uuid_setvar <uuid> AZURE_USE_OUTPUT_FORMAT_DETAILED true
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
+#### Sentiment Analysis
+```bash
+# Enable sentiment analysis for emotional tone detection
+uuid_setvar <uuid> AZURE_SENTIMENT_ANALYSIS true
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
+#### Dictation Mode
+```bash
+# Enable dictation mode for better punctuation and formatting
+uuid_setvar <uuid> AZURE_DICTATION_MODE true
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
+#### Detailed Output with N-best
+```bash
+uuid_setvar <uuid> AZURE_USE_OUTPUT_FORMAT_DETAILED true
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
+#### Profanity Filtering
+```bash
+uuid_setvar <uuid> AZURE_PROFANITY_OPTION masked
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
+Options: `masked`, `removed`, `raw`
+
+#### Speech Hints (Mono Mode Only)
+```bash
+uuid_setvar <uuid> AZURE_SPEECH_HINTS "account,balance,payment"
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
+#### SNR Reporting
+```bash
+uuid_setvar <uuid> AZURE_REQUEST_SNR true
+uuid_azure_transcribe <uuid> start en-US interim
+```
+
+---
+
+## Useful Commands
+
+### Container Management
+
+```bash
+# View logs
+docker logs -f freeswitch
+
+# Access fs_cli
+docker exec -it freeswitch fs_cli
+
+# Restart container
+docker restart freeswitch
+
+# Stop container
+docker stop freeswitch
+
+# Remove container
+docker rm -f freeswitch
+```
+
+### FreeSWITCH Commands
+
+```bash
+# Show active calls
+docker exec -it freeswitch fs_cli -x "show calls"
+
+# Show channels
+docker exec -it freeswitch fs_cli -x "show channels"
+
+# Show SIP registrations
+docker exec -it freeswitch fs_cli -x "sofia status profile internal reg"
+
+# Reload XML configuration
+docker exec -it freeswitch fs_cli -x "reloadxml"
+
+# Show loaded modules
+docker exec -it freeswitch fs_cli -x "show modules"
+```
+
+---
+
+## Troubleshooting
+
+### Container Won't Start
+
+**Check Docker is running:**
+```bash
+docker info
+```
+
+**Check logs:**
+```bash
+docker logs freeswitch
+```
+
+**Remove old container:**
+```bash
+docker rm -f freeswitch
+```
+
+---
+
+### Extension Won't Register
+
+**Check SIP profile:**
+```bash
+docker exec -it freeswitch fs_cli -x "sofia status profile internal"
+```
+
+**Check port is listening:**
+```bash
+docker exec -it freeswitch netstat -tuln | grep 5060
+```
+
+**Check firewall on MacBook:**
+- System Preferences → Security & Privacy → Firewall
+- Allow Docker to accept incoming connections
+
+---
+
+### No Audio During Calls
+
+**Check RTP ports:**
+```bash
+docker port freeswitch | grep 16384
+```
+
+**For external devices:**
+- Get MacBook IP: `ifconfig | grep "inet "`
+- Use MacBook IP in SIP client instead of localhost
+
+---
+
+### Transcription Not Working
+
+**Deepgram:**
+```bash
+# Check API key is set
+docker exec -it freeswitch bash -c 'echo $DEEPGRAM_API_KEY'
+
+# Check module loaded
+docker exec -it freeswitch fs_cli -x "show modules" | grep deepgram
+
+# Check FreeSWITCH logs
+docker logs freeswitch | grep -i deepgram
+```
+
+**Azure:**
+```bash
+# Check API key is set
+docker exec -it freeswitch bash -c 'echo $AZURE_SUBSCRIPTION_KEY'
+docker exec -it freeswitch bash -c 'echo $AZURE_REGION'
+
+# Check module loaded
+docker exec -it freeswitch fs_cli -x "show modules" | grep azure
+
+# Check Azure SDK libraries
+docker exec -it freeswitch ls -la /usr/local/lib/MicrosoftSpeechSDK/
+
+# Check FreeSWITCH logs
+docker logs freeswitch | grep -i azure
+```
+
+---
+
+### fs_cli Won't Connect
+
+**Check event socket:**
+```bash
+docker exec -it freeswitch netstat -tuln | grep 8021
+```
+
+**Try with password:**
+```bash
+docker exec -it freeswitch fs_cli -H localhost -P ClueCon
+```
+
+---
+
+## Performance Tips
+
+### Apple Silicon (M1/M2/M3) Macs
+
+The images run via Rosetta 2 emulation (linux/amd64):
+- ✅ Full compatibility
+- ⚠️ Slightly slower than native ARM
+- ⚠️ Higher CPU usage during transcription
+
+**Tip:** Close other CPU-intensive apps for best transcription performance.
+
+### Intel Macs
+
+Native performance, no emulation needed.
+
+---
+
+## Cleaning Up
+
+### Remove Container
+
+```bash
+docker stop freeswitch
+docker rm freeswitch
+```
+
+### Remove Image (to free space)
+
+```bash
+# Remove specific image
+docker rmi srt2011/freeswitch-mod-azure-transcribe:latest
+
+# Remove all FreeSWITCH images
+docker images | grep freeswitch | awk '{print $3}' | xargs docker rmi
+```
+
+### Reclaim Docker Space
+
+```bash
+docker system prune -a
+```
+
+---
+
+## Cost Considerations
+
+### Deepgram
+
+- Pay-as-you-go pricing
+- Free tier available: https://console.deepgram.com/
+- Nova models cost more than base models
+
+### Azure Speech Services
+
+- Pay-as-you-go pricing
+- Free tier: 5 hours/month
+- Detailed pricing: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/speech-services/
+
+**Tip:** Use environment variables to avoid accidentally leaving transcription running:
+```bash
+# Stop all active transcriptions
+docker exec -it freeswitch fs_cli -x "show channels" | grep uuid | awk '{print $1}' | while read uuid; do
+  docker exec -it freeswitch fs_cli -x "uuid_deepgram_transcribe $uuid stop"
+  docker exec -it freeswitch fs_cli -x "uuid_azure_transcribe $uuid stop"
+done
+```
+
+---
+
+## Examples by Use Case
+
+### Use Case 1: Basic SIP Testing
+
+```bash
+# Use base image (smallest, fastest)
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-base:latest
+```
+
+### Use Case 2: Audio Streaming Development
+
+```bash
+# Use audio fork module
+./dockerfiles/run-on-macbook.sh srt2011/freeswitch-mod-audio-fork:latest
+```
+
+### Use Case 3: Deepgram Transcription Development
+
+```bash
+# Use Deepgram image with API key
+./dockerfiles/run-on-macbook.sh \
+  srt2011/freeswitch-mod-deepgram-transcribe:latest \
+  $DEEPGRAM_API_KEY
+```
+
+### Use Case 4: Azure Transcription Development
+
+```bash
+# Use Azure image with API key
+./dockerfiles/run-on-macbook.sh \
+  srt2011/freeswitch-mod-azure-transcribe:latest \
+  "" \
+  $AZURE_SUBSCRIPTION_KEY \
+  eastus
+```
+
+### Use Case 5: Multi-Provider Transcription Testing
+
+```bash
+# Use Azure image (has all modules) with both API keys
+./dockerfiles/run-on-macbook.sh \
+  srt2011/freeswitch-mod-azure-transcribe:latest \
+  $DEEPGRAM_API_KEY \
+  $AZURE_SUBSCRIPTION_KEY \
+  eastus
+```
+
+---
+
+## Next Steps
+
+### Production Deployment
+
+For production use, see:
+- **Docker Compose**: `dockerfiles/README.md` (Configuration Guide section)
+- **Systemd Service**: `dockerfiles/README.md` (Method 4: FreeSWITCH Service Configuration)
+- **Dialplan Configuration**: `dockerfiles/README.md` (Method 2: Dialplan Configuration)
+
+### API Documentation
+
+- **Deepgram**: `modules/mod_deepgram_transcribe/README.md`
+- **Azure**: `modules/mod_azure_transcribe/README.md`
+- **Audio Fork**: `modules/mod_audio_fork/README.md`
+
+### Build From Source
+
+If you need to customize:
+- **Build instructions**: `dockerfiles/README.md`
+- **Dockerfile**: `dockerfiles/Dockerfile.mod_azure_transcribe`
+
+---
+
+## Support
+
+### Documentation
+
+- Main README: `README.md`
+- Docker builds: `dockerfiles/README.md`
+- Deployment guide: `dockerfiles/DOCKER_HUB_DEPLOYMENT.md`
+
+### Resources
+
+- FreeSWITCH Wiki: https://freeswitch.org/confluence/
+- Deepgram Docs: https://developers.deepgram.com/
+- Azure Speech Docs: https://docs.microsoft.com/en-us/azure/cognitive-services/speech-service/
+
+---
+
+**Happy transcribing! 🎙️ → 📝**
+
+---
+
+
+# Appendix C: Docker Hub Deployment Guide
+
+This section provides step-by-step instructions for pushing images to Docker Hub and testing them.
+
+# Docker Hub Deployment and MacBook Testing Guide
+
+This guide walks you through pushing the FreeSWITCH base image to Docker Hub and testing it on your MacBook with SIP calling between extensions 1000 and 1001.
+
+---
+
+## Prerequisites
+
+1. **Docker Hub Account**: Sign up at https://hub.docker.com if you don't have one
+2. **Docker installed on MacBook**: Download from https://www.docker.com/products/docker-desktop
+3. **SIP Client**: Install a softphone on your MacBook (recommended options below)
+
+---
+
+## Part 1: Build and Push to Docker Hub (Development Environment)
+
+### Step 1: Build the Image
+
+```bash
+# In your development environment
+cd /workspaces/freeswitch_modules
+
+# Build the image (takes 30-45 minutes)
+./dockerfiles/build-freeswitch-base.sh freeswitch-base:1.10.11
+```
+
+Wait for the build to complete. You should see:
+```
+✅ FreeSWITCH configured
+✅ FreeSWITCH compiled
+✅ FreeSWITCH installed
+✅ Sounds installed
+✅ Sample configuration installed
+```
+
+### Step 2: Verify Local Image Exists
+
+Before pushing, verify the image was built successfully:
+
+```bash
+# Check if image already exists
+docker images | grep "freeswitch-base.*1.10.11"
+
+# Get image size
+docker images freeswitch-base:1.10.11 --format "{{.Repository}}:{{.Tag}}\t{{.Size}}"
+```
+
+If the image is not found, build it first:
+```bash
+./dockerfiles/build-freeswitch-base.sh freeswitch-base:1.10.11
+```
+
+### Step 3: Tag the Image for Docker Hub
+
+Replace `YOUR_DOCKERHUB_USERNAME` with your actual Docker Hub username:
+
+```bash
+# Tag the image
+docker tag freeswitch-base:1.10.11 YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+
+# Also tag as latest
+docker tag freeswitch-base:1.10.11 YOUR_DOCKERHUB_USERNAME/freeswitch-base:latest
+```
+
+**Example**:
+```bash
+docker tag freeswitch-base:1.10.11 johndoe/freeswitch-base:1.10.11
+docker tag freeswitch-base:1.10.11 johndoe/freeswitch-base:latest
+```
+
+### Step 4: Login to Docker Hub
+
+```bash
+docker login
+```
+
+Enter your Docker Hub username and password when prompted.
+
+**Check if already logged in**:
+```bash
+docker info 2>/dev/null | grep Username
+# If you see a username, you're already logged in
+```
+
+**Alternative** (using access token for better security):
+```bash
+# Create access token at: https://hub.docker.com/settings/security
+docker login -u YOUR_DOCKERHUB_USERNAME
+# Paste access token when prompted for password
+```
+
+### Step 5: Push to Docker Hub
+
+```bash
+# Push the versioned tag
+docker push YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+
+# Push the latest tag
+docker push YOUR_DOCKERHUB_USERNAME/freeswitch-base:latest
+```
+
+**Note**: This will take 5-15 minutes depending on your upload speed. The image is ~800 MB - 1 GB.
+
+You'll see output like:
+```
+The push refers to repository [docker.io/YOUR_DOCKERHUB_USERNAME/freeswitch-base]
+abc123def456: Pushed
+789ghi012jkl: Pushed
+...
+1.10.11: digest: sha256:xxxxx size: 1234
+```
+
+### Step 6: Verify on Docker Hub
+
+Visit https://hub.docker.com/r/YOUR_DOCKERHUB_USERNAME/freeswitch-base to confirm the image is published.
+
+**You should see**:
+- Image name: `YOUR_DOCKERHUB_USERNAME/freeswitch-base`
+- Tags: `1.10.11` and `latest`
+- Image size: ~800 MB - 1 GB
+- Push timestamp
+
+### Pull Command for Others
+
+Once published, share this command with your team:
+```bash
+docker pull YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+```
+
+**Run on any machine** (including MacBook with Apple Silicon):
+```bash
+docker run -d \
+    --name freeswitch \
+    --platform linux/amd64 \
+    -p 5060:5060/tcp \
+    -p 5060:5060/udp \
+    -p 5080:5080/tcp \
+    -p 5080:5080/udp \
+    -p 8021:8021/tcp \
+    -p 16384-16484:16384-16484/udp \
+    YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+```
+
+---
+
+## Part 2: Pull and Run on MacBook
+
+### Step 1: Open Terminal on MacBook
+
+```bash
+# Verify Docker is running
+docker --version
+
+# Should show something like: Docker version 24.x.x, build xxxxx
+```
+
+### Step 2: Pull the Image from Docker Hub
+
+```bash
+docker pull YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+```
+
+This will download the image to your MacBook (5-10 minutes depending on internet speed).
+
+### Step 3: Run the FreeSWITCH Container
+
+```bash
+docker run -d \
+    --name freeswitch \
+    --platform linux/amd64 \
+    -p 5060:5060/tcp \
+    -p 5060:5060/udp \
+    -p 5080:5080/tcp \
+    -p 5080:5080/udp \
+    -p 8021:8021/tcp \
+    -p 16384-16484:16384-16484/udp \
+    YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+```
+
+**Port Mapping Explanation**:
+- `5060` - SIP signaling (TCP and UDP)
+- `5080` - SIP over WebSocket (for WebRTC)
+- `8021` - Event Socket (for fs_cli)
+- `16384-16484` - RTP media (audio/video)
+
+### Step 4: Verify FreeSWITCH is Running
+
+```bash
+# Check container is running
+docker ps | grep freeswitch
+
+# Check logs
+docker logs freeswitch
+
+# Should see FreeSWITCH startup messages
+```
+
+### Step 5: Connect with fs_cli
+
+```bash
+docker exec -it freeswitch fs_cli
+
+docker exec -it freeswitch fs_cli -x "sofia status"
+==>
+                     Name          Type                                       Data      State
+=================================================================================================
+            external-ipv6       profile                   sip:mod_sofia@[::1]:5080      RUNNING (0)
+               172.17.0.2         alias                                   internal      ALIASED
+                 external       profile            sip:mod_sofia@20.192.21.57:5080      RUNNING (0)
+    external::example.com       gateway                    sip:joeuser@example.com      NOREG
+            internal-ipv6       profile                   sip:mod_sofia@[::1]:5060      RUNNING (0)
+                 internal       profile              sip:mod_sofia@172.17.0.2:5060      RUNNING (0)
+=================================================================================================
+
+docker exec -it freeswitch cat  /usr/local/freeswitch/conf/sip_profiles/internal.xml | grep ext-rtp-ip
+==>  <param name="ext-rtp-ip" value="$${local_ip_v4}"/>
+```
+
+You should see the FreeSWITCH CLI prompt:
+```
+ _____              ______        _____ _______ _____ _    _
+|  ___| __ ___  ___/ ___\ \      / /_ _|_   _/ ____| |  | |
+| |_ | '__/ _ \/ _ \___ \\ \ /\ / / | |  | || |    | |  | |
+|  _|| | |  __/  __/___) |\ V  V /  | |  | || |____| |__| |
+|_|  |_|  \___|\___|____/  \_/\_/  |___| |_| \_____|\____/
+
++OK
+freeswitch@internal>
+```
+
+**Test commands**:
+```
+status              # Show FreeSWITCH status
+sofia status        # Show SIP profiles
+show modules        # List loaded modules (should be 100+)
+show channels       # Show active calls
+```
+
+Type `exit` or press Ctrl+D to exit fs_cli.
+
+---
+
+## Part 3: Install SIP Client on MacBook
+
+Choose one of these SIP clients for testing:
+
+### Option A: Zoiper (Recommended - Free)
+
+1. Download: https://www.zoiper.com/en/voip-softphone/download/current
+2. Install Zoiper 5 for macOS
+3. Launch Zoiper
+
+### Option B: Linphone (Open Source - Free)
+
+1. Download: https://www.linphone.org/releases/macosx/app/Linphone-4.x.x.dmg
+2. Install and launch
+
+### Option C: Telephone (Mac Native - Free)
+
+1. Install from App Store or https://www.64characters.com/telephone/
+2. Launch Telephone
+
+### Option D: Bria (Professional - Paid)
+
+1. Download: https://www.counterpath.com/bria-solo/
+2. Free trial available
+
+---
+
+## Part 4: Configure SIP Clients for Extension 1000
+
+### Get Your MacBook's IP Address
+
+```bash
+# Get container IP (use this if testing on same MacBook)
+docker inspect freeswitch | grep IPAddress
+
+# Or use localhost
+SERVER_IP=localhost
+```
+
+### Configure Extension 1000 in Zoiper
+
+**Account Settings**:
+- Account name: `Extension 1000`
+- SIP Username: `1000`
+- SIP Password: `1234`
+- SIP Domain/Host: `localhost` (or MacBook IP if testing from another device)
+- SIP Port: `5060`
+- Transport: `UDP`
+
+**Detailed Steps (Zoiper)**:
+1. Open Zoiper
+2. Settings → Accounts → Add Account
+3. Select "SIP"
+4. Enter credentials above
+5. Click "Create Account"
+6. Status should show "Registered" (green)
+
+### Configure Extension 1001 (for Second Client)
+
+You have two options:
+
+**Option A: Install second SIP client on MacBook**
+- Use a different SIP client (e.g., if using Zoiper for 1000, use Linphone for 1001)
+- Configure with username `1001`, password `1234`
+
+**Option B: Use mobile phone**
+- Install Zoiper/Linphone on your iPhone/Android
+- Connect to same WiFi network as MacBook
+- Use MacBook's local IP address (find with `ifconfig en0 | grep inet`)
+- Configure with username `1001`, password `1234`
+
+---
+
+## Part 5: Test Calling Between Extensions
+
+### From Extension 1000 to 1001
+
+1. **On Extension 1000 client**:
+   - Dial: `1001`
+   - Press Call button
+   - You should hear ringing
+
+2. **On Extension 1001 client**:
+   - Incoming call should appear
+   - Answer the call
+
+3. **Verify**:
+   - Both extensions should hear each other
+   - Talk to confirm two-way audio
+
+### From Extension 1001 to 1000
+
+1. **On Extension 1001 client**:
+   - Dial: `1000`
+   - Press Call button
+
+2. **On Extension 1000 client**:
+   - Answer incoming call
+
+3. **Verify two-way audio**
+
+### Monitor Calls in fs_cli
+
+While calls are active:
+
+```bash
+docker exec -it freeswitch fs_cli
+```
+
+Then run:
+```
+freeswitch@internal> show channels
+
+uuid,direction,created,created_epoch,name,state,cid_name,cid_num,ip_addr,dest,application,application_data,dialplan,context,read_codec,read_rate,read_bit_rate,write_codec,write_rate,write_bit_rate,secure,hostname,presence_id,presence_data,accountcode,callstate,callee_name,callee_num,callee_direction,call_uuid,sent_callee_name,sent_callee_num,initial_cid_name,initial_cid_num,initial_ip_addr,initial_dest,initial_dialplan,initial_context
+
+1 total.
+```
+
+**Other useful monitoring commands**:
+```
+sofia status profile internal
+show calls
+uuid_dump <call-uuid>
+```
+
+---
+
+## Part 6: Advanced Testing
+
+### Test Echo Service
+
+FreeSWITCH includes a built-in echo test:
+
+1. From any registered extension, dial: `9196`
+2. Speak into the microphone
+3. You should hear your own voice echoed back (with slight delay)
+4. This confirms audio path is working correctly
+
+### Test Conference
+
+1. From extension 1000, dial: `3000` (default conference room)
+2. You'll hear "You are the only person in this conference"
+3. From extension 1001, dial: `3000`
+4. Both extensions should now be in conference bridge
+5. Test multi-party audio
+
+### Test Voicemail
+
+1. From extension 1000, dial: `*98`
+2. When prompted, enter: `1000#` (mailbox) then `1234#` (password)
+3. Follow prompts to record a message
+
+### Check Call Detail Records
+
+```bash
+docker exec -it freeswitch fs_cli -x "show calls"
+```
+
+---
+
+## Part 7: Troubleshooting
+
+### Extension Won't Register
+
+**Check 1: Container is running**
+```bash
+docker ps | grep freeswitch
+# Should show STATUS as "Up X minutes"
+```
+
+**Check 2: SIP profile is running**
+```bash
+docker exec -it freeswitch fs_cli -x "sofia status"
+# Should show "internal" profile as RUNNING
+```
+
+**Check 3: Port 5060 is accessible**
+```bash
+# On MacBook
+nc -zv localhost 5060
+# Should show: Connection to localhost port 5060 [tcp/sip] succeeded!
+```
+
+**Check 4: Check SIP registration in fs_cli**
+```bash
+docker exec -it freeswitch fs_cli -x "sofia status profile internal reg"
+# Should show registered users
+```
+
+### No Audio During Calls
+
+**Issue**: Calls connect but no audio in one or both directions
+
+**Solution 1: Check RTP ports**
+```bash
+# Make sure RTP ports are mapped
+docker port freeswitch
+# Should show 16384-16484/udp
+```
+
+**Solution 2: Firewall on MacBook**
+- Go to System Preferences → Security & Privacy → Firewall
+- Allow Docker to accept incoming connections
+
+**Solution 3: NAT configuration**
+
+If testing from external network, add to FreeSWITCH vars.xml:
+```bash
+docker exec -it freeswitch vim /usr/local/freeswitch/conf/vars.xml
+```
+
+Find and update:
+```xml
+<X-PRE-PROCESS cmd="set" data="external_rtp_ip=YOUR_PUBLIC_IP"/>
+<X-PRE-PROCESS cmd="set" data="external_sip_ip=YOUR_PUBLIC_IP"/>
+```
+
+Then reload:
+```bash
+docker exec -it freeswitch fs_cli -x "reloadxml"
+```
+
+### Call Immediately Hangs Up
+
+**Check dialplan**:
+```bash
+docker exec -it freeswitch fs_cli -x "xml_locate dialplan"
+```
+
+Verify extension 1001 exists in default dialplan.
+
+### Container Keeps Restarting
+
+**Check logs**:
+```bash
+docker logs freeswitch
+```
+
+Look for errors like:
+- Configuration syntax errors
+- Missing files
+- Permission issues
+
+### Can't Access fs_cli
+
+**Check Event Socket is running**:
+```bash
+docker exec -it freeswitch netstat -an | grep 8021
+# Should show: tcp  0  0 127.0.0.1:8021  0.0.0.0:*  LISTEN
+```
+
+---
+
+## Part 8: Docker Commands Reference
+
+### Container Management
+
+```bash
+# Start container
+docker start freeswitch
+
+# Stop container
+docker stop freeswitch
+
+# Restart container
+docker restart freeswitch
+
+# Remove container
+docker rm -f freeswitch
+
+# View logs (follow mode)
+docker logs -f freeswitch
+
+# View last 100 lines
+docker logs --tail 100 freeswitch
+
+# Execute command in container
+docker exec -it freeswitch <command>
+
+# Open bash shell in container
+docker exec -it freeswitch bash
+```
+
+### Image Management
+
+```bash
+# List images
+docker images | grep freeswitch
+
+# Remove image
+docker rmi YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+
+# Pull latest version
+docker pull YOUR_DOCKERHUB_USERNAME/freeswitch-base:latest
+
+# Check image size
+docker images YOUR_DOCKERHUB_USERNAME/freeswitch-base --format "{{.Repository}}:{{.Tag}}\t{{.Size}}"
+```
+
+### Network Debugging
+
+```bash
+# Check container IP
+docker inspect freeswitch | grep IPAddress
+
+# Check port mappings
+docker port freeswitch
+
+# Monitor network traffic (requires tcpdump in container)
+docker exec -it freeswitch tcpdump -i any port 5060 -n
+```
+
+---
+
+## Part 9: Production Considerations
+
+### Persist Configuration and Data
+
+```bash
+# Create volumes for persistence
+docker volume create freeswitch-conf
+docker volume create freeswitch-logs
+docker volume create freeswitch-data
+
+# Run with volumes
+docker run -d \
+    --name freeswitch \
+    -p 5060:5060/tcp \
+    -p 5060:5060/udp \
+    -p 5080:5080/tcp \
+    -p 5080:5080/udp \
+    -p 8021:8021/tcp \
+    -p 16384-16484:16384-16484/udp \
+    -v freeswitch-conf:/usr/local/freeswitch/conf \
+    -v freeswitch-logs:/usr/local/freeswitch/log \
+    -v freeswitch-data:/usr/local/freeswitch/storage \
+    YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+```
+
+### Resource Limits
+
+```bash
+# Run with resource constraints
+docker run -d \
+    --name freeswitch \
+    --memory="2g" \
+    --cpus="2" \
+    -p 5060:5060/tcp \
+    -p 5060:5060/udp \
+    -p 8021:8021/tcp \
+    -p 16384-16484:16384-16484/udp \
+    YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+```
+
+### Environment Variables
+
+```bash
+# Override default settings
+docker run -d \
+    --name freeswitch \
+    -e FREESWITCH_LOG_LEVEL=DEBUG \
+    -e FREESWITCH_RTP_START=10000 \
+    -e FREESWITCH_RTP_END=20000 \
+    -p 5060:5060/tcp \
+    -p 5060:5060/udp \
+    YOUR_DOCKERHUB_USERNAME/freeswitch-base:1.10.11
+```
+
+---
+
+## Summary Checklist
+
+### Development Environment
+- [ ] Build image: `./dockerfiles/build-freeswitch-base.sh`
+- [ ] Tag for Docker Hub: `docker tag freeswitch-base:1.10.11 USER/freeswitch-base:1.10.11`
+- [ ] Login to Docker Hub: `docker login`
+- [ ] Push to Docker Hub: `docker push USER/freeswitch-base:1.10.11`
+- [ ] Verify on hub.docker.com
+
+### MacBook
+- [ ] Pull image: `docker pull USER/freeswitch-base:1.10.11`
+- [ ] Run container with port mappings
+- [ ] Verify with `docker ps` and `docker logs`
+- [ ] Test fs_cli access
+
+### SIP Testing
+- [ ] Install SIP client(s) on MacBook
+- [ ] Register extension 1000 (username: 1000, password: 1234)
+- [ ] Register extension 1001 (username: 1001, password: 1234)
+- [ ] Test call from 1000 to 1001
+- [ ] Test call from 1001 to 1000
+- [ ] Verify two-way audio
+- [ ] Test echo service (dial 9196)
+- [ ] Test conference (dial 3000)
+
+### Monitoring
+- [ ] Monitor calls in fs_cli: `show channels`
+- [ ] Check SIP registrations: `sofia status profile internal reg`
+- [ ] View call logs in FreeSWITCH logs
+
+---
+
+## Next Steps
+
+Once calling is working between extensions 1000 and 1001:
+
+1. **Add more extensions** - Create additional SIP users
+2. **Configure WebRTC** - Test browser-based calling
+3. **Add custom modules** - Integrate your mod_audio_fork and other modules
+4. **External calling** - Configure SIP trunks for PSTN calls
+5. **Dialplan customization** - Add IVR, call routing, etc.
+
+---
+
+## Support Resources
+
+- **FreeSWITCH Wiki**: https://freeswitch.org/confluence/
+- **Docker Hub**: https://hub.docker.com/r/YOUR_DOCKERHUB_USERNAME/freeswitch-base
+- **Project Repo**: Your GitHub repository
+- **Installation Guide**: See [Appendix A](#appendix-a-complete-freeswitch-installation-guide) for build details
+
+---
+
+**Happy testing!** 🎉📞

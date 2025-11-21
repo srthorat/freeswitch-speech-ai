@@ -1,0 +1,374 @@
+# ============================================================================
+# Dockerfile for FreeSWITCH with mod_google_transcribe
+# ============================================================================
+#
+# This Dockerfile builds mod_google_transcribe on top of the freeswitch-base
+# image, adding gRPC, Protocol Buffers, and Google Cloud Speech API integration.
+#
+# Base image includes:
+#   - FreeSWITCH 1.10.11 fully built and configured
+#   - All required configs for SIP calls
+#   - Event Socket configured for fs_cli
+#   - Production patches and optimizations
+#
+# This image adds:
+#   - gRPC and Protocol Buffers (for Google Cloud communication)
+#   - googleapis (Google Cloud Speech API protobuf definitions)
+#   - mod_google_transcribe (Google real-time transcription)
+#
+# Build time: 30-45 minutes (includes gRPC build)
+# Final size: ~1.2 GB (adds gRPC ~250MB)
+#
+# Usage:
+#   docker build -f dockerfiles/Dockerfile.mod_google_transcribe \
+#     -t freeswitch-mod-google-transcribe:latest .
+#
+# Or use the build script:
+#   ./dockerfiles/docker-build-mod-google-transcribe.sh
+# ============================================================================
+
+ARG BASE_IMAGE=srt2011/freeswitch-base:latest
+
+# gRPC Version Configuration
+# - Current default: 1.64.2 (tested and stable)
+# - Verified working: 1.60+ (per module requirements)
+# - Latest available: Check https://github.com/grpc/grpc/releases
+#
+# To use a different version, pass as build arg:
+#   --build-arg GRPC_VERSION=1.65.0
+#
+# Recommendation: Use default 1.64.2 for stability, upgrade if needed
+ARG GRPC_VERSION=1.64.2
+
+# ============================================================================
+# Builder Stage: Compile mod_google_transcribe with gRPC and googleapis
+# ============================================================================
+FROM ${BASE_IMAGE} AS builder
+
+ARG BUILD_CPUS=4
+ARG GRPC_VERSION=1.64.2
+
+# Print build configuration
+RUN echo "=============================================" \
+    && echo "Building mod_google_transcribe" \
+    && echo "=============================================" \
+    && echo "Base Image: ${BASE_IMAGE}" \
+    && echo "gRPC Version: ${GRPC_VERSION}" \
+    && echo "Build CPUs: ${BUILD_CPUS}" \
+    && echo "============================================="
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    build-essential \
+    git \
+    cmake \
+    ca-certificates \
+    wget \
+    autoconf \
+    libtool \
+    pkg-config \
+    libssl-dev \
+    zlib1g-dev \
+    libspeexdsp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set library path
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# ============================================================================
+# Build gRPC and Protocol Buffers
+# ============================================================================
+WORKDIR /usr/local/src
+RUN echo "=========================================" \
+    && echo "Cloning gRPC v${GRPC_VERSION}..." \
+    && echo "=========================================" \
+    && git clone --depth 1 -b v${GRPC_VERSION} https://github.com/grpc/grpc \
+    && cd grpc \
+    && git submodule update --init --recursive \
+    && echo "✅ gRPC source downloaded with all submodules"
+
+RUN echo "=========================================" \
+    && echo "Building gRPC v${GRPC_VERSION}..." \
+    && echo "This includes Protocol Buffers (protoc)" \
+    && echo "=========================================" \
+    && cd /usr/local/src/grpc \
+    && mkdir -p cmake/build && cd cmake/build \
+    && cmake ../.. \
+        -DBUILD_SHARED_LIBS=ON \
+        -DgRPC_INSTALL=ON \
+        -DgRPC_BUILD_TESTS=OFF \
+        -DgRPC_SSL_PROVIDER=package \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_STANDARD=17 \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && ldconfig \
+    && echo "✅ gRPC v${GRPC_VERSION} built and installed"
+
+# Verify gRPC and protoc installation
+RUN echo "=========================================" \
+    && echo "Verifying gRPC and protoc installation..." \
+    && echo "=========================================" \
+    && echo "protoc version:" \
+    && /usr/local/bin/protoc --version \
+    && echo "" \
+    && echo "gRPC plugin:" \
+    && ls -lh /usr/local/bin/grpc_cpp_plugin \
+    && echo "" \
+    && echo "gRPC libraries:" \
+    && ls -1 /usr/local/lib/libgrpc*.so* | head -10 \
+    && ls -1 /usr/local/lib/libprotobuf*.so* | head -5 \
+    && echo "" \
+    && echo "Checking for required components:" \
+    && ls -1 /usr/local/lib/libgrpc++.so && echo "  ✅ grpc++" \
+    && ls -1 /usr/local/lib/libgrpc.so && echo "  ✅ grpc" \
+    && ls -1 /usr/local/lib/libprotobuf.so && echo "  ✅ protobuf" \
+    && echo "========================================="
+
+# ============================================================================
+# Clone googleapis and generate protobuf files
+# ============================================================================
+WORKDIR /usr/local/src
+RUN echo "=========================================" \
+    && echo "Cloning googleapis..." \
+    && echo "=========================================" \
+    && git clone --depth 1 https://github.com/googleapis/googleapis.git \
+    && echo "✅ googleapis cloned"
+
+# Generate protobuf/gRPC files for Google Cloud Speech API
+RUN echo "=========================================" \
+    && echo "Generating protobuf files for Google Cloud Speech API..." \
+    && echo "=========================================" \
+    && cd /usr/local/src/googleapis \
+    && mkdir -p gens \
+    && /usr/local/bin/protoc \
+        --proto_path=. \
+        --cpp_out=gens \
+        --grpc_out=gens \
+        --plugin=protoc-gen-grpc=/usr/local/bin/grpc_cpp_plugin \
+        google/cloud/speech/v1/*.proto \
+        google/api/*.proto \
+        google/rpc/*.proto \
+        google/longrunning/*.proto \
+        google/type/*.proto \
+    && echo "✅ Protobuf files generated in /usr/local/src/googleapis/gens"
+
+# Verify googleapis generation
+RUN echo "=========================================" \
+    && echo "Verifying googleapis generation..." \
+    && echo "=========================================" \
+    && echo "Generated files in googleapis/gens:" \
+    && find /usr/local/src/googleapis/gens -type f -name "*.pb.cc" | wc -l | xargs -I {} echo "  {} .pb.cc files" \
+    && find /usr/local/src/googleapis/gens -type f -name "*.pb.h" | wc -l | xargs -I {} echo "  {} .pb.h files" \
+    && echo "" \
+    && echo "Speech API files:" \
+    && ls -lh /usr/local/src/googleapis/gens/google/cloud/speech/v1/*.pb.cc 2>/dev/null || echo "  ⚠️  No speech pb.cc files found" \
+    && ls -lh /usr/local/src/googleapis/gens/google/cloud/speech/v1/*.pb.h 2>/dev/null || echo "  ⚠️  No speech pb.h files found" \
+    && echo "========================================="
+
+# ============================================================================
+# Build mod_google_transcribe
+# ============================================================================
+WORKDIR /usr/local/src
+COPY ./modules/mod_google_transcribe /usr/local/src/mod_google_transcribe
+
+RUN echo "=========================================" \
+    && echo "Building mod_google_transcribe..." \
+    && echo "=========================================" \
+    && cd /usr/local/src/mod_google_transcribe \
+    && echo "" \
+    && echo "Source files:" \
+    && ls -lh *.c *.cpp *.h 2>/dev/null || true \
+    && echo "" \
+    && echo "Compiling mod_google_transcribe.c with gcc..." \
+    && gcc -fPIC -c \
+        -I/usr/local/freeswitch/include/freeswitch \
+        mod_google_transcribe.c \
+    && echo "✅ mod_google_transcribe.c compiled" \
+    && echo "" \
+    && echo "Compiling google_glue.cpp with g++ (C++17)..." \
+    && g++ -fPIC -c -std=c++17 \
+        -I/usr/local/freeswitch/include/freeswitch \
+        -I/usr/local/include \
+        -I/usr/local/src/googleapis/gens \
+        google_glue.cpp \
+    && echo "✅ google_glue.cpp compiled" \
+    && echo "" \
+    && echo "Linking mod_google_transcribe.so..." \
+    && mkdir -p /usr/local/freeswitch/lib/freeswitch/mod \
+    && g++ -shared \
+        -o /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so \
+        mod_google_transcribe.o \
+        google_glue.o \
+        /usr/local/src/googleapis/gens/google/cloud/speech/v1/*.pb.cc \
+        /usr/local/src/googleapis/gens/google/api/*.pb.cc \
+        /usr/local/src/googleapis/gens/google/rpc/*.pb.cc \
+        /usr/local/src/googleapis/gens/google/longrunning/*.pb.cc \
+        /usr/local/src/googleapis/gens/google/type/*.pb.cc \
+        -L/usr/local/lib \
+        -lgrpc++ \
+        -lgrpc \
+        -lprotobuf \
+        -lpthread \
+        -lssl \
+        -lcrypto \
+        -lz \
+    && echo "✅ mod_google_transcribe.so built successfully"
+
+# Verify module was built
+RUN echo "=========================================" \
+    && echo "Build Verification..." \
+    && echo "=========================================" \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so \
+    && echo "" \
+    && echo "Checking module dependencies..." \
+    && ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so \
+    && echo ""
+
+# ============================================================================
+# Validation Stage: Verify module dependencies
+# ============================================================================
+RUN echo "=========================================" \
+    && echo "Module Validation" \
+    && echo "=========================================" \
+    && MODULE_PATH="/usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so" \
+    && echo "" \
+    && echo "1. Check module file exists:" \
+    && if [ -f "$MODULE_PATH" ]; then \
+        echo "✅ Module file exists"; ls -lh "$MODULE_PATH"; \
+    else \
+        echo "❌ ERROR: Module file not found: $MODULE_PATH"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "2. Check module dependencies with ldd:" \
+    && ldd "$MODULE_PATH" \
+    && echo "" \
+    && echo "3. Verify gRPC linkage:" \
+    && if ldd "$MODULE_PATH" | grep -q "libgrpc++"; then \
+        echo "✅ Module correctly linked with gRPC++"; \
+        ldd "$MODULE_PATH" | grep libgrpc; \
+    else \
+        echo "❌ ERROR: Module not linked with gRPC"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "4. Check for missing dependencies:" \
+    && if ldd "$MODULE_PATH" | grep -q "not found"; then \
+        echo "❌ ERROR: Missing dependencies:"; \
+        ldd "$MODULE_PATH" | grep "not found"; exit 1; \
+    else \
+        echo "✅ No missing dependencies"; \
+    fi \
+    && echo "=========================================" \
+    && echo "✅ Static validation passed!" \
+    && echo "========================================="
+
+# ============================================================================
+# Runtime Stage: Clean image with mod_google_transcribe
+# ============================================================================
+FROM ${BASE_IMAGE} AS runtime
+
+# Re-declare ARG for runtime stage (ARGs don't persist across stages)
+ARG GRPC_VERSION=1.64.2
+
+# Install runtime dependencies for gRPC and mod_google_transcribe
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    libssl1.1 \
+    zlib1g \
+    libspeexdsp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# Copy gRPC and protobuf libraries from builder
+COPY --from=builder /usr/local/lib/libgrpc*.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libprotobuf*.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libabsl_*.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libupb*.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libre2.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libaddress_sorting.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libgpr.so* /usr/local/lib/
+
+# Copy mod_google_transcribe module from builder
+COPY --from=builder /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so \
+    /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so
+
+# Update library cache
+RUN ldconfig
+
+# Enable mod_google_transcribe in modules.conf
+RUN sed -i '/<\/modules>/i \    <load module="mod_google_transcribe"/>' \
+    /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml 2>/dev/null || true
+
+# Copy example configuration files
+COPY examples/freeswitch-config/dialplan/default.xml \
+    /usr/local/freeswitch/conf/dialplan/default.xml
+COPY examples/freeswitch-config/directory/1000.xml \
+    /usr/local/freeswitch/conf/directory/default/1000.xml
+COPY examples/freeswitch-config/directory/1001.xml \
+    /usr/local/freeswitch/conf/directory/default/1001.xml
+COPY examples/freeswitch-config/directory/1002.xml \
+    /usr/local/freeswitch/conf/directory/default/1002.xml
+COPY examples/freeswitch-config/directory/1003.xml \
+    /usr/local/freeswitch/conf/directory/default/1003.xml
+COPY examples/freeswitch-config/directory/1004.xml \
+    /usr/local/freeswitch/conf/directory/default/1004.xml
+
+# Runtime validation
+RUN echo "=========================================" \
+    && echo "Runtime Validation..." \
+    && echo "=========================================" \
+    && echo "Checking gRPC libraries..." \
+    && ls -lh /usr/local/lib/libgrpc++.so* \
+    && ls -lh /usr/local/lib/libgrpc.so* \
+    && ls -lh /usr/local/lib/libprotobuf.so* \
+    && echo "" \
+    && echo "Checking module file..." \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so \
+    && echo "" \
+    && echo "Checking module dependencies..." \
+    && ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so \
+    && echo "" \
+    && echo "Verifying no missing dependencies..." \
+    && ! ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so | grep "not found" \
+    && echo "✅ All dependencies satisfied" \
+    && echo "" \
+    && echo "Checking example configuration files..." \
+    && ls -lh /usr/local/freeswitch/conf/dialplan/default.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1000.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1001.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1002.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1003.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1004.xml \
+    && echo "✅ Configuration files installed" \
+    && echo "" \
+    && echo "=========================================" \
+    && echo "Available modules in this image:" \
+    && echo "  ✅ mod_google_transcribe (Google Cloud Speech-to-Text)" \
+    && echo "=========================================" \
+    && echo "Included configuration files:" \
+    && echo "  ✅ dialplan/default.xml (with examples)" \
+    && echo "  ✅ directory/default/1000.xml" \
+    && echo "  ✅ directory/default/1001.xml" \
+    && echo "  ✅ directory/default/1002.xml" \
+    && echo "  ✅ directory/default/1003.xml" \
+    && echo "  ✅ directory/default/1004.xml (Google Transcribe)" \
+    && echo "========================================="
+
+# Labels
+LABEL maintainer="FreeSWITCH Speech AI"
+LABEL description="FreeSWITCH 1.10.11 with mod_google_transcribe"
+LABEL grpc.version="${GRPC_VERSION}"
+LABEL base.image="srt2011/freeswitch-base:latest"
+
+# Expose FreeSWITCH ports
+EXPOSE 5060/tcp 5060/udp 5080/tcp 5080/udp 8021/tcp
+EXPOSE 16384-16484/udp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD /usr/local/freeswitch/bin/fs_cli -x "status" | grep -q "UP" || exit 1
+
+# Set environment
+ENV PATH="/usr/local/freeswitch/bin:${PATH}"
+
+# Inherit CMD from base image (supervisord or freeswitch)
