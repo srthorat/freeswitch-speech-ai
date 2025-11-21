@@ -23,6 +23,14 @@ This directory contains technical documentation and guides for the freeswitch-sp
   - Production architecture and deployment
   - Complete code examples
 
+- **[XML Dialplan vs Lua Scripting](./DIALPLAN_VS_LUA.md)** - Comprehensive comparison of FreeSWITCH call control approaches, including:
+  - Performance analysis (speed, memory, throughput)
+  - Feature comparison (variables, conditions, loops, functions)
+  - When to use each approach
+  - Code examples for common tasks
+  - Hybrid approaches and best practices
+  - Migration guide from XML to Lua
+
 ## Module-Specific Documentation
 
 Each transcription module has its own detailed README:
