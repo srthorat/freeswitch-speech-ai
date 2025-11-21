@@ -115,14 +115,11 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
  *
  * The metadata structure includes:
  *   {
- *     "call_info": {
- *       "caller_number": "1000",
- *       "caller_name": "Extension 1000",
- *       "callee_number": "1001",
- *       "callee_name": "Extension 1001",
- *       "direction": "inbound",
- *       "uuid": "session-uuid"
- *     },
+ *     "callerName": "Extension 1000",
+ *     "callerNumber": "1000",
+ *     "calleeName": "Extension 1001",
+ *     "calleeNumber": "1001",
+ *     "call-Id": "3848276298220188511@atlanta.example.com",
  *     ...user_metadata
  *   }
  * ============================================================================ */
@@ -143,20 +140,19 @@ static char* build_session_metadata(switch_core_session_t *session, switch_memor
 		jMetadata = cJSON_CreateObject();
 	}
 
-	// Add call information
-	cJSON *jCallInfo = cJSON_CreateObject();
+	// Add caller/callee information directly to metadata (Channel 0 = Caller, Channel 1 = Callee)
 
-	// Caller information (inbound leg / A-leg)
+	// Caller information (Channel 0 / A-leg)
 	const char *caller_number = switch_channel_get_variable(channel, "caller_id_number");
 	const char *caller_name = switch_channel_get_variable(channel, "caller_id_name");
-	if (caller_number) {
-		cJSON_AddStringToObject(jCallInfo, "caller_number", caller_number);
-	}
 	if (caller_name) {
-		cJSON_AddStringToObject(jCallInfo, "caller_name", caller_name);
+		cJSON_AddStringToObject(jMetadata, "callerName", caller_name);
+	}
+	if (caller_number) {
+		cJSON_AddStringToObject(jMetadata, "callerNumber", caller_number);
 	}
 
-	// Callee information (outbound leg / B-leg)
+	// Callee information (Channel 1 / B-leg)
 	const char *callee_number = switch_channel_get_variable(channel, "destination_number");
 	if (!callee_number) {
 		callee_number = switch_channel_get_variable(channel, "callee_id_number");
@@ -166,25 +162,18 @@ static char* build_session_metadata(switch_core_session_t *session, switch_memor
 		callee_name = switch_channel_get_variable(channel, "effective_callee_id_name");
 	}
 
-	if (callee_number) {
-		cJSON_AddStringToObject(jCallInfo, "callee_number", callee_number);
-	}
 	if (callee_name) {
-		cJSON_AddStringToObject(jCallInfo, "callee_name", callee_name);
+		cJSON_AddStringToObject(jMetadata, "calleeName", callee_name);
+	}
+	if (callee_number) {
+		cJSON_AddStringToObject(jMetadata, "calleeNumber", callee_number);
 	}
 
-	// Add call direction
-	const char *direction = switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_INBOUND ? "inbound" : "outbound";
-	cJSON_AddStringToObject(jCallInfo, "direction", direction);
-
-	// Add UUID
-	const char *uuid = switch_core_session_get_uuid(session);
-	if (uuid) {
-		cJSON_AddStringToObject(jCallInfo, "uuid", uuid);
+	// Add SIP Call-ID (unique identifier for each call)
+	const char *sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+	if (sip_call_id) {
+		cJSON_AddStringToObject(jMetadata, "call-Id", sip_call_id);
 	}
-
-	// Add call_info object to metadata
-	cJSON_AddItemToObject(jMetadata, "call_info", jCallInfo);
 
 	// Convert to string
 	metadata_str = cJSON_PrintUnformatted(jMetadata);
