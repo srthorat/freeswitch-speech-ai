@@ -31,6 +31,17 @@ This directory contains technical documentation and guides for the freeswitch-sp
   - Hybrid approaches and best practices
   - Migration guide from XML to Lua
 
+- **[Speech Module Comparison](./MODULE_COMPARISON.md)** - Comprehensive comparison of all transcription modules, including:
+  - Speed & performance analysis (latency, throughput)
+  - Accuracy comparison with specialized models
+  - Speaker diarization & channel identification
+  - Audio format support and protocols
+  - Setup complexity and dependencies
+  - Cost analysis and pricing
+  - Feature matrix (50+ features)
+  - Use case recommendations
+  - Migration guide between modules
+
 ## Module-Specific Documentation
 
 Each transcription module has its own detailed README:
