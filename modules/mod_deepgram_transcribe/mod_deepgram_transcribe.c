@@ -104,25 +104,13 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 			if (transcript_field && cJSON_IsString(transcript_field)) {
 				transcript = cJSON_GetStringValue(transcript_field);
 			}
-
-			// Get speaker from first word
-			cJSON* words = cJSON_GetObjectItem(first_alt, "words");
-			if (words && cJSON_IsArray(words) && cJSON_GetArraySize(words) > 0) {
-				cJSON* first_word = cJSON_GetArrayItem(words, 0);
-				cJSON* speaker_field = cJSON_GetObjectItem(first_word, "speaker");
-				if (speaker_field && cJSON_IsNumber(speaker_field)) {
-					speaker_channel = cJSON_GetNumberValue(speaker_field);
-				}
-			}
 		}
 	}
 
-	// Get channel_index if speaker not found in words
-	if (speaker_channel == -1) {
-		cJSON* channel_index = cJSON_GetObjectItem(root, "channel_index");
-		if (channel_index && cJSON_IsArray(channel_index) && cJSON_GetArraySize(channel_index) > 0) {
-			speaker_channel = cJSON_GetNumberValue(cJSON_GetArrayItem(channel_index, 0));
-		}
+	// Get speaker channel from channel_index only (not from words[0].speaker)
+	cJSON* channel_index = cJSON_GetObjectItem(root, "channel_index");
+	if (channel_index && cJSON_IsArray(channel_index) && cJSON_GetArraySize(channel_index) > 0) {
+		speaker_channel = cJSON_GetNumberValue(cJSON_GetArrayItem(channel_index, 0));
 	}
 
 	// Default to channel 0 if still not found
