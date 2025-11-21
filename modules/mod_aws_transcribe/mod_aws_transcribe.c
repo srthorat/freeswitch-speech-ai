@@ -94,30 +94,26 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	const char* transcript = NULL;
 	int speaker_channel = -1;
 
-	// Extract transcript from AWS Transcribe format
-	cJSON* transcript_obj = cJSON_GetObjectItem(root, "Transcript");
-	if (transcript_obj) {
-		cJSON* results = cJSON_GetObjectItem(transcript_obj, "Results");
-		if (results && cJSON_IsArray(results) && cJSON_GetArraySize(results) > 0) {
-			cJSON* first_result = cJSON_GetArrayItem(results, 0);
+	// AWS sends an array of results: [{"is_final": true, "channel_id": "ch_0", "alternatives": [...]}]
+	if (cJSON_IsArray(root) && cJSON_GetArraySize(root) > 0) {
+		cJSON* first_result = cJSON_GetArrayItem(root, 0);
 
-			// Get transcript text
-			cJSON* alternatives = cJSON_GetObjectItem(first_result, "Alternatives");
-			if (alternatives && cJSON_IsArray(alternatives) && cJSON_GetArraySize(alternatives) > 0) {
-				cJSON* first_alt = cJSON_GetArrayItem(alternatives, 0);
-				cJSON* transcript_field = cJSON_GetObjectItem(first_alt, "Transcript");
-				if (transcript_field && cJSON_IsString(transcript_field)) {
-					transcript = cJSON_GetStringValue(transcript_field);
-				}
+		// Get transcript text from alternatives[0].transcript
+		cJSON* alternatives = cJSON_GetObjectItem(first_result, "alternatives");
+		if (alternatives && cJSON_IsArray(alternatives) && cJSON_GetArraySize(alternatives) > 0) {
+			cJSON* first_alt = cJSON_GetArrayItem(alternatives, 0);
+			cJSON* transcript_field = cJSON_GetObjectItem(first_alt, "transcript");
+			if (transcript_field && cJSON_IsString(transcript_field)) {
+				transcript = cJSON_GetStringValue(transcript_field);
 			}
+		}
 
-			// Get channel from ChannelId (e.g., "ch_0", "ch_1")
-			cJSON* channel_id = cJSON_GetObjectItem(first_result, "ChannelId");
-			if (channel_id && cJSON_IsString(channel_id)) {
-				const char* channel_str = cJSON_GetStringValue(channel_id);
-				if (channel_str && strstr(channel_str, "ch_")) {
-					speaker_channel = atoi(channel_str + 3); // Skip "ch_" prefix
-				}
+		// Get channel from channel_id (e.g., "ch_0", "ch_1")
+		cJSON* channel_id = cJSON_GetObjectItem(first_result, "channel_id");
+		if (channel_id && cJSON_IsString(channel_id)) {
+			const char* channel_str = cJSON_GetStringValue(channel_id);
+			if (channel_str && strstr(channel_str, "ch_")) {
+				speaker_channel = atoi(channel_str + 3); // Skip "ch_" prefix
 			}
 		}
 	}
