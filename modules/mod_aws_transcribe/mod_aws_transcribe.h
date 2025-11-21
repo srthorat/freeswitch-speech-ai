@@ -15,9 +15,12 @@
 #define TRANSCRIBE_EVENT_MAX_DURATION_EXCEEDED "aws_transcribe::max_duration_exceeded"
 #define TRANSCRIBE_EVENT_VAD_DETECTED "aws_transcribe::vad_detected"
 #define TRANSCRIBE_EVENT_ERROR      "jambonz_transcribe::error"
+#define TRANSCRIBE_EVENT_SESSION_START "aws_transcribe::session_start"
+#define TRANSCRIBE_EVENT_SESSION_STOP "aws_transcribe::session_stop"
 
 #define MAX_LANG (12)
 #define MAX_REGION (32)
+#define MAX_METADATA_LEN (8192)
 
 /* per-channel data */
 typedef void (*responseHandler_t)(switch_core_session_t* session, const char * json, const char* bugname);
@@ -38,6 +41,7 @@ struct cap_cb {
 
 	char lang[MAX_LANG];
 	char region[MAX_REGION];
+	char metadata[MAX_METADATA_LEN];
 
 	switch_vad_t * vad;
 	uint32_t samples_per_second;

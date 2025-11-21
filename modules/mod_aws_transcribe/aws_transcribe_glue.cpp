@@ -39,6 +39,24 @@ const char ALLOC_TAG[] = "drachtio";
 
 static bool hasDefaultCredentials = false;
 
+// Helper function to emit metadata events
+static void emit_metadata_event(switch_core_session_t* session, const char* metadata, const char* event_name, const char* bugname) {
+	if (metadata && strlen(metadata) > 0) {
+		switch_event_t *event;
+		switch_channel_t *channel = switch_core_session_get_channel(session);
+
+		switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, event_name);
+		switch_channel_event_set_data(channel, event);
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "transcription-vendor", "aws");
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "media-bugname", bugname);
+		switch_event_add_body(event, "%s", metadata);
+		switch_event_fire(&event);
+
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+			"Emitted %s event with metadata: %s\n", event_name, metadata);
+	}
+}
+
 // NOTE: This class is named "GStreamer" but does NOT use the GStreamer multimedia framework
 // It's a direct AWS SDK implementation for streaming audio to AWS Transcribe
 // The name is historical/legacy - consider it as "AWS Audio Streamer"
@@ -55,9 +73,14 @@ public:
 		const char* awsAccessKeyId,
 		const char* awsSecretAccessKey,
 		const char* awsSessionToken,
+		const char* metadata,
 		responseHandler_t responseHandler
   ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_interim(interim), m_finishing(false), m_connected(false), m_connecting(false),
 	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr), m_preConnectAudioSize(0) {
+		// Store metadata
+		if (metadata && strlen(metadata) > 0) {
+			m_metadata = metadata;
+		}
 		Aws::Client::ClientConfiguration config;
 		if (region != nullptr && strlen(region) > 0) {
 			config.region = region;
@@ -163,6 +186,9 @@ public:
 
 				m_pStream = &stream;
 				m_connected = true;
+
+				// Emit session start event with metadata
+				emit_metadata_event(psession, m_metadata.c_str(), TRANSCRIBE_EVENT_SESSION_START, m_bugname.c_str());
 
 				// Send any pre-connection buffered audio (simple deque approach like Deepgram)
 				std::lock_guard<std::mutex> lk(m_mutex);
@@ -419,6 +445,7 @@ private:
 	std::string m_sessionId;
 	std::string m_bugname;
 	std::string  m_region;
+	std::string m_metadata;
 	Aws::UniquePtr<TranscribeStreamingServiceClient> m_client;
 	AudioStream* m_pStream;
 	StartStreamTranscriptionRequest m_request;
@@ -445,7 +472,7 @@ static void *SWITCH_THREAD_FUNC aws_transcribe_thread(switch_thread_t *thread, v
 	struct cap_cb *cb = (struct cap_cb *) obj;
 	bool ok = true;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: starting cb %p\n", (void *) cb);
-	GStreamer* pStreamer = new GStreamer(cb->sessionId, cb->bugname, cb->channels, cb->lang, cb->interim, cb->samples_per_second, cb->region, cb->awsAccessKeyId, cb->awsSecretAccessKey, cb->awsSessionToken,
+	GStreamer* pStreamer = new GStreamer(cb->sessionId, cb->bugname, cb->channels, cb->lang, cb->interim, cb->samples_per_second, cb->region, cb->awsAccessKeyId, cb->awsSecretAccessKey, cb->awsSessionToken, cb->metadata,
 		cb->responseHandler);
 	if (!pStreamer) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: Error allocating streamer\n");
@@ -571,8 +598,8 @@ extern "C" {
 	}
 
 	// start transcribe on a channel
-	switch_status_t aws_transcribe_session_init(switch_core_session_t *session, responseHandler_t responseHandler, 
-          uint32_t samples_per_second, uint32_t channels, char* lang, int interim, char* bugname, void **ppUserData
+	switch_status_t aws_transcribe_session_init(switch_core_session_t *session, responseHandler_t responseHandler,
+          uint32_t samples_per_second, uint32_t channels, char* lang, int interim, char* bugname, char* metadata, void **ppUserData
 	) {
 		switch_status_t status = SWITCH_STATUS_SUCCESS;
 		switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -699,6 +726,13 @@ extern "C" {
 
 		cb->interim = interim;
 		strncpy(cb->lang, lang, MAX_LANG);
+		if (metadata && strlen(metadata) > 0) {
+			strncpy(cb->metadata, metadata, MAX_METADATA_LEN - 1);
+			cb->metadata[MAX_METADATA_LEN - 1] = '\0';
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Stored metadata: %s\n", cb->metadata);
+		} else {
+			cb->metadata[0] = '\0';
+		}
 		cb->samples_per_second = sampleRate;
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "sample rate of rtp stream is %d\n", samples_per_second);
 
@@ -770,6 +804,9 @@ extern "C" {
 		if (bug) {
 			struct cap_cb *cb = (struct cap_cb *) switch_core_media_bug_get_user_data(bug);
 			switch_status_t st;
+
+			// Emit session stop event with metadata
+			emit_metadata_event(session, cb->metadata, TRANSCRIBE_EVENT_SESSION_STOP, bugname);
 
 			// close connection and get final responses
 			switch_mutex_lock(cb->mutex);
