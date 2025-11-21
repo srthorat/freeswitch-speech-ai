@@ -327,6 +327,16 @@ COPY --from=builder /usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transc
 COPY --from=builder /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml \
     /usr/local/freeswitch/conf/autoload_configs/
 
+# Copy example configuration files (dialplan and directory)
+COPY examples/freeswitch-config/dialplan/default.xml \
+    /usr/local/freeswitch/conf/dialplan/default.xml
+COPY examples/freeswitch-config/directory/1000.xml \
+    /usr/local/freeswitch/conf/directory/default/1000.xml
+COPY examples/freeswitch-config/directory/1001.xml \
+    /usr/local/freeswitch/conf/directory/default/1001.xml
+COPY examples/freeswitch-config/directory/1002.xml \
+    /usr/local/freeswitch/conf/directory/default/1002.xml
+
 # Update library cache
 RUN ldconfig
 
@@ -359,6 +369,13 @@ RUN echo "=========================================" \
         fi; \
     done \
     && echo "" \
+    && echo "Checking example configuration files..." \
+    && ls -lh /usr/local/freeswitch/conf/dialplan/default.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1000.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1001.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1002.xml \
+    && echo "✅ Configuration files installed" \
+    && echo "" \
     && echo "=========================================" \
     && echo "✅ All modules ready!" \
     && echo "=========================================" \
@@ -367,6 +384,10 @@ RUN echo "=========================================" \
     && echo "  ✅ mod_audio_fork (Generic WebSocket Streaming)" \
     && echo "  ✅ mod_aws_transcribe (AWS Transcribe)" \
     && echo "  ✅ mod_deepgram_transcribe (Deepgram)" \
+    && echo "" \
+    && echo "Example Configuration:" \
+    && echo "  ✅ dialplan/default.xml (with transcription examples)" \
+    && echo "  ✅ directory/default/1000.xml, 1001.xml, 1002.xml" \
     && echo "" \
     && echo "Unified Features (all modules):" \
     && echo "  ✅ User-choice sampling rate (8k/16k/custom)" \
