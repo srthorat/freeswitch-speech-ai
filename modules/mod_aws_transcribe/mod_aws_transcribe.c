@@ -392,10 +392,13 @@ static void responseHandler(switch_core_session_t* session, const char * json, c
     		switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, TRANSCRIBE_EVENT_ERROR);
       }
 
-      // Check if this is a final transcription (AWS uses "is_partial": false for final)
-      cJSON* is_partial = cJSON_GetObjectItem(jMessage, "is_partial");
-      if (is_partial && cJSON_IsBool(is_partial)) {
-        is_final = cJSON_IsFalse(is_partial) ? SWITCH_TRUE : SWITCH_FALSE;
+      // Check if this is a final transcription (AWS sends array with is_final field)
+      if (cJSON_IsArray(jMessage) && cJSON_GetArraySize(jMessage) > 0) {
+        cJSON* first_result = cJSON_GetArrayItem(jMessage, 0);
+        cJSON* is_final_field = cJSON_GetObjectItem(first_result, "is_final");
+        if (is_final_field && cJSON_IsBool(is_final_field)) {
+          is_final = cJSON_IsTrue(is_final_field) ? SWITCH_TRUE : SWITCH_FALSE;
+        }
       }
 
       cJSON_Delete(jMessage);
