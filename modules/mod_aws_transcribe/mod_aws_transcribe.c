@@ -24,7 +24,7 @@ static switch_status_t do_stop(switch_core_session_t *session, char* bugname);
  * ============================================================================ */
 
 // Curl write callback (discard response)
-static size_t curl_write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
+static size_t pusher_curl_write_cb(void *contents, size_t size, size_t nmemb, void *userp) {
 	return size * nmemb;
 }
 
@@ -189,13 +189,13 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	md5_hex(body, body_md5);
 
 	// Build query string
-	char timestamp[32];
-	snprintf(timestamp, sizeof(timestamp), "%ld", time(NULL));
+	char auth_timestamp[32];
+	snprintf(auth_timestamp, sizeof(auth_timestamp), "%ld", time(NULL));
 
 	char query[512];
 	snprintf(query, sizeof(query),
 		"auth_key=%s&auth_timestamp=%s&auth_version=1.0&body_md5=%s",
-		app_key, timestamp, body_md5);
+		app_key, auth_timestamp, body_md5);
 
 	// Build string to sign
 	char to_sign[1024];
@@ -224,7 +224,7 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, pusher_curl_write_cb);
 
 	CURLcode res = curl_easy_perform(curl);
 
