@@ -43,31 +43,62 @@ public:
     const char *sessionId,
 		const char *bugname,
 		u_int16_t channels,
-    char *lang, 
+    char *lang,
     int interim,
 		uint32_t samples_per_second,
-		const char* region, 
-		const char* awsAccessKeyId, 
+		const char* region,
+		const char* awsAccessKeyId,
 		const char* awsSecretAccessKey,
+		const char* awsSessionToken,
 		responseHandler_t responseHandler
   ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_interim(interim), m_finishing(false), m_connected(false), m_connecting(false),
-	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr), 
-			m_audioBuffer(320 * (samples_per_second == 8000 ? 1 : 2), 15) {
-		Aws::String key(awsAccessKeyId);
-		Aws::String secret(awsSecretAccessKey);
+	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr),
+			m_audioBuffer(320 * 2, 15) {  // Always 16kHz (640 bytes = 20ms at 16kHz)
 		Aws::Client::ClientConfiguration config;
-		if (region != nullptr && strlen(region) > 0) config.region = region;
-		char keySnippet[20];
+		if (region != nullptr && strlen(region) > 0) {
+			config.region = region;
+		}
 
-		strncpy(keySnippet, awsAccessKeyId, 4);
-		for (int i = 4; i < 20; i++) keySnippet[i] = 'x';
-		keySnippet[19] = '\0';
+		// Determine authentication method and log appropriately
+		bool hasExplicitCreds = (awsAccessKeyId && strlen(awsAccessKeyId) > 0 &&
+		                         awsSecretAccessKey && strlen(awsSecretAccessKey) > 0);
+		bool hasSessionToken = (awsSessionToken && strlen(awsSessionToken) > 0);
 
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p ACCESS_KEY_ID %s, region %s\n", this, keySnippet, region);		
-		if (*awsAccessKeyId && *awsSecretAccessKey) {
-			m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG, AWSCredentials(awsAccessKeyId, awsSecretAccessKey), config);
+		if (hasExplicitCreds) {
+			// Create snippet for logging (show first 4 chars only)
+			char keySnippet[20];
+			strncpy(keySnippet, awsAccessKeyId, 4);
+			for (int i = 4; i < 20; i++) keySnippet[i] = 'x';
+			keySnippet[19] = '\0';
+
+			// Detect credential type based on key prefix
+			const char* credType = "unknown";
+			if (awsAccessKeyId[0] == 'A' && awsAccessKeyId[1] == 'K' && awsAccessKeyId[2] == 'I' && awsAccessKeyId[3] == 'A') {
+				credType = hasSessionToken ? "permanent+token(unusual)" : "permanent(AKIA)";
+			} else if (awsAccessKeyId[0] == 'A' && awsAccessKeyId[1] == 'S' && awsAccessKeyId[2] == 'I' && awsAccessKeyId[3] == 'A') {
+				credType = hasSessionToken ? "temporary(ASIA+token)" : "temporary(ASIA-missing-token!)";
+			}
+
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+				"GStreamer %p using explicit credentials: type=%s, key=%s..., region=%s\n",
+				this, credType, keySnippet, region ? region : "default");
+
+			// Use explicit credentials
+			if (hasSessionToken) {
+				// Temporary credentials with session token (ASIA* keys)
+				m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG,
+					AWSCredentials(awsAccessKeyId, awsSecretAccessKey, awsSessionToken), config);
+			} else {
+				// Permanent credentials without session token (AKIA* keys)
+				m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG,
+					AWSCredentials(awsAccessKeyId, awsSecretAccessKey), config);
+			}
 		}
 		else {
+			// Use AWS default credentials chain (IAM role, ~/.aws/credentials, ECS task role, etc.)
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+				"GStreamer %p using AWS default credentials chain: region=%s, sources=[EC2-instance-metadata, ECS-task-role, ~/.aws/credentials, ~/.aws/config]\n",
+				this, region ? region : "default");
 			m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG, config);
 		}
 	
@@ -84,8 +115,9 @@ public:
 			}
     });
 
-		// not worth resampling to 16k if we get 8k ulaw or alaw in..
-    m_request.SetMediaSampleRateHertz(samples_per_second > 8000 ? 16000 : 8000);
+		// AWS Transcribe quality is significantly better at 16kHz vs 8kHz
+		// ALWAYS resample to 16kHz for best quality (even from 8kHz telephony codecs)
+    m_request.SetMediaSampleRateHertz(16000);
     m_request.SetLanguageCode(LanguageCodeMapper::GetLanguageCodeForName(lang));
     m_request.SetMediaEncoding(MediaEncoding::pcm);
     m_request.SetEventStreamHandler(m_handler);
@@ -320,7 +352,7 @@ static void *SWITCH_THREAD_FUNC aws_transcribe_thread(switch_thread_t *thread, v
 	struct cap_cb *cb = (struct cap_cb *) obj;
 	bool ok = true;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: starting cb %p\n", (void *) cb);
-	GStreamer* pStreamer = new GStreamer(cb->sessionId, cb->bugname, cb->channels, cb->lang, cb->interim, cb->samples_per_second, cb->region, cb->awsAccessKeyId, cb->awsSecretAccessKey, 
+	GStreamer* pStreamer = new GStreamer(cb->sessionId, cb->bugname, cb->channels, cb->lang, cb->interim, cb->samples_per_second, cb->region, cb->awsAccessKeyId, cb->awsSecretAccessKey, cb->awsSessionToken,
 		cb->responseHandler);
 	if (!pStreamer) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: Error allocating streamer\n");
@@ -359,15 +391,68 @@ extern "C" {
 	switch_status_t aws_transcribe_init() {
 		const char* accessKeyId = std::getenv("AWS_ACCESS_KEY_ID");
 		const char* secretAccessKey = std::getenv("AWS_SECRET_ACCESS_KEY");
+		const char* sessionToken = std::getenv("AWS_SESSION_TOKEN");
 		const char* region = std::getenv("AWS_REGION");
-		if (NULL == accessKeyId && NULL == secretAccessKey) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, 
-				"\"AWS_ACCESS_KEY_ID\"  and/or \"AWS_SECRET_ACCESS_KEY\" env var not set; authentication will expect channel variables of same names to be set\n");
+		const char* defaultRegion = std::getenv("AWS_DEFAULT_REGION");
+
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+			"=========================================================\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+			"mod_aws_transcribe: Checking AWS credentials...\n");
+
+		// Check environment variables
+		if (accessKeyId && secretAccessKey) {
+			hasDefaultCredentials = true;
+			bool isTemporary = (accessKeyId[0] == 'A' && accessKeyId[1] == 'S' &&
+			                    accessKeyId[2] == 'I' && accessKeyId[3] == 'A');
+			const char* credType = isTemporary ?
+				(sessionToken ? "Temporary (ASIA* + session token)" : "Temporary (ASIA* - MISSING SESSION TOKEN!)") :
+				"Permanent (AKIA*)";
+
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+				"  ✓ Environment credentials found: %s\n", credType);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+				"    AWS_ACCESS_KEY_ID: %.4s***\n", accessKeyId);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+				"    AWS_SESSION_TOKEN: %s\n", sessionToken ? "present" : "not set");
+
+			if (isTemporary && !sessionToken) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+					"  ⚠ WARNING: ASIA* credentials require AWS_SESSION_TOKEN!\n");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+					"  ⚠ Authentication will likely fail without session token.\n");
+			}
 		}
 		else {
-			hasDefaultCredentials = true;
-
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+				"  ✗ Environment credentials: not found\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+				"    Will use: channel variables or AWS credentials chain\n");
 		}
+
+		// Check region
+		if (region) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+				"  ✓ AWS_REGION: %s\n", region);
+		} else if (defaultRegion) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+				"  ✓ AWS_DEFAULT_REGION: %s\n", defaultRegion);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+				"  ✗ Region not set, will use: us-east-1 (default)\n");
+		}
+
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+			"\nAuthentication priority:\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+			"  1. Channel variables (per-call)\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+			"  2. Environment variables (container-level)\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+			"  3. AWS credentials chain (IAM role, ~/.aws/credentials)\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+			"=========================================================\n");
+
     Aws::SDKOptions options;
 /*		
     options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Trace;
@@ -408,6 +493,7 @@ extern "C" {
 		memset(cb, sizeof(cb), 0);
 		const char* awsAccessKeyId = switch_channel_get_variable(channel, "AWS_ACCESS_KEY_ID");
 		const char* awsSecretAccessKey = switch_channel_get_variable(channel, "AWS_SECRET_ACCESS_KEY");
+		const char* awsSessionToken = switch_channel_get_variable(channel, "AWS_SESSION_TOKEN");
 		const char* awsRegion = switch_channel_get_variable(channel, "AWS_REGION");
 		cb->channels = channels;
 		LanguageCode code = LanguageCodeMapper::GetLanguageCodeForName(lang);
@@ -419,23 +505,95 @@ extern "C" {
 		strncpy(cb->sessionId, switch_core_session_get_uuid(session), MAX_SESSION_ID);
 		strncpy(cb->bugname, bugname, MAX_BUG_LEN);
 
-		if (awsAccessKeyId && awsSecretAccessKey && awsRegion) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Using channel vars for aws authentication\n");
-			strncpy(cb->awsAccessKeyId, awsAccessKeyId, 128);
-			strncpy(cb->awsSecretAccessKey, awsSecretAccessKey, 128);
-			strncpy(cb->region, awsRegion, MAX_REGION);
+		// Initialize credentials to empty strings
+		cb->awsAccessKeyId[0] = '\0';
+		cb->awsSecretAccessKey[0] = '\0';
+		cb->awsSessionToken[0] = '\0';
+		cb->region[0] = '\0';
 
+		// ========================================================================
+		// AUTHENTICATION PRIORITY (most specific to least specific):
+		// 1. Channel variables (per-call credentials)
+		// 2. Environment variables (container/process-level credentials)
+		// 3. AWS credentials chain (IAM role, ~/.aws/credentials, etc.)
+		// ========================================================================
+
+		// Priority 1: Check channel variables for explicit credentials
+		if (awsAccessKeyId && awsSecretAccessKey) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+				"AWS Auth: Using channel variables (per-call credentials)\n");
+			strncpy(cb->awsAccessKeyId, awsAccessKeyId, 127);
+			cb->awsAccessKeyId[127] = '\0';
+			strncpy(cb->awsSecretAccessKey, awsSecretAccessKey, 127);
+			cb->awsSecretAccessKey[127] = '\0';
+
+			// Optional session token for temporary credentials (ASIA* keys)
+			if (awsSessionToken) {
+				strncpy(cb->awsSessionToken, awsSessionToken, sizeof(cb->awsSessionToken) - 1);
+				cb->awsSessionToken[sizeof(cb->awsSessionToken) - 1] = '\0';
+			}
+
+			// Region from channel var or fallback to env var
+			if (awsRegion) {
+				strncpy(cb->region, awsRegion, MAX_REGION - 1);
+				cb->region[MAX_REGION - 1] = '\0';
+			} else if (std::getenv("AWS_REGION")) {
+				strncpy(cb->region, std::getenv("AWS_REGION"), MAX_REGION - 1);
+				cb->region[MAX_REGION - 1] = '\0';
+			} else {
+				strncpy(cb->region, "us-east-1", MAX_REGION - 1);  // Default region
+			}
 		}
-		else if (std::getenv("AWS_ACCESS_KEY_ID") &&
-			std::getenv("AWS_SECRET_ACCESS_KEY") &&
-			std::getenv("AWS_REGION")) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Using env vars for aws authentication\n");
-			strncpy(cb->awsAccessKeyId, std::getenv("AWS_ACCESS_KEY_ID"), 128);
-			strncpy(cb->awsSecretAccessKey, std::getenv("AWS_SECRET_ACCESS_KEY"), 128);		
-			strncpy(cb->region, std::getenv("AWS_REGION"), MAX_REGION);
+		// Priority 2: Check environment variables for explicit credentials
+		else if (std::getenv("AWS_ACCESS_KEY_ID") && std::getenv("AWS_SECRET_ACCESS_KEY")) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+				"AWS Auth: Using environment variables (container-level credentials)\n");
+			strncpy(cb->awsAccessKeyId, std::getenv("AWS_ACCESS_KEY_ID"), 127);
+			cb->awsAccessKeyId[127] = '\0';
+			strncpy(cb->awsSecretAccessKey, std::getenv("AWS_SECRET_ACCESS_KEY"), 127);
+			cb->awsSecretAccessKey[127] = '\0';
+
+			// Optional session token for temporary credentials (ASIA* keys)
+			const char* envSessionToken = std::getenv("AWS_SESSION_TOKEN");
+			if (envSessionToken) {
+				strncpy(cb->awsSessionToken, envSessionToken, sizeof(cb->awsSessionToken) - 1);
+				cb->awsSessionToken[sizeof(cb->awsSessionToken) - 1] = '\0';
+			}
+
+			// Region from env var or default
+			if (std::getenv("AWS_REGION")) {
+				strncpy(cb->region, std::getenv("AWS_REGION"), MAX_REGION - 1);
+				cb->region[MAX_REGION - 1] = '\0';
+			} else if (std::getenv("AWS_DEFAULT_REGION")) {
+				strncpy(cb->region, std::getenv("AWS_DEFAULT_REGION"), MAX_REGION - 1);
+				cb->region[MAX_REGION - 1] = '\0';
+			} else {
+				strncpy(cb->region, "us-east-1", MAX_REGION - 1);  // Default region
+			}
 		}
+		// Priority 3: Fall back to AWS default credentials chain
 		else {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "No channel vars or env vars for aws authentication..will use default profile if found\n");
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+				"AWS Auth: Using default credentials chain (IAM role, ~/.aws/credentials, or ECS task role)\n");
+
+			// Region still needs to be set from env var or channel var
+			if (awsRegion) {
+				strncpy(cb->region, awsRegion, MAX_REGION - 1);
+				cb->region[MAX_REGION - 1] = '\0';
+			} else if (std::getenv("AWS_REGION")) {
+				strncpy(cb->region, std::getenv("AWS_REGION"), MAX_REGION - 1);
+				cb->region[MAX_REGION - 1] = '\0';
+			} else if (std::getenv("AWS_DEFAULT_REGION")) {
+				strncpy(cb->region, std::getenv("AWS_DEFAULT_REGION"), MAX_REGION - 1);
+				cb->region[MAX_REGION - 1] = '\0';
+			} else {
+				strncpy(cb->region, "us-east-1", MAX_REGION - 1);  // Default region
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+					"AWS Auth: No region specified, using default: us-east-1\n");
+			}
+
+			// Leave credentials empty - AWS SDK will use default chain
+			// This includes: EC2 instance metadata, ECS task role, ~/.aws/credentials, etc.
 		}
 
 		cb->responseHandler = responseHandler;
@@ -450,14 +608,24 @@ extern "C" {
 		strncpy(cb->lang, lang, MAX_LANG);
 		cb->samples_per_second = sampleRate;
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "sample rate of rtp stream is %d\n", samples_per_second);
-		if (sampleRate != 8000) {
+
+		// ALWAYS resample to 16kHz for AWS Transcribe (best quality)
+		// This is critical for 8kHz telephony codecs (PCMU/PCMA) which are common in VoIP
+		if (sampleRate != 16000) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+				"%s: Initializing resampler %dHz -> 16000Hz for better transcription quality\n",
+				switch_channel_get_name(channel), sampleRate);
 			cb->resampler = speex_resampler_init(1, sampleRate, 16000, SWITCH_RESAMPLE_QUALITY, &err);
 			if (0 != err) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n", 
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n",
 							switch_channel_get_name(channel), speex_resampler_strerror(err));
 				status = SWITCH_STATUS_FALSE;
 				goto done;
 			}
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+				"%s: Sample rate already 16kHz, no resampling needed\n",
+				switch_channel_get_name(channel));
 		}
 
 		// allocate vad if we are delaying connecting to the recognizer until we detect speech

@@ -49,9 +49,66 @@
         </condition>
       </condition>
     </extension>
+    <!-- EXTENSION 4: AWS Transcription -->
+    <extension name="aws_conditional" continue="true">
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_aws_transcribe)}" expression="^true$">
+        <condition field="destination_number" expression="^(.+)$">
+          <action application="log" data="INFO [AWS] Authorized User ${caller_id_number} calling ${destination_number} -> Starting AWS Transcribe"/>
+          <!-- AWS Credentials: Set here OR pass as Docker environment variables -->
+          <!-- Priority: Channel variables (here) > Environment variables > Default AWS credentials chain -->
+          <!-- <action application="set" data="AWS_ACCESS_KEY_ID=your-aws-access-key-id"/> -->
+          <!-- <action application="set" data="AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key"/> -->
+          <!-- <action application="set" data="AWS_REGION=us-east-1"/> -->
+          <!-- Optional: Enable channel identification for agent/customer separation (100% accurate) -->
+          <action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
+          <action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
+          <!-- Optional: Enable speaker diarization (AI-based, up to 10 speakers) -->
+          <!-- <action application="set" data="AWS_SHOW_SPEAKER_LABEL=true"/> -->
+          <!-- Optional: Enable VAD to delay connection until speech detected (reduces costs) -->
+          <!-- <action application="set" data="START_RECOGNIZING_ON_VAD=true"/> -->
+          <!-- Optional: Custom vocabulary -->
+          <!-- <action application="set" data="AWS_VOCABULARY_NAME=my-custom-vocab"/> -->
+          <!-- Optional: Vocabulary filtering for profanity -->
+          <!-- <action application="set" data="AWS_VOCABULARY_FILTER_NAME=profanity-filter"/> -->
+          <!-- <action application="set" data="AWS_VOCABULARY_FILTER_METHOD=mask"/> -->
+          <action application="set" data="api_on_answer=uuid_aws_transcribe ${uuid} start en-US interim stereo"/>
+          <action application="set" data="api_hangup_hook=uuid_aws_transcribe ${uuid} stop"/>
+        </condition>
+      </condition>
+    </extension>
+    <!-- EXTENSION 5: Google Transcription -->
+    <extension name="google_conditional" continue="true">
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_google_transcribe)}" expression="^true$">
+        <condition field="destination_number" expression="^(.+)$">
+          <action application="log" data="INFO [GOOGLE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Google Transcribe"/>
+          <!-- Google Cloud Credentials: Set GOOGLE_APPLICATION_CREDENTIALS as environment variable -->
+          <!-- or mount service account JSON file into container -->
+          <!-- <action application="set" data="GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json"/> -->
+          <!-- Optional: Speech recognition settings -->
+          <!-- <action application="set" data="GOOGLE_SPEECH_MODEL=phone_call"/> -->
+          <!-- <action application="set" data="GOOGLE_SPEECH_USE_ENHANCED=true"/> -->
+          <!-- Optional: Enable automatic punctuation -->
+          <action application="set" data="GOOGLE_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION=true"/>
+          <!-- Optional: Enable word-level timing offsets -->
+          <!-- <action application="set" data="GOOGLE_SPEECH_ENABLE_WORD_TIME_OFFSETS=true"/> -->
+          <!-- Optional: Enable speaker diarization (AI-based, identifies speakers) -->
+          <!-- <action application="set" data="GOOGLE_SPEECH_SPEAKER_DIARIZATION=1"/> -->
+          <!-- <action application="set" data="GOOGLE_SPEECH_SPEAKER_DIARIZATION_MIN_SPEAKER_COUNT=2"/> -->
+          <!-- <action application="set" data="GOOGLE_SPEECH_SPEAKER_DIARIZATION_MAX_SPEAKER_COUNT=2"/> -->
+          <!-- Optional: Enable separate recognition per channel (for stereo) -->
+          <!-- <action application="set" data="GOOGLE_SPEECH_SEPARATE_RECOGNITION_PER_CHANNEL=true"/> -->
+          <!-- Optional: Enable VAD to delay connection until speech detected (reduces costs) -->
+          <!-- <action application="set" data="START_RECOGNIZING_ON_VAD=true"/> -->
+          <!-- Optional: Phrase hints for domain-specific vocabulary (comma-separated) -->
+          <!-- <action application="set" data="GOOGLE_SPEECH_HINTS=hello,goodbye,thank you"/> -->
+          <action application="set" data="api_on_answer=uuid_google_transcribe ${uuid} start en-US interim stereo"/>
+          <action application="set" data="api_hangup_hook=uuid_google_transcribe ${uuid} stop"/>
+        </condition>
+      </condition>
+    </extension>
 
 
-      
+
     <extension name="unloop">
       <condition field="${unroll_loops}" expression="^true$"/>
       <condition field="${sip_looped_call}" expression="^true$">

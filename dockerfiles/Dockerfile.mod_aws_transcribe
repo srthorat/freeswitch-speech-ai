@@ -1,0 +1,356 @@
+# ============================================================================
+# Dockerfile for FreeSWITCH with mod_aws_transcribe
+# ============================================================================
+#
+# This Dockerfile builds mod_aws_transcribe on top of the freeswitch-base
+# image, adding AWS SDK C++ and AWS Transcribe Streaming integration.
+#
+# Base image includes:
+#   - FreeSWITCH 1.10.11 fully built and configured
+#   - All required configs for SIP calls
+#   - Event Socket configured for fs_cli
+#   - Production patches and optimizations
+#
+# This image adds:
+#   - AWS SDK C++ (core and transcribestreaming)
+#   - mod_aws_transcribe (AWS real-time transcription)
+#
+# Build time: 25-35 minutes (includes AWS SDK C++ build)
+# Final size: ~900 MB (adds AWS SDK ~150MB)
+#
+# Usage:
+#   docker build -f dockerfiles/Dockerfile.mod_aws_transcribe \
+#     -t freeswitch-mod-aws-transcribe:latest .
+#
+# Or use the build script:
+#   ./dockerfiles/docker-build-mod-aws-transcribe.sh
+# ============================================================================
+
+ARG BASE_IMAGE=srt2011/freeswitch-base:latest
+
+# AWS SDK C++ Version Configuration
+# - Current default: 1.11.345 (tested and stable)
+# - Verified working: 1.11.200+ (per module README)
+# - Latest available: 1.11.694 (as of 2025-01-20)
+#
+# To use a different version, pass as build arg:
+#   --build-arg AWS_SDK_CPP_VERSION=1.11.694
+#
+# Recommendation: Use default 1.11.345 for stability, upgrade if needed
+ARG AWS_SDK_CPP_VERSION=1.11.345
+
+# ============================================================================
+# Builder Stage: Compile mod_aws_transcribe with AWS SDK C++
+# ============================================================================
+FROM ${BASE_IMAGE} AS builder
+
+ARG BUILD_CPUS=4
+ARG AWS_SDK_CPP_VERSION=1.11.345
+
+# Print build configuration
+RUN echo "=============================================" \
+    && echo "Building mod_aws_transcribe" \
+    && echo "=============================================" \
+    && echo "Base Image: ${BASE_IMAGE}" \
+    && echo "AWS SDK C++ Version: ${AWS_SDK_CPP_VERSION}" \
+    && echo "Build CPUs: ${BUILD_CPUS}" \
+    && echo "============================================="
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    build-essential \
+    git \
+    cmake \
+    ca-certificates \
+    wget \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    uuid-dev \
+    zlib1g-dev \
+    libpulse-dev \
+    libspeexdsp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set library path
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# ============================================================================
+# Build AWS SDK C++ (core and transcribestreaming only)
+# ============================================================================
+WORKDIR /usr/local/src
+RUN echo "=========================================" \
+    && echo "Cloning AWS SDK C++ ${AWS_SDK_CPP_VERSION}..." \
+    && echo "=========================================" \
+    && git clone --depth 1 -b ${AWS_SDK_CPP_VERSION} https://github.com/aws/aws-sdk-cpp.git \
+    && cd aws-sdk-cpp \
+    && git submodule update --init --recursive \
+    && echo "✅ AWS SDK C++ source downloaded"
+
+RUN echo "=========================================" \
+    && echo "Building AWS SDK C++ ${AWS_SDK_CPP_VERSION}..." \
+    && echo "Components: core, transcribestreaming" \
+    && echo "=========================================" \
+    && cd /usr/local/src/aws-sdk-cpp \
+    && mkdir -p build && cd build \
+    && cmake .. \
+        -DBUILD_ONLY="transcribestreaming" \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DBUILD_SHARED_LIBS=ON \
+        -DENABLE_TESTING=OFF \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull -Wno-error=deprecated-declarations -Wno-error=uninitialized -Wno-error=maybe-uninitialized" \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && ldconfig \
+    && echo "✅ AWS SDK C++ ${AWS_SDK_CPP_VERSION} built and installed"
+
+# Copy pkg-config files
+RUN mkdir -p /usr/local/lib/pkgconfig \
+    && find /usr/local/src/aws-sdk-cpp/ -type f -name "*.pc" | xargs -I {} cp {} /usr/local/lib/pkgconfig/ \
+    && echo "✅ AWS SDK pkg-config files installed"
+
+# ============================================================================
+# Fix cJSON header conflict between AWS SDK and FreeSWITCH
+# ============================================================================
+# AWS SDK C++ bundles its own cJSON in /usr/local/include/aws/core/external/cjson/
+# FreeSWITCH and mod_aws_transcribe use the system cJSON library
+# Without header guards, this causes duplicate symbol errors during linking
+#
+# Solution: Add header guards to AWS SDK's bundled cJSON to prevent conflicts
+RUN echo "=========================================" \
+    && echo "Fixing cJSON header conflict..." \
+    && echo "=========================================" \
+    && if [ -f /usr/local/include/aws/core/external/cjson/cJSON.h ]; then \
+        echo "Found AWS SDK cJSON header, adding header guards..."; \
+        sed -i '/#ifndef cJSON_AS4CPP__h/i #ifndef cJSON__h\n#define cJSON__h' \
+            /usr/local/include/aws/core/external/cjson/cJSON.h \
+        && echo '#endif' >> /usr/local/include/aws/core/external/cjson/cJSON.h \
+        && echo "✅ cJSON header guards added successfully"; \
+    else \
+        echo "⚠️  WARNING: AWS SDK cJSON header not found at expected location"; \
+        echo "Checking alternate locations..."; \
+        find /usr/local/include -name "cJSON.h" -type f 2>/dev/null || true; \
+    fi \
+    && echo "========================================="
+
+# Verify AWS SDK installation
+RUN echo "=========================================" \
+    && echo "Verifying AWS SDK C++ installation..." \
+    && echo "=========================================" \
+    && echo "Libraries:" \
+    && ls -lh /usr/local/lib/libaws-cpp-sdk-*.so* | head -20 \
+    && echo "" \
+    && echo "Headers:" \
+    && ls -ld /usr/local/include/aws/ \
+    && echo "" \
+    && echo "Checking for required components:" \
+    && ls -1 /usr/local/lib/libaws-cpp-sdk-transcribestreaming.so && echo "  ✅ transcribestreaming" \
+    && ls -1 /usr/local/lib/libaws-cpp-sdk-core.so && echo "  ✅ core" \
+    && ls -1 /usr/local/lib/libaws-c-event-stream.so && echo "  ✅ c-event-stream" \
+    && ls -1 /usr/local/lib/libaws-checksums.so && echo "  ✅ checksums" \
+    && ls -1 /usr/local/lib/libaws-c-common.so && echo "  ✅ c-common" \
+    && echo "" \
+    && echo "Checking for AWS CRT dependencies:" \
+    && ls -1 /usr/local/lib/libaws-crt-cpp.so 2>/dev/null && echo "  ✅ aws-crt-cpp" || echo "  ⚠️  aws-crt-cpp not found (may cause runtime errors)" \
+    && ls -1 /usr/local/lib/libs2n.so* 2>/dev/null && echo "  ✅ s2n" || echo "  ⚠️  s2n not found (may cause runtime errors)" \
+    && echo "" \
+    && echo "All AWS libraries in /usr/local/lib:" \
+    && ls -1 /usr/local/lib/libaws*.so* /usr/local/lib/libs2n.so* 2>/dev/null | head -30 \
+    && echo "========================================="
+
+# ============================================================================
+# Build mod_aws_transcribe
+# ============================================================================
+WORKDIR /usr/local/src
+COPY ./modules/mod_aws_transcribe /usr/local/src/mod_aws_transcribe
+
+RUN echo "=========================================" \
+    && echo "Building mod_aws_transcribe..." \
+    && echo "=========================================" \
+    && cd /usr/local/src/mod_aws_transcribe \
+    && echo "" \
+    && echo "Source files:" \
+    && ls -lh *.c *.cpp 2>/dev/null || true \
+    && echo "" \
+    && echo "Compiling mod_aws_transcribe.c with gcc..." \
+    && gcc -fPIC -c \
+        -I/usr/local/freeswitch/include/freeswitch \
+        mod_aws_transcribe.c \
+    && echo "✅ mod_aws_transcribe.c compiled" \
+    && echo "" \
+    && echo "Compiling aws_transcribe_glue.cpp with g++ (C++11)..." \
+    && g++ -fPIC -c -std=c++11 \
+        -I/usr/local/freeswitch/include/freeswitch \
+        -I/usr/local/include \
+        aws_transcribe_glue.cpp \
+    && echo "✅ aws_transcribe_glue.cpp compiled" \
+    && echo "" \
+    && echo "Linking mod_aws_transcribe.so..." \
+    && mkdir -p /usr/local/freeswitch/lib/freeswitch/mod \
+    && g++ -shared \
+        -o /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so \
+        mod_aws_transcribe.o \
+        aws_transcribe_glue.o \
+        -L/usr/local/lib \
+        -laws-cpp-sdk-transcribestreaming \
+        -laws-cpp-sdk-core \
+        -laws-c-event-stream \
+        -laws-checksums \
+        -laws-c-common \
+        -lpthread \
+        -lcurl \
+        -lssl \
+        -lcrypto \
+        -lz \
+    && echo "✅ mod_aws_transcribe.so built successfully"
+
+# Verify module was built
+RUN echo "=========================================" \
+    && echo "Build Verification..." \
+    && echo "=========================================" \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so \
+    && echo "" \
+    && echo "Checking module dependencies..." \
+    && ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so \
+    && echo ""
+
+# ============================================================================
+# Validation Stage: Verify module dependencies
+# ============================================================================
+RUN echo "=========================================" \
+    && echo "Module Validation" \
+    && echo "=========================================" \
+    && MODULE_PATH="/usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so" \
+    && echo "" \
+    && echo "1. Check module file exists:" \
+    && if [ -f "$MODULE_PATH" ]; then \
+        echo "✅ Module file exists"; ls -lh "$MODULE_PATH"; \
+    else \
+        echo "❌ ERROR: Module file not found: $MODULE_PATH"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "2. Check module dependencies with ldd:" \
+    && ldd "$MODULE_PATH" \
+    && echo "" \
+    && echo "3. Verify AWS SDK linkage:" \
+    && if ldd "$MODULE_PATH" | grep -q "libaws-cpp-sdk-transcribestreaming"; then \
+        echo "✅ Module correctly linked with AWS SDK transcribestreaming"; \
+        ldd "$MODULE_PATH" | grep libaws-cpp-sdk; \
+    else \
+        echo "❌ ERROR: Module not linked with AWS SDK"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "4. Check for missing dependencies:" \
+    && if ldd "$MODULE_PATH" | grep -q "not found"; then \
+        echo "❌ ERROR: Missing dependencies:"; \
+        ldd "$MODULE_PATH" | grep "not found"; exit 1; \
+    else \
+        echo "✅ No missing dependencies"; \
+    fi \
+    && echo "=========================================" \
+    && echo "✅ Static validation passed!" \
+    && echo "========================================="
+
+# ============================================================================
+# Runtime Stage: Clean image with mod_aws_transcribe
+# ============================================================================
+FROM ${BASE_IMAGE} AS runtime
+
+# Re-declare ARG for runtime stage (ARGs don't persist across stages)
+ARG AWS_SDK_CPP_VERSION=1.11.345
+
+# Install runtime dependencies for AWS SDK and mod_aws_transcribe
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    libcurl4 \
+    libssl1.1 \
+    zlib1g \
+    libpulse0 \
+    libspeexdsp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# Copy AWS SDK C++ libraries from builder
+COPY --from=builder /usr/local/lib/libaws-cpp-sdk-*.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libaws-c-*.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libaws-crt-cpp.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libaws-checksums.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libs2n.so* /usr/local/lib/
+
+# Copy mod_aws_transcribe module from builder
+COPY --from=builder /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so \
+    /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so
+
+# Update library cache
+RUN ldconfig
+
+# Enable mod_aws_transcribe in modules.conf
+RUN sed -i '/<\/modules>/i \    <load module="mod_aws_transcribe"/>' \
+    /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml 2>/dev/null || true
+
+# Copy example configuration files
+COPY examples/freeswitch-config/dialplan/default.xml \
+    /usr/local/freeswitch/conf/dialplan/default.xml
+COPY examples/freeswitch-config/directory/1000.xml \
+    /usr/local/freeswitch/conf/directory/default/1000.xml
+COPY examples/freeswitch-config/directory/1001.xml \
+    /usr/local/freeswitch/conf/directory/default/1001.xml
+COPY examples/freeswitch-config/directory/1002.xml \
+    /usr/local/freeswitch/conf/directory/default/1002.xml
+COPY examples/freeswitch-config/directory/1003.xml \
+    /usr/local/freeswitch/conf/directory/default/1003.xml
+
+# Runtime validation
+RUN echo "=========================================" \
+    && echo "Runtime Validation..." \
+    && echo "=========================================" \
+    && echo "Checking AWS SDK libraries..." \
+    && ls -lh /usr/local/lib/libaws-cpp-sdk-transcribestreaming.so* \
+    && ls -lh /usr/local/lib/libaws-cpp-sdk-core.so* \
+    && echo "" \
+    && echo "Checking module file..." \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so \
+    && echo "" \
+    && echo "Checking module dependencies..." \
+    && ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so \
+    && echo "" \
+    && echo "Verifying no missing dependencies..." \
+    && ! ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so | grep "not found" \
+    && echo "✅ All dependencies satisfied" \
+    && echo "" \
+    && echo "Checking example configuration files..." \
+    && ls -lh /usr/local/freeswitch/conf/dialplan/default.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1000.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1001.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1002.xml \
+    && echo "✅ Configuration files installed" \
+    && echo "" \
+    && echo "=========================================" \
+    && echo "Available modules in this image:" \
+    && echo "  ✅ mod_aws_transcribe (AWS Transcribe)" \
+    && echo "=========================================" \
+    && echo "Included configuration files:" \
+    && echo "  ✅ dialplan/default.xml (with examples)" \
+    && echo "  ✅ directory/default/1000.xml" \
+    && echo "  ✅ directory/default/1001.xml" \
+    && echo "  ✅ directory/default/1002.xml" \
+    && echo "========================================="
+
+# Labels
+LABEL maintainer="FreeSWITCH Speech AI"
+LABEL description="FreeSWITCH 1.10.11 with mod_aws_transcribe"
+LABEL aws.sdk.version="${AWS_SDK_CPP_VERSION}"
+LABEL base.image="srt2011/freeswitch-base:latest"
+
+# Expose FreeSWITCH ports
+EXPOSE 5060/tcp 5060/udp 5080/tcp 5080/udp 8021/tcp
+EXPOSE 16384-16484/udp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD /usr/local/freeswitch/bin/fs_cli -x "status" | grep -q "UP" || exit 1
+
+# Set environment
+ENV PATH="/usr/local/freeswitch/bin:${PATH}"
+
+# Inherit CMD from base image (supervisord or freeswitch)
