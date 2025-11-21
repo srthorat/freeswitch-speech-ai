@@ -1,10 +1,14 @@
-/* 
+/*
  *
  * mod_deepgram_transcribe.c -- Freeswitch module for using dg streaming transcribe api
  *
  */
 #include "mod_deepgram_transcribe.h"
 #include "dg_transcribe_glue.h"
+#include <curl/curl.h>
+#include <openssl/hmac.h>
+#include <openssl/md5.h>
+#include <time.h>
 
 /* Prototypes */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_deepgram_transcribe_shutdown);
@@ -14,10 +18,164 @@ SWITCH_MODULE_DEFINITION(mod_deepgram_transcribe, mod_deepgram_transcribe_load, 
 
 static switch_status_t do_stop(switch_core_session_t *session, char* bugname);
 
-static void responseHandler(switch_core_session_t* session, 
+/* ============================================================================
+ * Pusher Direct Integration (no separate backend server)
+ * Sends transcription directly to Pusher API with HMAC SHA256 signing
+ * ============================================================================ */
+
+// Curl write callback (discard response)
+static size_t curl_write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
+	return size * nmemb;
+}
+
+// Convert binary data to hex string
+static void bin_to_hex(const unsigned char* data, size_t len, char* out) {
+	const char hex[] = "0123456789abcdef";
+	for (size_t i = 0; i < len; i++) {
+		out[i * 2] = hex[(data[i] >> 4) & 0xf];
+		out[i * 2 + 1] = hex[data[i] & 0xf];
+	}
+	out[len * 2] = '\0';
+}
+
+// HMAC SHA256
+static void hmac_sha256_hex(const char* key, const char* data, char* out) {
+	unsigned char digest[EVP_MAX_MD_SIZE];
+	unsigned int len = 0;
+	HMAC(EVP_sha256(), key, strlen(key), (unsigned char*)data, strlen(data), digest, &len);
+	bin_to_hex(digest, len, out);
+}
+
+// MD5 hex
+static void md5_hex(const char* data, char* out) {
+	unsigned char digest[MD5_DIGEST_LENGTH];
+	MD5((unsigned char*)data, strlen(data), digest);
+	bin_to_hex(digest, MD5_DIGEST_LENGTH, out);
+}
+
+static void send_to_pusher(switch_core_session_t* session, const char* json, const char* callId, switch_bool_t is_final) {
+	if (!json || !callId) return;
+
+	// Get Pusher credentials from environment
+	const char* app_id = getenv("PUSHER_APP_ID");
+	const char* app_key = getenv("PUSHER_KEY");
+	const char* app_secret = getenv("PUSHER_SECRET");
+	const char* cluster = getenv("PUSHER_CLUSTER");
+
+	if (!app_id || !app_key || !app_secret) {
+		return; // Pusher not configured, skip silently
+	}
+	if (!cluster) cluster = "ap2";
+
+	const char* channel_prefix = getenv("PUSHER_CHANNEL_PREFIX");
+	const char* event_final = getenv("PUSHER_EVENT_FINAL");
+	const char* event_interim = getenv("PUSHER_EVENT_INTERIM");
+	if (!channel_prefix) channel_prefix = "call-";
+	if (!event_final) event_final = "transcription-final";
+	if (!event_interim) event_interim = "transcription-interim";
+
+	// Build channel name: "call-<callId>"
+	char channel[256];
+	snprintf(channel, sizeof(channel), "%s%s", channel_prefix, callId);
+
+	// Escape JSON for embedding in outer JSON string
+	size_t json_len = strlen(json);
+	char* escaped = malloc(json_len * 2 + 1);
+	if (!escaped) return;
+
+	char* p = escaped;
+	for (size_t i = 0; i < json_len; i++) {
+		if (json[i] == '"') { *p++ = '\\'; *p++ = '"'; }
+		else if (json[i] == '\\') { *p++ = '\\'; *p++ = '\\'; }
+		else *p++ = json[i];
+	}
+	*p = '\0';
+
+	// Build request body
+	const char* event_name = is_final ? event_final : event_interim;
+	char body[8192];
+	snprintf(body, sizeof(body),
+		"{\"name\":\"%s\",\"channels\":[\"%s\"],\"data\":\"%s\"}",
+		event_name, channel, escaped);
+	free(escaped);
+
+	// Calculate body MD5
+	char body_md5[33];
+	md5_hex(body, body_md5);
+
+	// Build query string
+	char timestamp[32];
+	snprintf(timestamp, sizeof(timestamp), "%ld", time(NULL));
+
+	char query[512];
+	snprintf(query, sizeof(query),
+		"auth_key=%s&auth_timestamp=%s&auth_version=1.0&body_md5=%s",
+		app_key, timestamp, body_md5);
+
+	// Build string to sign
+	char to_sign[1024];
+	snprintf(to_sign, sizeof(to_sign),
+		"POST\n/apps/%s/events\n%s",
+		app_id, query);
+
+	// Calculate signature
+	char signature[65];
+	hmac_sha256_hex(app_secret, to_sign, signature);
+
+	// Build final URL
+	char url[1024];
+	snprintf(url, sizeof(url),
+		"https://api-%s.pusher.com/apps/%s/events?%s&auth_signature=%s",
+		cluster, app_id, query, signature);
+
+	// Send HTTP POST
+	CURL* curl = curl_easy_init();
+	if (!curl) return;
+
+	struct curl_slist* headers = NULL;
+	headers = curl_slist_append(headers, "Content-Type: application/json");
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
+
+	CURLcode res = curl_easy_perform(curl);
+
+	if (res != CURLE_OK) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+			"Pusher API call failed: %s\n", curl_easy_strerror(res));
+	}
+
+	curl_slist_free_all(headers);
+	curl_easy_cleanup(curl);
+}
+
+static void responseHandler(switch_core_session_t* session,
 	const char* eventName, const char * json, const char* bugname, int finished) {
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
+
+	// Send to Pusher (if configured)
+	const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+	if (sip_call_id && json) {
+		// Determine if this is final or interim based on JSON content
+		switch_bool_t is_final = SWITCH_FALSE;
+		cJSON* root = cJSON_Parse(json);
+		if (root) {
+			cJSON* is_final_field = cJSON_GetObjectItem(root, "is_final");
+			if (is_final_field && cJSON_IsBool(is_final_field)) {
+				is_final = cJSON_IsTrue(is_final_field) ? SWITCH_TRUE : SWITCH_FALSE;
+			}
+			cJSON* speech_final_field = cJSON_GetObjectItem(root, "speech_final");
+			if (speech_final_field && cJSON_IsBool(speech_final_field)) {
+				is_final = cJSON_IsTrue(speech_final_field) ? SWITCH_TRUE : SWITCH_FALSE;
+			}
+			cJSON_Delete(root);
+		}
+		send_to_pusher(session, json, sip_call_id, is_final);
+	}
 
 	switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, eventName);
 	switch_channel_event_set_data(channel, event);
