@@ -53,7 +53,7 @@ public:
 		responseHandler_t responseHandler
   ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_interim(interim), m_finishing(false), m_connected(false), m_connecting(false),
 	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr),
-			m_audioBuffer(320 * 2, 15) {  // Always 16kHz (640 bytes = 20ms at 16kHz)
+			m_audioBuffer(320 * 2, 50) {  // Pre-connection buffer: 640 bytes * 50 = 1 second at 16kHz (increased from 15 to avoid audio loss)
 		Aws::Client::ClientConfiguration config;
 		if (region != nullptr && strlen(region) > 0) {
 			config.region = region;
@@ -163,17 +163,20 @@ public:
 
 				// send any buffered audio
 				int nFrames = m_audioBuffer.getNumItems();
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p got stream ready, %d buffered frames\n", this, nFrames);	
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p AWS stream ready! Sending %d buffered frames to AWS\n", this, nFrames);
 				if (nFrames) {
 					char *p;
+					int sentFrames = 0;
 					do {
 						p = m_audioBuffer.getNextChunk();
 						if (p) {
 							write(p, CHUNKSIZE);
+							sentFrames++;
 						}
 					} while (p);
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p sent %d buffered frames to AWS\n", this, sentFrames);
 				}
-	
+
 				switch_core_session_rwunlock(psession);
 			}
     };
@@ -226,8 +229,10 @@ public:
 			return false;
 		}
     if (!m_connected) {
-      if (datalen % CHUNKSIZE == 0) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write queuing %d bytes\n", datalen);
+      // Buffer ALL audio before connection, regardless of size
+      // SimpleBuffer now handles any size audio properly
+      if (datalen > 0) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write queuing %d bytes (pre-connection)\n", datalen);
         m_audioBuffer.add(data, datalen);
       }
       return true;
