@@ -226,6 +226,11 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 	// Build enriched metadata with caller/callee information
 	char *enriched_metadata = build_session_metadata(session, switch_core_session_get_pool(session), metadata);
 
+	// Log metadata before starting transcription
+	if (enriched_metadata && strlen(enriched_metadata) > 0) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "AWS transcription metadata: %s\n", enriched_metadata);
+	}
+
 	if (SWITCH_STATUS_FALSE == aws_transcribe_session_init(session, responseHandler, samples_per_second, channels, lang, interim, bugname, enriched_metadata, &pUserData)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error initializing aws speech session.\n");
 		return SWITCH_STATUS_FALSE;
