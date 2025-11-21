@@ -24,7 +24,10 @@
 #include "simple_buffer.h"
 
 #define BUFFER_SECS (3)
-#define CHUNKSIZE (320)
+// Chunk size: 100ms at 16kHz (matching Python script for better performance)
+// 16000 Hz * 2 bytes/sample * 0.1 seconds = 3200 bytes per 100ms chunk
+// Previous: 320 bytes (20ms) - too small, caused processing overhead
+#define CHUNKSIZE (3200)
 
 using namespace Aws;
 using namespace Aws::Utils;
@@ -37,6 +40,9 @@ const char ALLOC_TAG[] = "drachtio";
 
 static bool hasDefaultCredentials = false;
 
+// NOTE: This class is named "GStreamer" but does NOT use the GStreamer multimedia framework
+// It's a direct AWS SDK implementation for streaming audio to AWS Transcribe
+// The name is historical/legacy - consider it as "AWS Audio Streamer"
 class GStreamer {
 public:
 	GStreamer(
@@ -53,7 +59,7 @@ public:
 		responseHandler_t responseHandler
   ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_interim(interim), m_finishing(false), m_connected(false), m_connecting(false),
 	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr),
-			m_audioBuffer(320 * 2, 50) {  // Pre-connection buffer: 640 bytes * 50 = 1 second at 16kHz (increased from 15 to avoid audio loss)
+			m_audioBuffer(CHUNKSIZE, 10) {  // Pre-connection buffer: 3200 bytes * 10 = 32000 bytes = 1 second at 16kHz (100ms chunks, matching Python script)
 		Aws::Client::ClientConfiguration config;
 		if (region != nullptr && strlen(region) > 0) {
 			config.region = region;
