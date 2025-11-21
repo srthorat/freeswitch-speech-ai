@@ -190,6 +190,12 @@ public:
 				// Emit session start event with metadata
 				emit_metadata_event(psession, m_metadata.c_str(), TRANSCRIBE_EVENT_SESSION_START, m_bugname.c_str());
 
+				// Send session start to Pusher (if configured)
+				const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+				if (sip_call_id) {
+					send_session_start_to_pusher(psession, sip_call_id);
+				}
+
 				// Send any pre-connection buffered audio (simple deque approach like Deepgram)
 				std::lock_guard<std::mutex> lk(m_mutex);
 				size_t bufferedChunks = m_deqPreConnectAudio.size();

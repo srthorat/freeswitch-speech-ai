@@ -119,6 +119,12 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	// Default to channel 0 if still not found
 	if (speaker_channel == -1) speaker_channel = 0;
 
+	// Don't send to Pusher if transcript is empty
+	if (!transcript || strlen(transcript) == 0) {
+		cJSON_Delete(root);
+		return;
+	}
+
 	// Map channel to speaker_id: channel 0 = caller, channel 1 = callee
 	char speaker_id[256];
 	if (speaker_channel == 0) {
@@ -231,13 +237,136 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	curl_easy_cleanup(curl);
 }
 
+static void send_session_start_to_pusher(switch_core_session_t* session, const char* callId) {
+	if (!callId) return;
+
+	// Get Pusher credentials from environment
+	const char* app_id = getenv("PUSHER_APP_ID");
+	const char* app_key = getenv("PUSHER_KEY");
+	const char* app_secret = getenv("PUSHER_SECRET");
+	const char* cluster = getenv("PUSHER_CLUSTER");
+
+	if (!app_id || !app_key || !app_secret) {
+		return; // Pusher not configured, skip silently
+	}
+	if (!cluster) cluster = "ap2";
+
+	const char* channel_prefix = getenv("PUSHER_CHANNEL_PREFIX");
+	const char* event_session_start = getenv("PUSHER_EVENT_SESSION_START");
+	if (!channel_prefix) channel_prefix = "call-";
+	if (!event_session_start) event_session_start = "session-start";
+
+	// Build channel name: "call-<callId>"
+	char channel[256];
+	snprintf(channel, sizeof(channel), "%s%s", channel_prefix, callId);
+
+	// Get caller/callee metadata from channel variables
+	switch_channel_t *chan = switch_core_session_get_channel(session);
+	const char* caller_name = switch_channel_get_variable(chan, "caller_id_name");
+	const char* caller_number = switch_channel_get_variable(chan, "caller_id_number");
+	const char* callee_name = switch_channel_get_variable(chan, "callee_id_name");
+	if (!callee_name) callee_name = switch_channel_get_variable(chan, "effective_callee_id_name");
+	const char* callee_number = switch_channel_get_variable(chan, "destination_number");
+	if (!callee_number) callee_number = switch_channel_get_variable(chan, "callee_id_number");
+
+	// Build caller_id and callee_id strings
+	char caller_id[256];
+	char callee_id[256];
+	snprintf(caller_id, sizeof(caller_id), "%s(%s)",
+		caller_name ? caller_name : "Unknown",
+		caller_number ? caller_number : "Unknown");
+	snprintf(callee_id, sizeof(callee_id), "%s(%s)",
+		callee_name ? callee_name : "Unknown",
+		callee_number ? callee_number : "Unknown");
+
+	// Get current timestamp in ISO 8601 format
+	time_t now = time(NULL);
+	struct tm tm_info;
+	gmtime_r(&now, &tm_info);
+	char timestamp[32];
+	strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
+
+	// Build session start JSON payload
+	char data[1024];
+	snprintf(data, sizeof(data),
+		"{\"type\":\"session_start\",\"caller_id\":\"%s\",\"callee_id\":\"%s\",\"timestamp\":\"%s\"}",
+		caller_id, callee_id, timestamp);
+
+	// Build Pusher request body
+	char body[2048];
+	snprintf(body, sizeof(body),
+		"{\"name\":\"%s\",\"channel\":\"%s\",\"data\":\"%s\"}",
+		event_session_start, channel, data);
+
+	// Calculate MD5 of body
+	unsigned char md5_digest[16];
+	MD5((unsigned char*)body, strlen(body), md5_digest);
+	char body_md5[33];
+	for (int i = 0; i < 16; i++) {
+		sprintf(body_md5 + (i * 2), "%02x", md5_digest[i]);
+	}
+
+	// Build auth parameters
+	char session_auth_timestamp[32];
+	snprintf(session_auth_timestamp, sizeof(session_auth_timestamp), "%ld", time(NULL));
+
+	char query[512];
+	snprintf(query, sizeof(query),
+		"auth_key=%s&auth_timestamp=%s&auth_version=1.0&body_md5=%s",
+		app_key, session_auth_timestamp, body_md5);
+
+	// Build string to sign
+	char to_sign[1024];
+	snprintf(to_sign, sizeof(to_sign),
+		"POST\n/apps/%s/events\n%s",
+		app_id, query);
+
+	// Calculate signature
+	char signature[65];
+	hmac_sha256_hex(app_secret, to_sign, signature);
+
+	// Build final URL
+	char url[1024];
+	snprintf(url, sizeof(url),
+		"https://api-%s.pusher.com/apps/%s/events?%s&auth_signature=%s",
+		cluster, app_id, query, signature);
+
+	// Send HTTP POST
+	CURL* curl = curl_easy_init();
+	if (!curl) return;
+
+	struct curl_slist* headers = NULL;
+	headers = curl_slist_append(headers, "Content-Type: application/json");
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, pusher_curl_write_cb);
+
+	CURLcode res = curl_easy_perform(curl);
+
+	if (res != CURLE_OK) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+			"Pusher session_start call failed: %s\n", curl_easy_strerror(res));
+	}
+
+	curl_slist_free_all(headers);
+	curl_easy_cleanup(curl);
+}
+
 static void responseHandler(switch_core_session_t* session,
 	const char* eventName, const char * json, const char* bugname, int finished) {
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 
-	// Send to Pusher (if configured)
+	// Send session start to Pusher on successful connection
 	const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+	if (sip_call_id && 0 == strcmp(eventName, TRANSCRIBE_EVENT_CONNECT_SUCCESS)) {
+		send_session_start_to_pusher(session, sip_call_id);
+	}
+
+	// Send transcription results to Pusher (if configured)
 	if (sip_call_id && json) {
 		// Determine if this is final or interim based on JSON content
 		switch_bool_t is_final = SWITCH_FALSE;

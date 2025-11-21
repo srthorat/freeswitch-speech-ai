@@ -47,4 +47,14 @@ struct cap_cb {
 	uint32_t samples_per_second;
 };
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void send_session_start_to_pusher(switch_core_session_t* session, const char* callId);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif
