@@ -21,11 +21,19 @@ set -e
 
 # Default values
 BUILD_CPUS=4
-USE_CACHE="--cache-from freeswitch-speech-ai:latest"
 AWS_SDK_VERSION="1.11.345"
 IMAGE_TAG="freeswitch-speech-ai:latest"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Check if image exists for cache, use it if available
+if docker image inspect freeswitch-speech-ai:latest >/dev/null 2>&1; then
+    USE_CACHE="--cache-from freeswitch-speech-ai:latest"
+    echo "ℹ️  Using cache from existing image: freeswitch-speech-ai:latest"
+else
+    USE_CACHE=""
+    echo "ℹ️  No existing image found - building from scratch (this will take 30-40 minutes)"
+fi
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -60,7 +68,13 @@ echo "============================================="
 echo "Image Tag: ${IMAGE_TAG}"
 echo "Build CPUs: ${BUILD_CPUS}"
 echo "AWS SDK Version: ${AWS_SDK_VERSION}"
-echo "Cache: ${USE_CACHE}"
+if [ -z "$USE_CACHE" ]; then
+    echo "Cache: Disabled (building from scratch)"
+elif [ "$USE_CACHE" = "--no-cache" ]; then
+    echo "Cache: Disabled (--no-cache flag)"
+else
+    echo "Cache: Enabled (using ${USE_CACHE})"
+fi
 echo "============================================="
 echo ""
 
