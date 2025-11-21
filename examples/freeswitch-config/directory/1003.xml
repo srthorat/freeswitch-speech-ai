@@ -38,7 +38,7 @@
 
       <!-- ⚙️ SERVICE FLAG: AWS Transcribe Enabled -->
       <!-- All AWS Transcribe settings (credentials, region, features) are in dialplan -->
-      <variable name="enable_aws_transcribe" value="true"/>
+      <variable name="enable_azure" value="true"/>
     </variables>
   </user>
 </include>

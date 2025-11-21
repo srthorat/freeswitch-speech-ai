@@ -27,7 +27,7 @@
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_deepgram)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
           <action application="log" data="INFO [DEEPGRAM] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Deepgram"/>
-          <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
+          <!--<action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/> -->
           <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
           <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
           <action application="set" data="DEEPGRAM_SPEECH_DIARIZE=true"/>

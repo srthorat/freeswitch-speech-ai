@@ -26,7 +26,7 @@
 
       <!-- ⚙️ SERVICE FLAG: Azure Transcription Enabled -->
       <!-- All Azure settings (subscription key, region) are in dialplan -->
-      <variable name="enable_azure" value="true"/>
+      <variable name="enable_aws_transcribe" value="true"/>
     </variables>
   </user>
 </include>
