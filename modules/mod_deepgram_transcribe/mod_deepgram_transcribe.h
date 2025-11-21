@@ -14,12 +14,15 @@
 #define TRANSCRIBE_EVENT_CONNECT_FAIL    "deepgram_transcribe::connect_failed"
 #define TRANSCRIBE_EVENT_BUFFER_OVERRUN  "deepgram_transcribe::buffer_overrun"
 #define TRANSCRIBE_EVENT_DISCONNECT      "deepgram_transcribe::disconnect"
+#define TRANSCRIBE_EVENT_SESSION_START   "deepgram_transcribe::session_start"
+#define TRANSCRIBE_EVENT_SESSION_STOP    "deepgram_transcribe::session_stop"
 
 #define MAX_LANG (12)
 #define MAX_SESSION_ID (256)
 #define MAX_WS_URL_LEN (512)
 #define MAX_PATH_LEN (4096)
 #define MAX_BUG_LEN (64)
+#define MAX_METADATA_LEN (8192)
 
 typedef void (*responseHandler_t)(switch_core_session_t* session, const char* eventName, const char* json, const char* bugname, int finished);
 
@@ -34,6 +37,7 @@ struct private_data {
   unsigned int port;
   char path[MAX_PATH_LEN];
   char bugname[MAX_BUG_LEN+1];
+  char metadata[MAX_METADATA_LEN];
   int sampling;
   int  channels;
   unsigned int id;

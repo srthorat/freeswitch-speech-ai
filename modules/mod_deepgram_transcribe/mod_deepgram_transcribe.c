@@ -64,8 +64,8 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
 	return SWITCH_TRUE;
 }
 
-static switch_status_t start_capture(switch_core_session_t *session, switch_media_bug_flag_t flags, 
-  char* lang, int interim, char* bugname)
+static switch_status_t start_capture(switch_core_session_t *session, switch_media_bug_flag_t flags,
+  char* lang, int interim, char* bugname, int sampling, char* metadata)
 {
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	switch_media_bug_t *bug;
@@ -73,6 +73,7 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 	switch_codec_implementation_t read_impl = { 0 };
 	void *pUserData;
 	uint32_t samples_per_second;
+	int channels;
 
 	if (switch_channel_get_private(channel, MY_BUG_NAME)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "removing bug from previous transcribe\n");
@@ -85,9 +86,19 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 		return SWITCH_STATUS_FALSE;
 	}
 
+	// Determine actual samples per second from codec
 	samples_per_second = !strcasecmp(read_impl.iananame, "g722") ? read_impl.actual_samples_per_second : read_impl.samples_per_second;
 
-	if (SWITCH_STATUS_FALSE == dg_transcribe_session_init(session, responseHandler, samples_per_second, flags & SMBF_STEREO ? 2 : 1, lang, interim, bugname, &pUserData)) {
+	// Override with requested sampling rate if different
+	if (sampling != samples_per_second) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Resampling from %d to %d\n", samples_per_second, sampling);
+		samples_per_second = sampling;
+	}
+
+	// Determine channel count based on flags
+	channels = flags & SMBF_STEREO ? 2 : 1;
+
+	if (SWITCH_STATUS_FALSE == dg_transcribe_session_init(session, responseHandler, samples_per_second, channels, lang, interim, bugname, metadata, &pUserData)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error initializing dg speech session.\n");
 		return SWITCH_STATUS_FALSE;
 	}
@@ -116,19 +127,19 @@ static switch_status_t do_stop(switch_core_session_t *session,  char* bugname)
 	return status;
 }
 
-#define TRANSCRIBE_API_SYNTAX "<uuid> [start|stop] lang-code [interim] [stereo|mono]"
+#define TRANSCRIBE_API_SYNTAX "<uuid> [start|stop] lang-code [interim] [mono|mixed|stereo] [8k|16k] [metadata]"
 SWITCH_STANDARD_API(dg_transcribe_function)
 {
-	char *mycmd = NULL, *argv[6] = { 0 };
+	char *mycmd = NULL, *argv[8] = { 0 };
 	int argc = 0;
 	switch_status_t status = SWITCH_STATUS_FALSE;
-	switch_media_bug_flag_t flags = SMBF_READ_STREAM /* | SMBF_WRITE_STREAM | SMBF_READ_PING */;
+	switch_media_bug_flag_t flags = SMBF_READ_STREAM;
 
 	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
 		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
 	}
 
-	if (zstr(cmd) || 
+	if (zstr(cmd) ||
       (!strcasecmp(argv[1], "stop") && argc < 2) ||
       (!strcasecmp(argv[1], "start") && argc < 3) ||
       zstr(argv[0])) {
@@ -146,13 +157,61 @@ SWITCH_STANDARD_API(dg_transcribe_function)
 			} else if (!strcasecmp(argv[1], "start")) {
         char* lang = argv[2];
         int interim = argc > 3 && !strcmp(argv[3], "interim");
-				char *bugname = argc > 5 ? argv[5] : MY_BUG_NAME;
-				if (argc > 4 && !strcmp(argv[4], "stereo")) {
-          flags |= SMBF_WRITE_STREAM ;
-          flags |= SMBF_STEREO;
+				char *bugname = MY_BUG_NAME;
+				int sampling = 16000;  // Default to 16kHz
+				char *metadata = NULL;
+
+				// Parse mix-type (argv[4]): mono (default), mixed, stereo
+				if (argc > 4) {
+					if (!strcmp(argv[4], "mixed")) {
+						flags |= SMBF_WRITE_STREAM;  // Mixed: READ + WRITE (single channel)
+					} else if (!strcmp(argv[4], "stereo")) {
+						flags |= SMBF_WRITE_STREAM;  // Stereo: READ + WRITE + STEREO
+						flags |= SMBF_STEREO;
+					}
+					// else: mono is default (SMBF_READ_STREAM only)
 				}
-    		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "start transcribing %s %s\n", lang, interim ? "interim": "complete");
-				status = start_capture(lsession, flags, lang, interim, bugname);
+
+				// Parse sampling rate (argv[5]): 8k, 16k, or numeric
+				if (argc > 5) {
+					if (!strcmp(argv[5], "8k")) {
+						sampling = 8000;
+					} else if (!strcmp(argv[5], "16k")) {
+						sampling = 16000;
+					} else {
+						int rate = atoi(argv[5]);
+						if (rate > 0 && rate % 8000 == 0) {
+							sampling = rate;
+						}
+					}
+				}
+
+				// Parse metadata (argv[6] or argv[7])
+				if (argc > 6) {
+					// Check if argv[6] is metadata (starts with { or [) or bugname
+					if (argv[6][0] == '{' || argv[6][0] == '[') {
+						metadata = argv[6];
+					} else {
+						bugname = argv[6];
+					}
+				}
+				if (argc > 7) {
+					// If we have 7 args, argv[7] might be metadata
+					if (argv[7][0] == '{' || argv[7][0] == '[') {
+						metadata = argv[7];
+					}
+				}
+
+    		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+					"start transcribing lang=%s interim=%s mix=%s rate=%d bugname=%s metadata=%s\n",
+					lang,
+					interim ? "yes" : "no",
+					(flags & SMBF_STEREO) ? "stereo" : (flags & SMBF_WRITE_STREAM) ? "mixed" : "mono",
+					sampling,
+					bugname,
+					metadata ? metadata : "none");
+
+				status = start_capture(lsession, flags, lang, interim, bugname, sampling, metadata);
 			}
 			switch_core_session_rwunlock(lsession);
 		}
@@ -175,9 +234,17 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_deepgram_transcribe_load)
 {
 	switch_api_interface_t *api_interface;
 
-	/* create/register custom event message type */
+	/* create/register custom event message types */
 	if (switch_event_reserve_subclass(TRANSCRIBE_EVENT_RESULTS) != SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't register subclass %s!\n", TRANSCRIBE_EVENT_RESULTS);
+		return SWITCH_STATUS_TERM;
+	}
+	if (switch_event_reserve_subclass(TRANSCRIBE_EVENT_SESSION_START) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't register subclass %s!\n", TRANSCRIBE_EVENT_SESSION_START);
+		return SWITCH_STATUS_TERM;
+	}
+	if (switch_event_reserve_subclass(TRANSCRIBE_EVENT_SESSION_STOP) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't register subclass %s!\n", TRANSCRIBE_EVENT_SESSION_STOP);
 		return SWITCH_STATUS_TERM;
 	}
 
@@ -193,7 +260,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_deepgram_transcribe_load)
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Deepgram Speech Transcription API successfully loaded\n");
 
 	SWITCH_ADD_API(api_interface, "uuid_deepgram_transcribe", "Deepgram Speech Transcription API", dg_transcribe_function, TRANSCRIBE_API_SYNTAX);
-	switch_console_set_complete("add uuid_deepgram_transcribe start lang-code [interim|final] [stereo|mono]");
+	switch_console_set_complete("add uuid_deepgram_transcribe start lang-code [interim|final] [mono|mixed|stereo] [8k|16k]");
 	switch_console_set_complete("add uuid_deepgram_transcribe stop ");
 
 	/* indicate that the module should continue to be loaded */
@@ -207,5 +274,7 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_deepgram_transcribe_shutdown)
 {
 	dg_transcribe_cleanup();
 	switch_event_free_subclass(TRANSCRIBE_EVENT_RESULTS);
+	switch_event_free_subclass(TRANSCRIBE_EVENT_SESSION_START);
+	switch_event_free_subclass(TRANSCRIBE_EVENT_SESSION_STOP);
 	return SWITCH_STATUS_SUCCESS;
 }
