@@ -14,10 +14,12 @@
   - [3. mod_deepgram_transcribe](#3-mod_deepgram_transcribe)
   - [4. mod_azure_transcribe](#4-mod_azure_transcribe)
   - [5. mod_aws_transcribe](#5-mod_aws_transcribe)
+  - [6. mod_google_transcribe](#6-mod_google_transcribe)
 - [⚙️ Configuration Guide](#️-configuration-guide)
   - [Deepgram Configuration](#deepgram-configuration)
   - [Azure Configuration](#azure-configuration)
   - [AWS Configuration](#aws-configuration)
+  - [Google Configuration](#google-configuration)
 - [🧪 Testing & Verification](#-testing--verification)
 - [🔧 Troubleshooting](#-troubleshooting)
 - [🚢 Production Deployment](#-production-deployment)
@@ -56,6 +58,10 @@
 # With AWS transcription
 ./dockerfiles/run-on-macbook.sh \\
   srt2011/freeswitch-mod-aws-transcribe:latest
+
+# With Google transcription
+./dockerfiles/run-on-macbook.sh \\
+  srt2011/freeswitch-mod-google-transcribe:latest
 \`\`\`
 
 ### Building Your Own Images
@@ -64,11 +70,12 @@
 # Build base image (30-45 minutes)
 ./dockerfiles/build-freeswitch-base.sh freeswitch-base:1.10.11
 
-# Build with specific module (15-35 minutes)
+# Build with specific module (15-45 minutes)
 ./dockerfiles/docker-build-mod-audio-fork.sh
 ./dockerfiles/docker-build-mod-deepgram-transcribe.sh
 ./dockerfiles/docker-build-mod-azure-transcribe.sh
 ./dockerfiles/docker-build-mod-aws-transcribe.sh
+./dockerfiles/docker-build-mod-google-transcribe.sh
 \`\`\`
 
 ---
@@ -1963,6 +1970,247 @@ docker build \
 For the complete list, see: [AWS Transcribe Supported Languages](https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html)
 
 For full API documentation, see: `modules/mod_aws_transcribe/README.md`
+
+---
+
+## 6. mod_google_transcribe
+
+**File**: `Dockerfile.mod_google_transcribe`
+**Build Script**: `docker-build-mod-google-transcribe.sh`
+**Base Image**: `srt2011/freeswitch-base:latest` (FreeSWITCH 1.10.11)
+
+**Dependencies Built**:
+- gRPC v1.64.2 (with Protocol Buffers)
+- googleapis (Google Cloud Speech API protobuf definitions)
+
+**Build Time**:
+- Intel/AMD64: **30-45 minutes** (includes gRPC build from source)
+- Apple Silicon: **50-60 minutes** (with emulation)
+
+**Usage**:
+```bash
+# Build the image (with custom tag and gRPC version)
+./dockerfiles/docker-build-mod-google-transcribe.sh \
+  srt2011/freeswitch-mod-google-transcribe:latest \
+  1.64.2
+
+# Or use defaults
+./dockerfiles/docker-build-mod-google-transcribe.sh
+
+# Run FreeSWITCH with Google Cloud credentials
+docker run -d --name fs \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/creds/service-account.json \
+  -v /path/to/service-account.json:/creds/service-account.json:ro \
+  srt2011/freeswitch-mod-google-transcribe:latest
+
+# Access fs_cli
+docker exec -it fs fs_cli
+
+# Verify module loaded
+docker exec -it fs fs_cli -x 'show modules' | grep google_transcribe
+```
+
+**Features**:
+- ✅ Real-time streaming transcription via gRPC
+- ✅ High accuracy with automatic punctuation
+- ✅ **Speaker diarization support** (AI-based speaker identification)
+- ✅ **Separate recognition per channel** for stereo audio (agent/customer separation)
+- ✅ Alternative language detection
+- ✅ Voice activity detection (VAD) for cost optimization
+- ✅ Word-level timing offsets
+- ✅ Multiple model options:
+  - `phone_call` - Optimized for telephony audio (8kHz-16kHz)
+  - `video` - Optimized for video conferencing
+  - `command_and_search` - Short voice commands
+  - `default` - General-purpose model
+- ✅ Enhanced models for premium accuracy
+- ✅ Phrase hints for domain-specific vocabulary
+- ✅ Support for 125+ languages
+- ✅ Profanity filtering
+- ✅ Built on stable freeswitch-base image
+- ✅ Automatic static + runtime validation during build
+- ✅ Pre-configured example configuration files
+
+**Included Configuration Files**:
+
+The Docker image includes pre-configured FreeSWITCH configuration files ready for testing:
+
+- **`/usr/local/freeswitch/conf/dialplan/default.xml`** - Complete dialplan with Google Transcribe extension (EXTENSION 5)
+- **`/usr/local/freeswitch/conf/directory/default/1000.xml`** - User 1000 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1001.xml`** - User 1001 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1002.xml`** - User 1002 configuration
+- **`/usr/local/freeswitch/conf/directory/default/1003.xml`** - User 1003 with AWS Transcribe enabled
+- **`/usr/local/freeswitch/conf/directory/default/1004.xml`** - User 1004 with Google Transcribe enabled
+
+**Authentication**:
+
+Google Cloud Speech-to-Text API uses service account JSON key files:
+
+1. **Create a Google Cloud service account**:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select existing
+   - Enable "Cloud Speech-to-Text API"
+   - Create a service account with "Cloud Speech-to-Text API User" role
+   - Download JSON key file
+
+2. **Mount credentials into container**:
+```bash
+docker run -d \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/creds/service-account.json \
+  -v /local/path/to/service-account.json:/creds/service-account.json:ro \
+  freeswitch-mod-google-transcribe:latest
+```
+
+3. **Or set per-call via channel variable**:
+```javascript
+// Via drachtio-fsmrf
+await ep.set({
+  GOOGLE_APPLICATION_CREDENTIALS: '/creds/service-account.json'
+});
+ep.api('uuid_google_transcribe', `${ep.uuid} start en-US interim stereo`);
+```
+
+<details>
+<summary><b>Manual Verification for mod_google_transcribe</b></summary>
+
+After building or pulling the mod_google_transcribe image, verify it manually:
+
+#### Step 1: Check Module File Exists
+
+```bash
+# Verify mod_google_transcribe.so exists
+docker run --rm freeswitch-mod-google-transcribe:latest \
+  ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so
+
+# Expected output:
+# -rwxr-xr-x 1 root root 2.5M ... mod_google_transcribe.so
+```
+
+#### Step 2: Verify gRPC Dependencies
+
+```bash
+# Check gRPC libraries
+docker run --rm freeswitch-mod-google-transcribe:latest \
+  ls -lh /usr/local/lib/libgrpc++.so
+
+# Check protobuf libraries
+docker run --rm freeswitch-mod-google-transcribe:latest \
+  ls -lh /usr/local/lib/libprotobuf.so
+
+# Expected: Both libraries should exist
+```
+
+#### Step 3: Verify Module Dependencies (ldd)
+
+```bash
+# Check all module dependencies are satisfied
+docker run --rm freeswitch-mod-google-transcribe:latest \
+  ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so
+
+# Expected output (all lines should show paths, NO "not found"):
+# libgrpc++.so.1 => /usr/local/lib/libgrpc++.so.1 (0x...)
+# libgrpc.so.41 => /usr/local/lib/libgrpc.so.41 (0x...)
+# libprotobuf.so.25 => /usr/local/lib/libprotobuf.so.25 (0x...)
+# libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x...)
+# ... (many more libraries)
+```
+
+#### Step 4: Start Container and Verify Module Loads
+
+```bash
+# Start container
+docker run -d --name fs-test \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  freeswitch-mod-google-transcribe:latest
+
+# Wait for FreeSWITCH to start
+sleep 30
+
+# Check FreeSWITCH status
+docker exec fs-test fs_cli -x "status"
+
+# Verify module is loaded
+docker exec fs-test fs_cli -x "show modules" | grep google_transcribe
+
+# Expected output:
+# api,google_transcribe,mod_google_transcribe,...
+
+# Check FreeSWITCH logs for any errors
+docker logs fs-test | grep -i "google\|error"
+
+# Clean up
+docker rm -f fs-test
+```
+
+#### Step 5: Test API Command (With Google Credentials)
+
+```bash
+# Start container with Google credentials
+docker run -d --name fs-google \
+  -p 5060:5060/udp \
+  -p 8021:8021/tcp \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/creds/sa.json \
+  -v /path/to/service-account.json:/creds/sa.json:ro \
+  freeswitch-mod-google-transcribe:latest
+
+# Wait for startup
+sleep 30
+
+# Connect with fs_cli
+docker exec -it fs-google fs_cli
+
+# In fs_cli, test the command (without a real call, it will fail gracefully):
+# freeswitch@internal> uuid_google_transcribe test-uuid start en-US interim
+# Expected: Command recognized, error about invalid UUID (normal without real call)
+
+# Clean up
+docker rm -f fs-google
+```
+
+</details>
+
+**Configuration Options**:
+
+Key channel variables for Google Speech-to-Text (set in dialplan or via API):
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON | `/creds/service-account.json` |
+| `GOOGLE_SPEECH_MODEL` | Speech recognition model | `phone_call`, `video`, `command_and_search`, `default` |
+| `GOOGLE_SPEECH_USE_ENHANCED` | Use enhanced model (premium) | `true` or `false` |
+| `GOOGLE_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION` | Add punctuation to transcripts | `true` or `false` |
+| `GOOGLE_SPEECH_ENABLE_WORD_TIME_OFFSETS` | Include word-level timestamps | `true` or `false` |
+| `GOOGLE_SPEECH_SPEAKER_DIARIZATION` | Enable speaker identification | `1` or `0` |
+| `GOOGLE_SPEECH_SPEAKER_DIARIZATION_MIN_SPEAKER_COUNT` | Minimum speakers | `2` |
+| `GOOGLE_SPEECH_SPEAKER_DIARIZATION_MAX_SPEAKER_COUNT` | Maximum speakers | `10` |
+| `GOOGLE_SPEECH_SEPARATE_RECOGNITION_PER_CHANNEL` | Separate stereo channels | `true` or `false` |
+| `GOOGLE_SPEECH_PROFANITY_FILTER` | Filter profanity | `true` or `false` |
+| `GOOGLE_SPEECH_HINTS` | Comma-separated phrase hints | `hello,goodbye,thank you` |
+| `GOOGLE_SPEECH_ALTERNATIVE_LANGUAGE_CODES` | Alternative languages | `en-GB,fr-FR` |
+| `START_RECOGNIZING_ON_VAD` | Delay until voice detected | `true` or `false` |
+| `RECOGNIZER_VAD_MODE` | VAD aggressiveness (0-3) | `2` |
+
+**Supported Languages** (125+ languages):
+
+Popular languages include:
+- **English**: en-US, en-GB, en-AU, en-CA, en-IN
+- **Spanish**: es-ES, es-US, es-MX, es-AR
+- **French**: fr-FR, fr-CA
+- **German**: de-DE
+- **Italian**: it-IT
+- **Portuguese**: pt-BR, pt-PT
+- **Chinese**: zh-CN, zh-TW
+- **Japanese**: ja-JP
+- **Korean**: ko-KR
+- **Hindi**: hi-IN
+- And 115+ more languages...
+
+For the complete list, see: [Google Cloud Speech-to-Text Supported Languages](https://cloud.google.com/speech-to-text/docs/languages)
+
+For full API documentation, see: `modules/mod_google_transcribe/README.md`
 
 ---
 

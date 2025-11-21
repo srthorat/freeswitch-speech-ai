@@ -1,0 +1,52 @@
+<include>
+  <!--
+    USER 1004: Google Transcribe Enabled
+
+    This user has Google Cloud Speech-to-Text (real-time transcription) enabled.
+    All calls made by or to this user will be transcribed using
+    Google Cloud Speech-to-Text API with comprehensive speech recognition features.
+
+    Features enabled:
+    - Real-time streaming transcription via gRPC
+    - High accuracy with automatic punctuation
+    - Speaker diarization support (AI-based speaker identification)
+    - Alternative language detection
+    - Voice activity detection (VAD) for cost optimization
+    - Word-level timing offsets
+    - Multiple model options (phone_call, video, command_and_search, default)
+    - Enhanced models for premium accuracy
+    - Phrase hints for domain-specific vocabulary
+    - Support for 125+ languages
+
+    Installation:
+      cp examples/freeswitch-config/directory/1004.xml \
+         /usr/local/freeswitch/conf/directory/default/1004.xml
+
+      fs_cli -x 'reloadxml'
+
+    Configuration:
+      Google Cloud credentials and settings are configured in dialplan (default.xml).
+      See EXTENSION 5: Google Transcription for details.
+
+      Authentication:
+        Set GOOGLE_APPLICATION_CREDENTIALS environment variable to point to
+        your service account JSON key file, or mount it into the container.
+  -->
+  <user id="1004">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1004"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1004"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1004"/>
+      <variable name="effective_caller_id_number" value="1004"/>
+
+      <!-- ⚙️ SERVICE FLAG: Google Transcribe Enabled -->
+      <!-- All Google Cloud Speech settings are configured in dialplan -->
+      <variable name="enable_google_transcribe" value="true"/>
+    </variables>
+  </user>
+</include>
