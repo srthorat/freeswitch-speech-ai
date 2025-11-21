@@ -16,7 +16,6 @@
 #include <unordered_map>
 
 #include "mod_deepgram_transcribe.h"
-#include "simple_buffer.h"
 #include "parser.hpp"
 #include "audio_pipe.hpp"
 
@@ -261,7 +260,7 @@ namespace {
       oss <<  var;
     }
    oss <<  "&encoding=linear16";
-   oss <<  "&sample_rate=8000";
+   oss <<  "&sample_rate=" << sampleRate;
    path = oss.str();
    return path;
   }
@@ -459,7 +458,15 @@ extern "C" {
       return SWITCH_STATUS_FALSE;
     }
 
-    if (SWITCH_STATUS_SUCCESS != fork_data_init(tech_pvt, session, samples_per_second, 8000, channels, lang, interim, bugname, metadata, responseHandler)) {
+    // Get actual codec sample rate for resampling
+    switch_codec_implementation_t read_impl = { 0 };
+    switch_core_session_get_read_impl(session, &read_impl);
+    uint32_t codec_sample_rate = !strcasecmp(read_impl.iananame, "g722") ?
+      read_impl.actual_samples_per_second : read_impl.samples_per_second;
+
+    // User-configurable target sampling rate (samples_per_second parameter)
+    // Note: Deepgram supports 8kHz, 16kHz, and other rates
+    if (SWITCH_STATUS_SUCCESS != fork_data_init(tech_pvt, session, codec_sample_rate, samples_per_second, channels, lang, interim, bugname, metadata, responseHandler)) {
       destroy_tech_pvt(tech_pvt);
       return SWITCH_STATUS_FALSE;
     }
