@@ -78,18 +78,106 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	char channel[256];
 	snprintf(channel, sizeof(channel), "%s%s", channel_prefix, callId);
 
+	// Get caller/callee metadata from channel variables for speaker mapping
+	switch_channel_t *chan = switch_core_session_get_channel(session);
+	const char* caller_name = switch_channel_get_variable(chan, "caller_id_name");
+	const char* caller_number = switch_channel_get_variable(chan, "caller_id_number");
+	const char* callee_name = switch_channel_get_variable(chan, "callee_id_name");
+	if (!callee_name) callee_name = switch_channel_get_variable(chan, "effective_callee_id_name");
+	const char* callee_number = switch_channel_get_variable(chan, "destination_number");
+	if (!callee_number) callee_number = switch_channel_get_variable(chan, "callee_id_number");
+
+	// Parse transcription JSON to extract text and speaker/channel
+	cJSON* root = cJSON_Parse(json);
+	if (!root) return;
+
+	const char* transcript = NULL;
+	int speaker_channel = -1;
+
+	// Extract transcript from Deepgram format
+	cJSON* channel_obj = cJSON_GetObjectItem(root, "channel");
+	if (channel_obj) {
+		cJSON* alternatives = cJSON_GetObjectItem(channel_obj, "alternatives");
+		if (alternatives && cJSON_IsArray(alternatives) && cJSON_GetArraySize(alternatives) > 0) {
+			cJSON* first_alt = cJSON_GetArrayItem(alternatives, 0);
+			cJSON* transcript_field = cJSON_GetObjectItem(first_alt, "transcript");
+			if (transcript_field && cJSON_IsString(transcript_field)) {
+				transcript = cJSON_GetStringValue(transcript_field);
+			}
+
+			// Get speaker from first word
+			cJSON* words = cJSON_GetObjectItem(first_alt, "words");
+			if (words && cJSON_IsArray(words) && cJSON_GetArraySize(words) > 0) {
+				cJSON* first_word = cJSON_GetArrayItem(words, 0);
+				cJSON* speaker_field = cJSON_GetObjectItem(first_word, "speaker");
+				if (speaker_field && cJSON_IsNumber(speaker_field)) {
+					speaker_channel = cJSON_GetNumberValue(speaker_field);
+				}
+			}
+		}
+	}
+
+	// Get channel_index if speaker not found in words
+	if (speaker_channel == -1) {
+		cJSON* channel_index = cJSON_GetObjectItem(root, "channel_index");
+		if (channel_index && cJSON_IsArray(channel_index) && cJSON_GetArraySize(channel_index) > 0) {
+			speaker_channel = cJSON_GetNumberValue(cJSON_GetArrayItem(channel_index, 0));
+		}
+	}
+
+	// Default to channel 0 if still not found
+	if (speaker_channel == -1) speaker_channel = 0;
+
+	// Map channel to speaker_id: channel 0 = caller, channel 1 = callee
+	char speaker_id[256];
+	if (speaker_channel == 0) {
+		// Caller (Channel 0)
+		snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
+			caller_name ? caller_name : "Unknown",
+			caller_number ? caller_number : "Unknown");
+	} else {
+		// Callee (Channel 1)
+		snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
+			callee_name ? callee_name : "Unknown",
+			callee_number ? callee_number : "Unknown");
+	}
+
+	// Get current timestamp in ISO 8601 format
+	time_t now = time(NULL);
+	struct tm tm_info;
+	gmtime_r(&now, &tm_info);
+	char timestamp[32];
+	strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
+
+	// Build transformed JSON in required format
+	cJSON* pusher_data = cJSON_CreateObject();
+	cJSON_AddStringToObject(pusher_data, "type", is_final ? "final" : "interim");
+	cJSON_AddStringToObject(pusher_data, "speaker_id", speaker_id);
+	cJSON_AddStringToObject(pusher_data, "text", transcript ? transcript : "");
+	cJSON_AddStringToObject(pusher_data, "timestamp", timestamp);
+
+	char* pusher_json = cJSON_PrintUnformatted(pusher_data);
+	cJSON_Delete(pusher_data);
+	cJSON_Delete(root);
+
+	if (!pusher_json) return;
+
 	// Escape JSON for embedding in outer JSON string
-	size_t json_len = strlen(json);
+	size_t json_len = strlen(pusher_json);
 	char* escaped = malloc(json_len * 2 + 1);
-	if (!escaped) return;
+	if (!escaped) {
+		free(pusher_json);
+		return;
+	}
 
 	char* p = escaped;
 	for (size_t i = 0; i < json_len; i++) {
-		if (json[i] == '"') { *p++ = '\\'; *p++ = '"'; }
-		else if (json[i] == '\\') { *p++ = '\\'; *p++ = '\\'; }
-		else *p++ = json[i];
+		if (pusher_json[i] == '"') { *p++ = '\\'; *p++ = '"'; }
+		else if (pusher_json[i] == '\\') { *p++ = '\\'; *p++ = '\\'; }
+		else *p++ = pusher_json[i];
 	}
 	*p = '\0';
+	free(pusher_json);
 
 	// Build request body
 	const char* event_name = is_final ? event_final : event_interim;
