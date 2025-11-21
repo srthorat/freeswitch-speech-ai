@@ -722,6 +722,255 @@ ep.on('aws_transcribe::transcription', (evt, result) => {
 
 ---
 
+## Pusher Integration (Real-time Transcription Delivery)
+
+mod_aws_transcribe includes built-in Pusher integration for delivering real-time transcriptions to your frontend applications via WebSocket.
+
+### How It Works
+
+When Pusher is configured, the module automatically:
+1. Receives transcription from AWS Transcribe API
+2. Transforms the data to a standardized format
+3. Maps speaker identity using caller/callee metadata and channel ID
+4. Sends the transformed data to Pusher in real-time
+5. Your frontend receives immediate transcription updates
+
+### Pusher Configuration
+
+Set these environment variables when running FreeSWITCH:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PUSHER_APP_ID` | Yes | - | Your Pusher application ID |
+| `PUSHER_KEY` | Yes | - | Your Pusher API key (public) |
+| `PUSHER_SECRET` | Yes | - | Your Pusher secret key (for HMAC signing) |
+| `PUSHER_CLUSTER` | No | `ap2` | Pusher cluster (us2, us3, eu, ap1, ap2, ap3, ap4) |
+| `PUSHER_CHANNEL_PREFIX` | No | `call-` | Prefix for channel names |
+| `PUSHER_EVENT_FINAL` | No | `transcription-final` | Event name for final transcriptions |
+| `PUSHER_EVENT_INTERIM` | No | `transcription-interim` | Event name for interim transcriptions |
+
+### Docker Run with Pusher
+
+**AWS + Pusher:**
+```bash
+docker run -d --name freeswitch \
+  -p 5060:5060/udp -p 8021:8021 \
+  -e AWS_ACCESS_KEY_ID=AKIA**************** \
+  -e AWS_SECRET_ACCESS_KEY=**************************************** \
+  -e AWS_REGION=us-east-1 \
+  -e PUSHER_APP_ID=123456 \
+  -e PUSHER_KEY=your-pusher-key \
+  -e PUSHER_SECRET=your-pusher-secret \
+  -e PUSHER_CLUSTER=ap2 \
+  freeswitch-speech-ai:latest
+```
+
+**All optional Pusher settings:**
+```bash
+docker run -d --name freeswitch \
+  -p 5060:5060/udp -p 8021:8021 \
+  -e AWS_ACCESS_KEY_ID=AKIA**************** \
+  -e AWS_SECRET_ACCESS_KEY=**************************************** \
+  -e AWS_REGION=us-east-1 \
+  -e PUSHER_APP_ID=123456 \
+  -e PUSHER_KEY=your-pusher-key \
+  -e PUSHER_SECRET=your-pusher-secret \
+  -e PUSHER_CLUSTER=ap2 \
+  -e PUSHER_CHANNEL_PREFIX=transcription- \
+  -e PUSHER_EVENT_FINAL=final \
+  -e PUSHER_EVENT_INTERIM=interim \
+  freeswitch-speech-ai:latest
+```
+
+### Pusher Data Format
+
+The module sends transformed transcription data in this format:
+
+```json
+{
+  "type": "final",
+  "speaker_id": "John Doe(1000)",
+  "text": "Hello, how can I help you today?",
+  "timestamp": "2025-11-21T21:30:45Z"
+}
+```
+
+**Fields:**
+- `type`: `"final"` or `"interim"` - transcription finality
+- `speaker_id`: `"{name}({number})"` - speaker identity mapped from metadata
+- `text`: The transcribed text
+- `timestamp`: ISO 8601 UTC timestamp
+
+### Channel Naming
+
+Pusher channels are automatically created based on the SIP Call-ID:
+- Format: `{PUSHER_CHANNEL_PREFIX}{sip_call_id}`
+- Example: `call-abc123-def456@domain.com`
+- Default prefix: `call-`
+
+### Frontend Integration
+
+**JavaScript/TypeScript Example:**
+
+```javascript
+import Pusher from 'pusher-js';
+
+// Initialize Pusher client
+const pusher = new Pusher('your-pusher-key', {
+  cluster: 'ap2'
+});
+
+// Subscribe to call channel (use SIP Call-ID from your call setup)
+const callId = 'abc123-def456@domain.com';
+const channel = pusher.subscribe(`call-${callId}`);
+
+// Listen for final transcriptions
+channel.bind('transcription-final', (data) => {
+  console.log(`[${data.speaker_id}] ${data.text}`);
+  // Display in UI - this is the final, accurate transcription
+  addToTranscript(data.speaker_id, data.text, 'final');
+});
+
+// Listen for interim transcriptions (real-time updates)
+channel.bind('transcription-interim', (data) => {
+  console.log(`[${data.speaker_id}] (interim) ${data.text}`);
+  // Update live preview - this may change
+  updateLivePreview(data.speaker_id, data.text);
+});
+
+// Cleanup when call ends
+function endCall() {
+  channel.unbind_all();
+  pusher.unsubscribe(`call-${callId}`);
+}
+```
+
+**React Example:**
+
+```jsx
+import { useEffect, useState } from 'react';
+import Pusher from 'pusher-js';
+
+function TranscriptionDisplay({ callId }) {
+  const [transcripts, setTranscripts] = useState([]);
+  const [liveText, setLiveText] = useState('');
+
+  useEffect(() => {
+    const pusher = new Pusher(process.env.REACT_APP_PUSHER_KEY, {
+      cluster: 'ap2'
+    });
+
+    const channel = pusher.subscribe(`call-${callId}`);
+
+    // Final transcriptions - add to permanent list
+    channel.bind('transcription-final', (data) => {
+      setTranscripts(prev => [...prev, {
+        speaker: data.speaker_id,
+        text: data.text,
+        timestamp: data.timestamp,
+        type: data.type
+      }]);
+      setLiveText(''); // Clear interim
+    });
+
+    // Interim transcriptions - show as live preview
+    channel.bind('transcription-interim', (data) => {
+      setLiveText(`${data.speaker_id}: ${data.text}`);
+    });
+
+    return () => {
+      channel.unbind_all();
+      pusher.unsubscribe(`call-${callId}`);
+    };
+  }, [callId]);
+
+  return (
+    <div>
+      <h2>Transcription</h2>
+      {/* Final transcripts */}
+      <div className="transcripts">
+        {transcripts.map((t, i) => (
+          <div key={i} className="transcript-line">
+            <strong>{t.speaker}</strong>: {t.text}
+          </div>
+        ))}
+      </div>
+      {/* Live interim preview */}
+      {liveText && (
+        <div className="interim-preview" style={{ opacity: 0.6 }}>
+          {liveText}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### Security Considerations
+
+**Environment Variables (Recommended):**
+- Store `PUSHER_SECRET` as environment variable only
+- Never commit secrets to version control
+- Use different Pusher apps for dev/staging/production
+
+**Channel Permissions:**
+- Pusher channels are public by default
+- For private channels, implement server-side authorization
+- Use Pusher's auth endpoint feature for sensitive data
+
+**Best Practices:**
+- Rotate Pusher secrets periodically
+- Use Pusher's encrypted channels for sensitive transcriptions
+- Implement call ID validation in your frontend
+- Clean up subscriptions when calls end
+
+### Troubleshooting Pusher Integration
+
+**Issue: Transcriptions not appearing in frontend**
+
+1. Check Pusher credentials are set:
+   ```bash
+   docker exec freeswitch env | grep PUSHER
+   ```
+
+2. Verify channel name format (check SIP Call-ID):
+   ```bash
+   docker logs freeswitch | grep "sip_call_id"
+   ```
+
+3. Enable Pusher debug logging in frontend:
+   ```javascript
+   Pusher.logToConsole = true;
+   const pusher = new Pusher('key', { cluster: 'ap2' });
+   ```
+
+4. Check Pusher dashboard for event delivery stats
+
+**Issue: Wrong speaker identification**
+
+- Verify caller/callee metadata is set in dialplan
+- Check that `sip_call_id` channel variable exists
+- Ensure channel identification is enabled for accurate speaker separation
+- Use `AWS_ENABLE_CHANNEL_IDENTIFICATION=true` and `AWS_NUMBER_OF_CHANNELS=2`
+
+**Issue: Delayed transcriptions**
+
+- Check network latency to Pusher cluster
+- Consider using a geographically closer cluster
+- Verify FreeSWITCH server has good network connectivity
+
+### Disabling Pusher
+
+Pusher integration is **optional**. If Pusher credentials are not configured, the module:
+- Continues to work normally
+- Only sends transcriptions as FreeSWITCH events
+- Does not attempt Pusher API calls
+- Logs no errors about missing Pusher config
+
+To disable, simply don't set `PUSHER_APP_ID`, `PUSHER_KEY`, or `PUSHER_SECRET`.
+
+---
+
 ## Outbound Call Handling
 
 When making outbound calls from FreeSWITCH (originating calls to external numbers), the channel mapping for speaker identification remains consistent with inbound calls:
