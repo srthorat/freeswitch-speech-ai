@@ -726,13 +726,35 @@ ep.on('aws_transcribe::transcription', (evt, result) => {
 
 When making outbound calls from FreeSWITCH (originating calls to external numbers), the channel mapping for speaker identification remains consistent with inbound calls:
 
-### Channel Mapping for Outbound Calls
+### Channel Mapping - Based on Caller/Callee Roles
+
+**IMPORTANT**: Channel assignment is based on **caller/callee roles**, NOT on which side is FreeSWITCH.
 
 **Stereo Mode Channel Assignment:**
-- **Channel 0** (ch_0) = Caller/Originator (FreeSWITCH side / A-leg)
-- **Channel 1** (ch_1) = Callee/Destination (External party / B-leg)
+- **Channel 0** (ch_0) = Caller (whoever initiated/originated the call)
+- **Channel 1** (ch_1) = Callee (whoever received/answered the call)
 
-This mapping is the same regardless of call direction (inbound vs outbound).
+**This works automatically for both directions:**
+
+**Inbound calls TO FreeSWITCH:**
+- Channel 0 (ch_0) = External customer (the caller)
+- Channel 1 (ch_1) = FreeSWITCH extension/agent (the callee)
+
+**Outbound calls FROM FreeSWITCH:**
+- Channel 0 (ch_0) = FreeSWITCH extension/agent (the caller)
+- Channel 1 (ch_1) = External customer (the callee)
+
+### Why No Swap Is Needed
+
+FreeSWITCH automatically sets channel variables based on signaling roles:
+- `caller_id_number` / `caller_id_name` = Always the caller (Channel 0)
+- `destination_number` / `callee_id_name` = Always the callee (Channel 1)
+
+The media bug stereo streams (READ/WRITE) naturally align with these same roles because the media bug is attached to the A-leg, where:
+- **READ stream** = Audio from A-leg = Caller
+- **WRITE stream** = Audio to A-leg (from B-leg) = Callee
+
+**No manual swapping or special logic is required** - the module automatically extracts the correct speaker identities from FreeSWITCH channel variables.
 
 ### Dialplan Configuration for Outbound Calls
 
