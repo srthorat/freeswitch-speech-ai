@@ -8,12 +8,14 @@
 #
 # Examples:
 #   ./run-on-macbook.sh srt2011/freeswitch-base:latest
+#   ./run-on-macbook.sh srt2011/freeswitch-speech-ai:latest  # All modules (audio_fork, AWS, Deepgram)
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-audio-fork:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest
 #
 # With API keys for transcription:
+#   ./run-on-macbook.sh srt2011/freeswitch-speech-ai:latest YOUR_DEEPGRAM_KEY "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest "" YOUR_AZURE_KEY eastus
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1
@@ -41,14 +43,19 @@ if [ -z "$REMOTE_IMAGE" ]; then
     echo ""
     echo "Examples:"
     echo "  $0 srt2011/freeswitch-base:latest"
+    echo "  $0 srt2011/freeswitch-speech-ai:latest  # All modules (audio_fork, AWS, Deepgram)"
     echo "  $0 srt2011/freeswitch-mod-audio-fork:latest"
     echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest"
     echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest"
     echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest"
     echo ""
     echo "With API keys:"
-    echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY"
-    echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
+    echo "  All-modules image (Deepgram + AWS):"
+    echo "    $0 srt2011/freeswitch-speech-ai:latest YOUR_DEEPGRAM_KEY \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1"
+    echo ""
+    echo "  Individual modules:"
+    echo "    $0 srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY"
+    echo "    $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
     echo ""
     echo "AWS Transcribe - Permanent credentials (AKIA*):"
     echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1"
