@@ -110,7 +110,10 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	// Get speaker channel from channel_index only (not from words[0].speaker)
 	cJSON* channel_index = cJSON_GetObjectItem(root, "channel_index");
 	if (channel_index && cJSON_IsArray(channel_index) && cJSON_GetArraySize(channel_index) > 0) {
-		speaker_channel = cJSON_GetNumberValue(cJSON_GetArrayItem(channel_index, 0));
+		cJSON* channel_item = cJSON_GetArrayItem(channel_index, 0);
+		if (channel_item && cJSON_IsNumber(channel_item)) {
+			speaker_channel = (int)channel_item->valuedouble;
+		}
 	}
 
 	// Default to channel 0 if still not found
