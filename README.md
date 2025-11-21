@@ -480,6 +480,29 @@ tail -f /usr/local/freeswitch/log/freeswitch.log
 
 ---
 
+## Documentation
+
+### 📚 Guides & References
+
+- **[Speech Module Comparison](docs/MODULE_COMPARISON.md)** - Comprehensive comparison of all transcription modules (speed, accuracy, features, cost)
+- **[Stereo Channel Assignment Guide](docs/STEREO_CHANNEL_ASSIGNMENT.md)** - Complete guide on FreeSWITCH stereo channel assignment for consistent agent/customer labeling
+- **[Stereo Quick Reference](docs/QUICK_REFERENCE_STEREO_CHANNELS.md)** - Quick configuration snippets for stereo setup
+- **[Real-Time Transcription Delivery](docs/REALTIME_TRANSCRIPTION_DELIVERY.md)** - Guide for delivering transcription events to frontend applications
+- **[XML Dialplan vs Lua](docs/DIALPLAN_VS_LUA.md)** - Comparison of FreeSWITCH call control approaches
+- **[Docker Deployment Guide](dockerfiles/README.md)** - Complete Docker build and deployment instructions
+- **[Per-User Multi-Service Setup](examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)** - Enable different transcription services per user
+
+### 🔧 Module Documentation
+
+Each module has detailed configuration documentation:
+- [mod_aws_transcribe](modules/mod_aws_transcribe/README.md) - AWS Transcribe with channel identification
+- [mod_deepgram_transcribe](modules/mod_deepgram_transcribe/README.md) - Deepgram Nova-2 with multichannel
+- [mod_azure_transcribe](modules/mod_azure_transcribe/README.md) - Azure Speech Services with conversation transcriber
+- [mod_google_transcribe](modules/mod_google_transcribe/README.md) - Google Cloud Speech-to-Text with separate recognition
+- [mod_audio_fork](modules/mod_audio_fork/README.md) - Generic audio streaming over WebSockets
+
+---
+
 ## Credits
 
 These modules are based on work from:
