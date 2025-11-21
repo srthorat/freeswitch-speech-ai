@@ -21,13 +21,12 @@
 #include <aws/transcribestreaming/model/StartStreamTranscriptionRequest.h>
 
 #include "mod_aws_transcribe.h"
-#include "simple_buffer.h"
 
 #define BUFFER_SECS (3)
-// Chunk size: 100ms at 16kHz (matching Python script for better performance)
-// 16000 Hz * 2 bytes/sample * 0.1 seconds = 3200 bytes per 100ms chunk
-// Previous: 320 bytes (20ms) - too small, caused processing overhead
-#define CHUNKSIZE (3200)
+// Pre-connection buffer size: 1 second of audio at 16kHz
+// 16000 Hz * 2 bytes/sample * 1 second = 32000 bytes
+// This is stored as a deque of variable-size audio chunks (like Deepgram/mod_audio_fork)
+#define PRE_CONNECT_BUFFER_SIZE (32000)
 
 using namespace Aws;
 using namespace Aws::Utils;
@@ -58,8 +57,7 @@ public:
 		const char* awsSessionToken,
 		responseHandler_t responseHandler
   ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_interim(interim), m_finishing(false), m_connected(false), m_connecting(false),
-	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr),
-			m_audioBuffer(CHUNKSIZE, 10) {  // Pre-connection buffer: 3200 bytes * 10 = 32000 bytes = 1 second at 16kHz (100ms chunks, matching Python script)
+	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr), m_preConnectAudioSize(0) {
 		Aws::Client::ClientConfiguration config;
 		if (region != nullptr && strlen(region) > 0) {
 			config.region = region;
@@ -166,23 +164,21 @@ public:
 				m_pStream = &stream;
 				m_connected = true;
 
+				// Send any pre-connection buffered audio (simple deque approach like Deepgram)
+				std::lock_guard<std::mutex> lk(m_mutex);
+				size_t bufferedChunks = m_deqPreConnectAudio.size();
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p AWS stream ready! Sending %zu buffered chunks (%u bytes) to AWS\n",
+					this, bufferedChunks, m_preConnectAudioSize);
 
-				// send any buffered audio
-				int nFrames = m_audioBuffer.getNumItems();
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p AWS stream ready! Sending %d buffered frames to AWS\n", this, nFrames);
-				if (nFrames) {
-					char *p;
-					int sentFrames = 0;
-					do {
-						p = m_audioBuffer.getNextChunk();
-						if (p) {
-							write(p, CHUNKSIZE);
-							sentFrames++;
-						}
-					} while (p);
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p sent %d buffered frames to AWS\n", this, sentFrames);
+				while (!m_deqPreConnectAudio.empty()) {
+					Aws::Vector<unsigned char>& bits = m_deqPreConnectAudio.front();
+					Aws::TranscribeStreamingService::Model::AudioEvent event(std::move(bits));
+					m_pStream->WriteAudioEvent(event);
+					m_deqPreConnectAudio.pop_front();
 				}
+				m_preConnectAudioSize = 0;
 
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p sent all buffered audio to AWS\n", this);
 				switch_core_session_rwunlock(psession);
 			}
     };
@@ -234,24 +230,41 @@ public:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write not writing because we are finished, %p\n", this);
 			return false;
 		}
-    if (!m_connected) {
-      // Buffer ALL audio before connection, regardless of size
-      // SimpleBuffer now handles any size audio properly
-      if (datalen > 0) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write queuing %d bytes (pre-connection)\n", datalen);
-        m_audioBuffer.add(data, datalen);
-      }
-      return true;
-    }
+
+		if (datalen == 0) return true;
 
 		std::lock_guard<std::mutex> lk(m_mutex);
 
+		// Simple deque approach (like Deepgram/mod_audio_fork)
+		// Accept ANY size audio - no chunking, no SimpleBuffer complexity
 		const auto beg = static_cast<const unsigned char*>(data);
 		const auto end = beg + datalen;
 		Aws::Vector<unsigned char> bits { beg, end };
+
+		if (!m_connected) {
+			// Pre-connection: Buffer audio in deque (check size limit)
+			if (m_preConnectAudioSize + datalen <= PRE_CONNECT_BUFFER_SIZE) {
+				m_deqPreConnectAudio.push_back(bits);
+				m_preConnectAudioSize += datalen;
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write queuing %d bytes (pre-connection, total: %u)\n",
+					datalen, m_preConnectAudioSize);
+			} else {
+				// Buffer full - drop oldest to make room (circular buffer behavior)
+				if (!m_deqPreConnectAudio.empty()) {
+					m_preConnectAudioSize -= m_deqPreConnectAudio.front().size();
+					m_deqPreConnectAudio.pop_front();
+				}
+				m_deqPreConnectAudio.push_back(bits);
+				m_preConnectAudioSize += datalen;
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write buffer full, dropping oldest (size: %u)\n",
+					m_preConnectAudioSize);
+			}
+			return true;
+		}
+
+		// Post-connection: Send immediately
 		m_deqAudio.push_back(bits);
 		m_packets++;
-
 		m_cond.notify_one();
 
 		return true;
@@ -420,8 +433,12 @@ private:
 	uint32_t m_packets;
 	std::mutex m_mutex;
 	std::condition_variable m_cond;
+	// Post-connection audio queue (sent to AWS immediately)
 	std::deque< Aws::Vector<unsigned char> > m_deqAudio;
-	SimpleBuffer m_audioBuffer;
+	// Pre-connection audio queue (simple approach like Deepgram/mod_audio_fork)
+	// Stores variable-size chunks as-is, no fixed chunking required
+	std::deque< Aws::Vector<unsigned char> > m_deqPreConnectAudio;
+	uint32_t m_preConnectAudioSize;
 };
 
 static void *SWITCH_THREAD_FUNC aws_transcribe_thread(switch_thread_t *thread, void *obj) {
