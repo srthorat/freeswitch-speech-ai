@@ -93,7 +93,39 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
 	return SWITCH_TRUE;
 }
 
-// Helper function to build metadata JSON with caller/callee information
+/* ============================================================================
+ * Helper function to build metadata JSON with caller/callee information
+ *
+ * IMPORTANT - Metadata Usage:
+ * ---------------------------
+ * This metadata is used for LOCAL TRACKING ONLY and is NOT sent to AWS Transcribe.
+ * It is included in FreeSWITCH events (session_start, session_stop) for:
+ *   - Call tracking and logging
+ *   - Channel mapping for speaker diarization
+ *   - Integration with external systems
+ *
+ * Channel Mapping for Stereo Transcription:
+ * -----------------------------------------
+ * When using stereo mode (api_on_answer=uuid_aws_transcribe ${uuid} start en-US interim stereo):
+ *   - Channel 0 (left audio)  = Caller  (A-leg) - caller_number, caller_name
+ *   - Channel 1 (right audio) = Callee  (B-leg) - callee_number, callee_name
+ *
+ * This channel mapping enables accurate speaker diarization by separating
+ * the audio streams and associating each channel with the correct speaker identity.
+ *
+ * The metadata structure includes:
+ *   {
+ *     "call_info": {
+ *       "caller_number": "1000",
+ *       "caller_name": "Extension 1000",
+ *       "callee_number": "1001",
+ *       "callee_name": "Extension 1001",
+ *       "direction": "inbound",
+ *       "uuid": "session-uuid"
+ *     },
+ *     ...user_metadata
+ *   }
+ * ============================================================================ */
 static char* build_session_metadata(switch_core_session_t *session, switch_memory_pool_t *pool, char *user_metadata) {
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	cJSON *jMetadata = NULL;
