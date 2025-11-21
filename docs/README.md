@@ -15,6 +15,14 @@ This directory contains technical documentation and guides for the freeswitch-sp
 
 - **[Stereo Channels Quick Reference](./QUICK_REFERENCE_STEREO_CHANNELS.md)** - TL;DR version with quick configuration snippets
 
+- **[Real-Time Transcription Delivery](./REALTIME_TRANSCRIPTION_DELIVERY.md)** - Complete guide for delivering transcription events to frontend apps, including:
+  - Managed services comparison (Pusher, Ably, PubNub)
+  - Self-hosted solutions (Socket.io + Redis, WebSocket, SSE)
+  - Lua vs C++ implementation analysis
+  - Performance benchmarks and cost analysis
+  - Production architecture and deployment
+  - Complete code examples
+
 ## Module-Specific Documentation
 
 Each transcription module has its own detailed README:
