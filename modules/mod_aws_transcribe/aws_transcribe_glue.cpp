@@ -276,31 +276,96 @@ public:
 				switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
 				if (psession) {
 
-					//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::got a transcript to send out %p\n", this);
 					bool isFinal = false;
 					std::ostringstream s;
 					s << "[";
+
+					bool firstResult = true;
 					for (auto&& r : m_transcript.GetTranscript().GetResults()) {
-						int count = 0;
-						std::ostringstream t1;
+						if (!firstResult) s << ", ";
+						firstResult = false;
+
 						if (!isFinal && !r.GetIsPartial()) isFinal = true;
-						t1 << "{\"is_final\": " << (r.GetIsPartial() ? "false" : "true") << ", \"alternatives\": [";
+
+						std::ostringstream t1;
+						t1 << "{\"is_final\": " << (r.GetIsPartial() ? "false" : "true");
+
+						// Add channel_id if present (for channel identification)
+						if (!r.GetChannelId().empty()) {
+							t1 << ", \"channel_id\": \"" << r.GetChannelId() << "\"";
+						}
+
+						// Add result_id if available
+						if (!r.GetResultId().empty()) {
+							t1 << ", \"result_id\": \"" << r.GetResultId() << "\"";
+						}
+
+						// Add start/end time if available
+						if (r.GetStartTime() > 0.0) {
+							t1 << ", \"start_time\": " << r.GetStartTime();
+						}
+						if (r.GetEndTime() > 0.0) {
+							t1 << ", \"end_time\": " << r.GetEndTime();
+						}
+
+						// Add alternatives with full details
+						t1 << ", \"alternatives\": [";
+						int altCount = 0;
 						for (auto&& alt : r.GetAlternatives()) {
-							std::ostringstream t2;
-							if (count++ == 0) t2 << "{\"transcript\": \"" << alt.GetTranscript() << "\"}";
-							else t2 << ", {\"transcript\": \"" << alt.GetTranscript() << "\"}";
-							t1 << t2.str();
+							if (altCount++ > 0) t1 << ", ";
+
+							t1 << "{\"transcript\": \"" << alt.GetTranscript() << "\"";
+
+							// Add items array with speaker labels, timestamps, confidence
+							const auto& items = alt.GetItems();
+							if (!items.empty()) {
+								t1 << ", \"items\": [";
+								bool firstItem = true;
+								for (auto&& item : items) {
+									if (!firstItem) t1 << ", ";
+									firstItem = false;
+
+									t1 << "{\"content\": \"" << item.GetContent() << "\"";
+
+									// Add type (pronunciation or punctuation)
+									t1 << ", \"type\": \"" << ItemTypeMapper::GetNameForItemType(item.GetType()) << "\"";
+
+									// Add timestamps (only for pronunciation items)
+									if (item.GetType() == ItemType::pronunciation) {
+										if (item.GetStartTime() > 0.0) {
+											t1 << ", \"start_time\": " << item.GetStartTime();
+										}
+										if (item.GetEndTime() > 0.0) {
+											t1 << ", \"end_time\": " << item.GetEndTime();
+										}
+										if (item.GetConfidence() > 0.0) {
+											t1 << ", \"confidence\": " << item.GetConfidence();
+										}
+									}
+
+									// Add speaker label if present (for speaker diarization)
+									if (!item.GetSpeaker().empty()) {
+										t1 << ", \"speaker_label\": \"" << item.GetSpeaker() << "\"";
+									}
+
+									t1 << "}";
+								}
+								t1 << "]";
+							}
+
+							t1 << "}";
 						}
 						t1 << "]}";
 						s << t1.str();
 					}
 					s << "]";
+
 					if (0 != s.str().compare("[]") && (isFinal || m_interim)) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::writing transcript %p: %s\n", this, s.str().c_str() );
 						m_responseHandler(psession, s.str().c_str(), m_bugname.c_str());
 					}
 					TranscriptEvent empty;
-					m_transcript = empty; 
+					m_transcript = empty;
 
 					switch_core_session_rwunlock(psession);
 				}
