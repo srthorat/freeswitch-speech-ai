@@ -459,7 +459,7 @@ extern "C" {
     }
 
     // Get actual codec sample rate for resampling
-    switch_codec_implementation_t read_impl = { 0 };
+    switch_codec_implementation_t read_impl = {};
     switch_core_session_get_read_impl(session, &read_impl);
     uint32_t codec_sample_rate = !strcasecmp(read_impl.iananame, "g722") ?
       read_impl.actual_samples_per_second : read_impl.samples_per_second;
