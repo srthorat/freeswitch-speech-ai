@@ -185,9 +185,19 @@ COPY --from=builder /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml
 # Update library cache
 RUN ldconfig
 
+# Copy example configuration files
+COPY examples/freeswitch-config/dialplan/default.xml \
+    /usr/local/freeswitch/conf/dialplan/default.xml
+COPY examples/freeswitch-config/directory/1000.xml \
+    /usr/local/freeswitch/conf/directory/default/1000.xml
+COPY examples/freeswitch-config/directory/1001.xml \
+    /usr/local/freeswitch/conf/directory/default/1001.xml
+COPY examples/freeswitch-config/directory/1002.xml \
+    /usr/local/freeswitch/conf/directory/default/1002.xml
+
 # Set environment
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/lib"
+ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/freeswitch/lib:${LD_LIBRARY_PATH}"
 
 # Labels
 LABEL maintainer="FreeSWITCH mod_deepgram_transcribe"
