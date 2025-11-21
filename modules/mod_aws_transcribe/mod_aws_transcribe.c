@@ -239,7 +239,7 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	curl_easy_cleanup(curl);
 }
 
-static void send_session_start_to_pusher(switch_core_session_t* session, const char* callId) {
+void send_session_start_to_pusher(switch_core_session_t* session, const char* callId) {
 	if (!callId) return;
 
 	// Get Pusher credentials from environment
