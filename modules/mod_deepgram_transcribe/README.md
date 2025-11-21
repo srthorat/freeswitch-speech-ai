@@ -822,6 +822,7 @@ Set these environment variables when running FreeSWITCH:
 | `PUSHER_SECRET` | Yes | - | Your Pusher secret key (for HMAC signing) |
 | `PUSHER_CLUSTER` | No | `ap2` | Pusher cluster (us2, us3, eu, ap1, ap2, ap3, ap4) |
 | `PUSHER_CHANNEL_PREFIX` | No | `call-` | Prefix for channel names |
+| `PUSHER_EVENT_SESSION_START` | No | `session-start` | Event name for session start notification |
 | `PUSHER_EVENT_FINAL` | No | `transcription-final` | Event name for final transcriptions |
 | `PUSHER_EVENT_INTERIM` | No | `transcription-interim` | Event name for interim transcriptions |
 
@@ -849,6 +850,7 @@ docker run -d --name freeswitch \
   -e PUSHER_SECRET=your-pusher-secret \
   -e PUSHER_CLUSTER=ap2 \
   -e PUSHER_CHANNEL_PREFIX=transcription- \
+  -e PUSHER_EVENT_SESSION_START=session-start \
   -e PUSHER_EVENT_FINAL=final \
   -e PUSHER_EVENT_INTERIM=interim \
   freeswitch-speech-ai:latest
@@ -856,7 +858,30 @@ docker run -d --name freeswitch \
 
 ### Pusher Data Format
 
-The module sends transformed transcription data in this format:
+The module sends two types of messages to Pusher:
+
+#### 1. Session Start Message
+
+Sent when the call is answered and transcription session begins:
+
+```json
+{
+  "type": "session_start",
+  "caller_id": "John Doe(1000)",
+  "callee_id": "Jane Smith(1002)",
+  "timestamp": "2025-11-21T21:30:40Z"
+}
+```
+
+**Fields:**
+- `type`: Always `"session_start"`
+- `caller_id`: `"{name}({number})"` - caller identity from channel variables
+- `callee_id`: `"{name}({number})"` - callee identity from channel variables
+- `timestamp`: ISO 8601 UTC timestamp when session started
+
+#### 2. Transcription Messages
+
+Sent for each transcription result (interim and final):
 
 ```json
 {
@@ -870,7 +895,7 @@ The module sends transformed transcription data in this format:
 **Fields:**
 - `type`: `"final"` or `"interim"` - transcription finality
 - `speaker_id`: `"{name}({number})"` - speaker identity mapped from metadata
-- `text`: The transcribed text
+- `text`: The transcribed text (never empty - validated before sending)
 - `timestamp`: ISO 8601 UTC timestamp
 
 ### Channel Naming
@@ -895,6 +920,13 @@ const pusher = new Pusher('your-pusher-key', {
 // Subscribe to call channel (use SIP Call-ID from your call setup)
 const callId = 'abc123-def456@domain.com';
 const channel = pusher.subscribe(`call-${callId}`);
+
+// Listen for session start (when call is answered)
+channel.bind('session-start', (data) => {
+  console.log(`Call session started: ${data.caller_id} -> ${data.callee_id}`);
+  // Initialize UI, show participants, etc.
+  initializeCallSession(data.caller_id, data.callee_id);
+});
 
 // Listen for final transcriptions
 channel.bind('transcription-final', (data) => {
@@ -926,6 +958,7 @@ import Pusher from 'pusher-js';
 function TranscriptionDisplay({ callId }) {
   const [transcripts, setTranscripts] = useState([]);
   const [liveText, setLiveText] = useState('');
+  const [sessionInfo, setSessionInfo] = useState(null);
 
   useEffect(() => {
     const pusher = new Pusher(process.env.REACT_APP_PUSHER_KEY, {
@@ -933,6 +966,15 @@ function TranscriptionDisplay({ callId }) {
     });
 
     const channel = pusher.subscribe(`call-${callId}`);
+
+    // Session start - show call participants
+    channel.bind('session-start', (data) => {
+      setSessionInfo({
+        caller: data.caller_id,
+        callee: data.callee_id,
+        startTime: data.timestamp
+      });
+    });
 
     // Final transcriptions - add to permanent list
     channel.bind('transcription-final', (data) => {
@@ -959,6 +1001,13 @@ function TranscriptionDisplay({ callId }) {
   return (
     <div>
       <h2>Transcription</h2>
+      {/* Session info */}
+      {sessionInfo && (
+        <div className="session-info">
+          <p><strong>Caller:</strong> {sessionInfo.caller}</p>
+          <p><strong>Callee:</strong> {sessionInfo.callee}</p>
+        </div>
+      )}
       {/* Final transcripts */}
       <div className="transcripts">
         {transcripts.map((t, i) => (
