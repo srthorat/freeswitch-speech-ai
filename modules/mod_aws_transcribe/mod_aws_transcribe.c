@@ -93,6 +93,81 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
 	return SWITCH_TRUE;
 }
 
+// Helper function to build metadata JSON with caller/callee information
+static char* build_session_metadata(switch_core_session_t *session, switch_memory_pool_t *pool, char *user_metadata) {
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	cJSON *jMetadata = NULL;
+	char *metadata_str = NULL;
+
+	// If user provided metadata, parse it; otherwise create new object
+	if (user_metadata && (user_metadata[0] == '{' || user_metadata[0] == '[')) {
+		jMetadata = cJSON_Parse(user_metadata);
+		if (!jMetadata) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+				"Failed to parse user metadata, creating new metadata object\n");
+			jMetadata = cJSON_CreateObject();
+		}
+	} else {
+		jMetadata = cJSON_CreateObject();
+	}
+
+	// Add call information
+	cJSON *jCallInfo = cJSON_CreateObject();
+
+	// Caller information (inbound leg / A-leg)
+	const char *caller_number = switch_channel_get_variable(channel, "caller_id_number");
+	const char *caller_name = switch_channel_get_variable(channel, "caller_id_name");
+	if (caller_number) {
+		cJSON_AddStringToObject(jCallInfo, "caller_number", caller_number);
+	}
+	if (caller_name) {
+		cJSON_AddStringToObject(jCallInfo, "caller_name", caller_name);
+	}
+
+	// Callee information (outbound leg / B-leg)
+	const char *callee_number = switch_channel_get_variable(channel, "destination_number");
+	if (!callee_number) {
+		callee_number = switch_channel_get_variable(channel, "callee_id_number");
+	}
+	const char *callee_name = switch_channel_get_variable(channel, "callee_id_name");
+	if (!callee_name) {
+		callee_name = switch_channel_get_variable(channel, "effective_callee_id_name");
+	}
+
+	if (callee_number) {
+		cJSON_AddStringToObject(jCallInfo, "callee_number", callee_number);
+	}
+	if (callee_name) {
+		cJSON_AddStringToObject(jCallInfo, "callee_name", callee_name);
+	}
+
+	// Add call direction
+	const char *direction = switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_INBOUND ? "inbound" : "outbound";
+	cJSON_AddStringToObject(jCallInfo, "direction", direction);
+
+	// Add UUID
+	const char *uuid = switch_core_session_get_uuid(session);
+	if (uuid) {
+		cJSON_AddStringToObject(jCallInfo, "uuid", uuid);
+	}
+
+	// Add call_info object to metadata
+	cJSON_AddItemToObject(jMetadata, "call_info", jCallInfo);
+
+	// Convert to string
+	metadata_str = cJSON_PrintUnformatted(jMetadata);
+
+	// Copy to pool memory so it persists
+	char *result = NULL;
+	if (metadata_str) {
+		result = switch_core_strdup(pool, metadata_str);
+		free(metadata_str);
+	}
+
+	cJSON_Delete(jMetadata);
+	return result;
+}
+
 static switch_status_t start_capture(switch_core_session_t *session, switch_media_bug_flag_t flags,
   char* lang, int interim, char* bugname, int sampling, char* metadata)
 {
@@ -127,7 +202,10 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 	// Determine channel count based on flags
 	channels = flags & SMBF_STEREO ? 2 : 1;
 
-	if (SWITCH_STATUS_FALSE == aws_transcribe_session_init(session, responseHandler, samples_per_second, channels, lang, interim, bugname, metadata, &pUserData)) {
+	// Build enriched metadata with caller/callee information
+	char *enriched_metadata = build_session_metadata(session, switch_core_session_get_pool(session), metadata);
+
+	if (SWITCH_STATUS_FALSE == aws_transcribe_session_init(session, responseHandler, samples_per_second, channels, lang, interim, bugname, enriched_metadata, &pUserData)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error initializing aws speech session.\n");
 		return SWITCH_STATUS_FALSE;
 	}
