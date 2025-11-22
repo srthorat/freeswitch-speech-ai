@@ -490,7 +490,7 @@ tail -f /usr/local/freeswitch/log/freeswitch.log
 - **[Real-Time Transcription Delivery](docs/REALTIME_TRANSCRIPTION_DELIVERY.md)** - Guide for delivering transcription events to frontend applications
 - **[XML Dialplan vs Lua](docs/DIALPLAN_VS_LUA.md)** - Comparison of FreeSWITCH call control approaches
 - **[Docker Deployment Guide](dockerfiles/README.md)** - Complete Docker build and deployment instructions
-- **[Per-User Multi-Service Setup](examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)** - Enable different transcription services per user
+- **[Per-User Multi-Service Setup](docs/PER_USER_MULTI_SERVICE.md)** - Enable different transcription services per user
 
 ### 🔧 Module Documentation
 

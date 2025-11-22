@@ -2864,7 +2864,7 @@ All three modules now have complete feature parity:
 - Linux environment in cloud
 - Fast builds
 - Recommended for Apple Silicon users
-- See main INSTALL.md for setup
+- See main [INSTALLATION.md](../docs/INSTALLATION.md) for setup
 
 ## Troubleshooting
 

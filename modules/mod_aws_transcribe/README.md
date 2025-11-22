@@ -1177,7 +1177,7 @@ When using Pusher for real-time transcription delivery, outbound calls work iden
 
 **Recommended Approach for Production:** Use per-user flag-based configuration with centralized settings in dialplan.
 
-📖 **See:** [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+📖 **See:** [Per-User Multi-Service Configuration Guide](../../docs/PER_USER_MULTI_SERVICE.md)
 
 **Note:** The guide shows Azure transcription examples, but the same pattern applies to AWS transcription by:
 1. Using `enable_aws_transcribe` flag in user files

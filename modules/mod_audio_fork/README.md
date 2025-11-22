@@ -237,7 +237,7 @@ To start audio forking **only after the call is answered** (not during routing),
 
 Configure audio forking at the user level with flags in user files and settings in dialplan.
 
-📖 **See:** [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+📖 **See:** [Per-User Multi-Service Configuration Guide](../../docs/PER_USER_MULTI_SERVICE.md)
 
 **User file** (flag only) `/usr/local/freeswitch/conf/directory/default/1000.xml`:
 
