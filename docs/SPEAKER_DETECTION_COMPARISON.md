@@ -401,6 +401,165 @@ export PUSHER_EVENT_SESSION_START="session-start"  # Default
 - Format: `{PUSHER_CHANNEL_PREFIX}{sip_call_id}`
 - Example: `call-abc123xyz789`
 
+### Transformation: API Response → Pusher JSON
+
+Both modules transform API-specific JSON into a **unified, simplified format** before sending to Pusher.
+
+#### Example 1: Deepgram Response Transformation
+
+**Input from Deepgram API:**
+```json
+{
+  "type": "Results",
+  "channel_index": [1, 2],
+  "is_final": true,
+  "speech_final": true,
+  "channel": {
+    "alternatives": [{
+      "transcript": "just going on",
+      "confidence": 0.96069336,
+      "words": [
+        {"word": "just", "start": 41.72, "end": 42.2, "confidence": 0.89404297, "speaker": 0}
+      ]
+    }]
+  },
+  "metadata": {
+    "request_id": "2f82afc4-f847-4218-9069-56604796e464",
+    "model_info": {"name": "phonecall-nova", "version": "2023-03-13.31000"}
+  }
+}
+```
+
+**Transformation Process** (`mod_deepgram_transcribe.c:90-156`):
+1. Extract `channel.alternatives[0].transcript` → `"just going on"`
+2. Extract `channel_index[0]` → `1` (**IGNORE** `words[].speaker`)
+3. Map channel 1 → Callee → Use `callee_id_name` + `destination_number`
+4. Build simplified JSON
+
+**Output to Pusher (Inner Data):**
+```json
+{
+  "type": "final",
+  "speaker_id": "John Doe(8001)",
+  "text": "just going on",
+  "timestamp": "2025-11-22T19:45:32Z"
+}
+```
+
+**Complete Pusher HTTP Request Body:**
+```json
+{
+  "name": "transcription-final",
+  "channels": ["call-abc123@sip.example.com"],
+  "data": "{\"type\":\"final\",\"speaker_id\":\"John Doe(8001)\",\"text\":\"just going on\",\"timestamp\":\"2025-11-22T19:45:32Z\"}"
+}
+```
+
+#### Example 2: AWS Response Transformation
+
+**Input from AWS API:**
+```json
+[{
+  "is_final": true,
+  "channel_id": "ch_1",
+  "result_id": "872fc51e-f315-4792-ac16-a3ed60adde69",
+  "start_time": 12.127,
+  "end_time": 13.487,
+  "alternatives": [{
+    "transcript": "I said, hey brother, how are you",
+    "items": [
+      {"content": "I", "type": "pronunciation", "start_time": 12.137, "confidence": 0.9966, "speaker_label": "0"},
+      {"content": "said", "type": "pronunciation", "start_time": 12.287, "confidence": 0.9964, "speaker_label": "0"},
+      {"content": "you", "type": "pronunciation", "start_time": 12.817, "confidence": 0.9983, "speaker_label": "1"}
+    ]
+  }]
+}]
+```
+
+**Transformation Process** (`mod_aws_transcribe.c:90-156`):
+1. Extract `[0].alternatives[0].transcript` → `"I said, hey brother, how are you"`
+2. Parse `[0].channel_id` "ch_1" → `1` (**IGNORE** `items[].speaker_label`)
+3. Map channel 1 → Callee → Use `callee_id_name` + `destination_number`
+4. Build simplified JSON
+
+**Output to Pusher (Inner Data):**
+```json
+{
+  "type": "final",
+  "speaker_id": "Jane Smith(8002)",
+  "text": "I said, hey brother, how are you",
+  "timestamp": "2025-11-22T19:46:15Z"
+}
+```
+
+**Complete Pusher HTTP Request Body:**
+```json
+{
+  "name": "transcription-final",
+  "channels": ["call-xyz789@sip.example.com"],
+  "data": "{\"type\":\"final\",\"speaker_id\":\"Jane Smith(8002)\",\"text\":\"I said, hey brother, how are you\",\"timestamp\":\"2025-11-22T19:46:15Z\"}"
+}
+```
+
+#### Example 3: Interim Transcript (Channel 0 - Caller)
+
+**Input (Deepgram):**
+```json
+{
+  "type": "Results",
+  "channel_index": [0],
+  "is_final": false,
+  "speech_final": false,
+  "channel": {
+    "alternatives": [{"transcript": "hello there"}]
+  }
+}
+```
+
+**Output to Pusher:**
+```json
+{
+  "type": "interim",
+  "speaker_id": "Alice(1000)",
+  "text": "hello there",
+  "timestamp": "2025-11-22T19:47:05Z"
+}
+```
+
+**Complete Pusher HTTP Request Body:**
+```json
+{
+  "name": "transcription-interim",
+  "channels": ["call-abc123@sip.example.com"],
+  "data": "{\"type\":\"interim\",\"speaker_id\":\"Alice(1000)\",\"text\":\"hello there\",\"timestamp\":\"2025-11-22T19:47:05Z\"}"
+}
+```
+
+### Key Transformation Rules
+
+| Step | Deepgram | AWS | Output |
+|------|----------|-----|--------|
+| **1. Extract Transcript** | `channel.alternatives[0].transcript` | `[0].alternatives[0].transcript` | Used as `text` |
+| **2. Extract Channel** | `channel_index[0]` (number) | Parse `channel_id` ("ch_0" → 0) | Used for speaker mapping |
+| **3. Ignore Speaker Labels** | ❌ Skip `words[].speaker` | ❌ Skip `items[].speaker_label` | Not used |
+| **4. Map to Speaker** | Channel 0→caller, 1→callee | Channel 0→caller, 1→callee | Used as `speaker_id` |
+| **5. Determine Type** | `speech_final` ? "final" : "interim" | `is_final` ? "final" : "interim" | Used as `type` |
+| **6. Add Timestamp** | Current time (ISO 8601) | Current time (ISO 8601) | Used as `timestamp` |
+
+### Pusher Data Fields (Code: lines 150-156)
+
+Both modules create identical JSON structure:
+
+```c
+cJSON* pusher_data = cJSON_CreateObject();
+cJSON_AddStringToObject(pusher_data, "type", is_final ? "final" : "interim");
+cJSON_AddStringToObject(pusher_data, "speaker_id", speaker_id);  // From channel mapping
+cJSON_AddStringToObject(pusher_data, "text", transcript);        // From API
+cJSON_AddStringToObject(pusher_data, "timestamp", timestamp);    // ISO 8601
+```
+
+**Result:** Clean, vendor-neutral JSON that client applications can consume without knowing which API (Deepgram or AWS) was used.
+
 ---
 
 ## Dialplan Configuration
