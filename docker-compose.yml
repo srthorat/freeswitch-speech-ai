@@ -49,9 +49,17 @@ services:
       # FreeSWITCH logging
       - FREESWITCH_LOG_LEVEL=INFO
 
-      # Module buffer settings (optional)
+      # mod_audio_fork settings (optional)
+      # Buffer size in seconds (default: 2, min: 1, max: 5)
+      # Controls audio buffering before sending to WebSocket
       - MOD_AUDIO_FORK_BUFFER_SECS=2
+
+      # Number of libwebsocket service threads (default: 1, min: 1, max: 5)
+      # These threads handle sending messages for all sessions
       - MOD_AUDIO_FORK_SERVICE_THREADS=1
+
+      # WebSocket sub-protocol name (default: "audio.drachtio.org")
+      # - MOD_AUDIO_FORK_SUBPROTOCOL_NAME=audio.drachtio.org
 
     # Volume mounts for persistence and configuration
     volumes:
