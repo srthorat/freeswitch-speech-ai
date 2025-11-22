@@ -17,7 +17,8 @@
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_audio_fork)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
           <action application="log" data="INFO [AUDIO_FORK] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Stream"/>
-          <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','service':'audio_fork'}"/>
+          <!-- Pass both name and number for proper speaker identification -->
+          <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller_name':'${effective_caller_id_name}','caller_number':'${caller_id_number}','callee_name':'${callee_id_name}','callee_number':'${destination_number}','service':'audio_fork'}"/>
           <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
         </condition>
       </condition>
