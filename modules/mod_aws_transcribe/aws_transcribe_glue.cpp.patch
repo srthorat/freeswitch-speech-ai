@@ -1,0 +1,78 @@
+--- aws_transcribe_glue.cpp.original	2025-01-01 00:00:00.000000000 +0000
++++ aws_transcribe_glue.cpp.enhanced	2025-01-01 00:00:00.000000000 +0000
+@@ -270,6 +270,20 @@
+ 			if (m_transcript.TranscriptHasBeenSet()) {
+ 				switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
+ 				if (psession) {
++					// Get speaker names from channel variables for enrichment
++					switch_channel_t* channel = switch_core_session_get_channel(psession);
++					const char* caller_name = switch_channel_get_variable(channel, "caller_name");
++					const char* caller_number = switch_channel_get_variable(channel, "caller_number");
++					const char* callee_name = switch_channel_get_variable(channel, "callee_name");
++					const char* callee_number = switch_channel_get_variable(channel, "callee_number");
++
++					// Set defaults if not available
++					if (!caller_name) caller_name = "";
++					if (!caller_number) caller_number = "";
++					if (!callee_name) callee_name = "";
++					if (!callee_number) callee_number = "";
++
++					bool hasCallerInfo = (strlen(caller_name) > 0 || strlen(caller_number) > 0);
+
+ 					//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::got a transcript to send out %p\n", this);
+ 					bool isFinal = false;
+@@ -278,11 +292,51 @@
+ 					for (auto&& r : m_transcript.GetTranscript().GetResults()) {
+ 						int count = 0;
+ 						std::ostringstream t1;
++
++						// Extract channel_id if available (for channel identification mode)
++						std::string channelId = "";
++						if (r.ChannelIdHasBeenSet()) {
++							channelId = r.GetChannelId();
++						}
++
++						// Map channel_id to speaker name
++						std::string speakerName = "";
++						std::string speakerNumber = "";
++
++						if (hasCallerInfo && !channelId.empty()) {
++							if (channelId == "ch_0") {
++								speakerName = caller_name;
++								speakerNumber = caller_number;
++							} else if (channelId == "ch_1") {
++								speakerName = callee_name;
++								speakerNumber = callee_number;
++							}
++						}
++
+ 						if (!isFinal && !r.GetIsPartial()) isFinal = true;
+-						t1 << "{\"is_final\": " << (r.GetIsPartial() ? "false" : "true") << ", \"alternatives\": [";
++
++						// Build JSON with speaker information
++						t1 << "{\"is_final\": " << (r.GetIsPartial() ? "false" : "true");
++
++						// Add channel_id if available
++						if (!channelId.empty()) {
++							t1 << ", \"channel_id\": \"" << channelId << "\"";
++						}
++
++						// Add speaker name and number if mapped
++						if (!speakerName.empty()) {
++							t1 << ", \"speaker_name\": \"" << speakerName << "\"";
++						}
++						if (!speakerNumber.empty()) {
++							t1 << ", \"speaker_number\": \"" << speakerNumber << "\"";
++						}
++
++						t1 << ", \"alternatives\": [";
++
+ 						for (auto&& alt : r.GetAlternatives()) {
+ 							std::ostringstream t2;
+-							if (count++ == 0) t2 << "{\"transcript\": \"" << alt.GetTranscript() << "\"}";
++							// Escape quotes in transcript
++							std::string transcript = alt.GetTranscript();
++							if (count++ == 0) t2 << "{\"transcript\": \"" << transcript << "\"}";
+ 							else t2 << ", {\"transcript\": \"" << alt.GetTranscript() << "\"}";
+ 							t1 << t2.str();
+ 						}
