@@ -39,7 +39,8 @@
 
         <!-- Start audio forking AFTER call is answered -->
         <!-- Audio fork settings are configured HERE in dialplan (not in user directory) -->
-        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}'}"/>
+        <!-- Metadata includes speaker names, numbers, call ID, and timestamp -->
+        <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller_name':'${caller_id_name}','caller_number':'${caller_id_number}','callee_name':'${callee_id_name}','callee_number':'${destination_number}','call_id':'${sip_call_id}','timestamp':'${strftime(%Y-%m-%d %H:%M:%S)}','service':'audio_fork'}"/>
 
         <!-- Stop audio fork on hangup -->
         <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>

@@ -16,8 +16,14 @@
     <extension name="audio_fork_conditional" continue="true">
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_audio_fork)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [AUDIO_FORK] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Stream"/>
-          <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','service':'audio_fork'}"/>
+          <!-- Set speaker information for metadata -->
+          <action application="set" data="caller_id_name=${user_data(${caller_id_number}@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="caller_id_name=${caller_id_name:-(Unknown)}"/>
+          <action application="set" data="callee_id_name=${user_data($1@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="callee_id_name=${callee_id_name:-$1}"/>
+
+          <action application="log" data="INFO [AUDIO_FORK] ${caller_id_name}(${caller_id_number}) calling ${callee_id_name}($1) -> Starting Stream"/>
+          <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller_name':'${caller_id_name}','caller_number':'${caller_id_number}','callee_name':'${callee_id_name}','callee_number':'${destination_number}','call_id':'${sip_call_id}','service':'audio_fork'}"/>
           <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
         </condition>
       </condition>
