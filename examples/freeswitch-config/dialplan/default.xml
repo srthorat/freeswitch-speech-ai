@@ -28,6 +28,13 @@
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_deepgram)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
           <action application="log" data="INFO [DEEPGRAM] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Deepgram"/>
+
+          <!-- Export speaker names and numbers for application access -->
+          <action application="export" data="nolocal:caller_name=${effective_caller_id_name}"/>
+          <action application="export" data="nolocal:caller_number=${caller_id_number}"/>
+          <action application="export" data="nolocal:callee_name=${callee_id_name}"/>
+          <action application="export" data="nolocal:callee_number=${destination_number}"/>
+
           <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/>
           <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
           <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
@@ -43,6 +50,13 @@
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_azure)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
           <action application="log" data="INFO [AZURE] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Azure"/>
+
+          <!-- Export speaker names and numbers for application access -->
+          <action application="export" data="nolocal:caller_name=${effective_caller_id_name}"/>
+          <action application="export" data="nolocal:caller_number=${caller_id_number}"/>
+          <action application="export" data="nolocal:callee_name=${callee_id_name}"/>
+          <action application="export" data="nolocal:callee_number=${destination_number}"/>
+
           <action application="set" data="AZURE_SUBSCRIPTION_KEY=your-azure-subscription-key"/>
           <action application="set" data="AZURE_REGION=southeastasia"/>
           <action application="set" data="api_on_answer=uuid_azure_transcribe ${uuid} start en-US interim stereo"/>
@@ -55,6 +69,13 @@
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_aws_transcribe)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
           <action application="log" data="INFO [AWS] Authorized User ${caller_id_number} calling ${destination_number} -> Starting AWS Transcribe"/>
+
+          <!-- Export speaker names and numbers for application access -->
+          <action application="export" data="nolocal:caller_name=${effective_caller_id_name}"/>
+          <action application="export" data="nolocal:caller_number=${caller_id_number}"/>
+          <action application="export" data="nolocal:callee_name=${callee_id_name}"/>
+          <action application="export" data="nolocal:callee_number=${destination_number}"/>
+
           <!-- AWS Credentials: Set here OR pass as Docker environment variables -->
           <!-- Priority: Channel variables (here) > Environment variables > Default AWS credentials chain -->
           <!-- <action application="set" data="AWS_ACCESS_KEY_ID=your-aws-access-key-id"/> -->
