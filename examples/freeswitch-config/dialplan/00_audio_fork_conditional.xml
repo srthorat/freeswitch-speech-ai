@@ -25,8 +25,17 @@
       <!-- Match all destination numbers -->
       <condition field="destination_number" expression="^(.+)$">
 
+        <!-- Set speaker information (IMPORTANT for Pusher integration) -->
+        <!-- Get caller name from user directory -->
+        <action application="set" data="caller_id_name=${user_data(${caller_id_number}@${domain_name} var effective_caller_id_name)}"/>
+        <action application="set" data="caller_id_name=${caller_id_name:-(Unknown)}"/>
+
+        <!-- Get callee name from user directory -->
+        <action application="set" data="callee_id_name=${user_data($1@${domain_name} var effective_caller_id_name)}"/>
+        <action application="set" data="callee_id_name=${callee_id_name:-$1}"/>
+
         <!-- Log for debugging -->
-        <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_number} has audio fork enabled, setting up for call to ${destination_number}"/>
+        <action application="log" data="INFO [AUDIO_FORK] User ${caller_id_name}(${caller_id_number}) calling ${callee_id_name}($1) - audio fork enabled"/>
 
         <!-- Start audio forking AFTER call is answered -->
         <!-- Audio fork settings are configured HERE in dialplan (not in user directory) -->
