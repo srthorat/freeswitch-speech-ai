@@ -96,6 +96,24 @@ if [ "$AUTO_YES" = false ]; then
 fi
 
 echo ""
+
+# Check if manifest exists
+if [ ! -f "$MANIFEST_FILE" ]; then
+    echo -e "${YELLOW}⚠${NC}  Installation manifest not found at: $MANIFEST_FILE"
+    echo ""
+    echo "Without a manifest, we cannot determine what was installed by our scripts."
+    echo "We will remove ALL selected components (this may affect other applications)."
+    echo ""
+    if [ "$AUTO_YES" = false ]; then
+        read -p "Continue with full cleanup anyway? (type 'yes' to confirm): " -r
+        if [ "$REPLY" != "yes" ]; then
+            echo "Aborted."
+            exit 1
+        fi
+    fi
+fi
+
+echo ""
 echo -e "${YELLOW}Starting cleanup...${NC}"
 
 # ============================================================================
@@ -153,15 +171,21 @@ else
 fi
 
 # ============================================================================
-# Remove libwebsockets (only if we installed it)
+# Remove libwebsockets (only if we installed it OR no manifest exists)
 # ============================================================================
 echo "Removing libwebsockets..."
 
 # Check manifest to see if we installed it
 SHOULD_REMOVE_LWS=true
-if [ -f "$MANIFEST_FILE" ] && grep -q "libwebsockets=existing" "$MANIFEST_FILE"; then
-    echo -e "${YELLOW}ℹ${NC} libwebsockets was already installed - keeping it (not installed by us)"
-    SHOULD_REMOVE_LWS=false
+if [ -f "$MANIFEST_FILE" ]; then
+    if grep -q "libwebsockets=existing" "$MANIFEST_FILE"; then
+        echo -e "${YELLOW}ℹ${NC} libwebsockets was already installed - keeping it (not installed by us)"
+        SHOULD_REMOVE_LWS=false
+    elif grep -q "libwebsockets=installed" "$MANIFEST_FILE"; then
+        echo "Removing libwebsockets (installed by our script)..."
+    fi
+else
+    echo -e "${YELLOW}⚠${NC}  No manifest - will remove libwebsockets (may affect other apps)"
 fi
 
 if [ "$SHOULD_REMOVE_LWS" = true ]; then
@@ -182,15 +206,21 @@ if [ "$SHOULD_REMOVE_LWS" = true ]; then
 fi
 
 # ============================================================================
-# Remove AWS SDK C++ (only if we installed it)
+# Remove AWS SDK C++ (only if we installed it OR no manifest exists)
 # ============================================================================
 echo "Removing AWS SDK C++..."
 
 # Check manifest to see if we installed it
 SHOULD_REMOVE_AWS=true
-if [ -f "$MANIFEST_FILE" ] && grep -q "aws-sdk-cpp=existing" "$MANIFEST_FILE"; then
-    echo -e "${YELLOW}ℹ${NC} AWS SDK C++ was already installed - keeping it (not installed by us)"
-    SHOULD_REMOVE_AWS=false
+if [ -f "$MANIFEST_FILE" ]; then
+    if grep -q "aws-sdk-cpp=existing" "$MANIFEST_FILE"; then
+        echo -e "${YELLOW}ℹ${NC} AWS SDK C++ was already installed - keeping it (not installed by us)"
+        SHOULD_REMOVE_AWS=false
+    elif grep -q "aws-sdk-cpp=installed" "$MANIFEST_FILE"; then
+        echo "Removing AWS SDK C++ (installed by our script)..."
+    fi
+else
+    echo -e "${YELLOW}⚠${NC}  No manifest - will remove AWS SDK C++ (may affect other apps)"
 fi
 
 if [ "$SHOULD_REMOVE_AWS" = true ]; then
