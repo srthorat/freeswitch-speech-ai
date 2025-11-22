@@ -46,6 +46,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_PREFIX="/usr/local"
 FS_PREFIX="${INSTALL_PREFIX}/freeswitch"
 
+# Installation manifest file - tracks what WE installed (not what already existed)
+MANIFEST_FILE="${SCRIPT_DIR}/.freeswitch-install-manifest.txt"
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -135,14 +138,28 @@ fi
 
 echo -e "${GREEN}✓ System dependencies installed${NC}"
 
+# Initialize installation manifest
+echo "# FreeSWITCH Speech AI Installation Manifest" > "$MANIFEST_FILE"
+echo "# Created: $(date)" >> "$MANIFEST_FILE"
+echo "# This file tracks what was installed by this script" >> "$MANIFEST_FILE"
+echo "# Format: component=status (installed|existing)" >> "$MANIFEST_FILE"
+echo "" >> "$MANIFEST_FILE"
+
 # ============================================================================
 # Step 2: Build libwebsockets (for mod_audio_fork & mod_deepgram_transcribe)
 # ============================================================================
 echo -e "${GREEN}[Step 2/6] Building libwebsockets 4.3.3...${NC}"
 
-cd /usr/local/src || exit 1
+# Check if libwebsockets already exists
+if ldconfig -p | grep -q libwebsockets; then
+    echo -e "${YELLOW}ℹ${NC} libwebsockets already installed - skipping (will not remove during cleanup)"
+    echo "libwebsockets=existing" >> "$MANIFEST_FILE"
+    echo -e "${GREEN}✓ Using existing libwebsockets${NC}"
+else
+    echo "Installing libwebsockets 4.3.3..."
+    cd /usr/local/src || exit 1
 
-if [ ! -d "libwebsockets" ]; then
+    if [ ! -d "libwebsockets" ]; then
     echo "Cloning libwebsockets repository..."
     if ! git clone --depth 1 -b v4.3.3 https://github.com/warmcat/libwebsockets.git; then
         echo -e "${RED}✗ Failed to clone libwebsockets repository${NC}"
@@ -172,24 +189,41 @@ if ! make install; then
     exit 1
 fi
 
-ldconfig
+    ldconfig
 
-echo -e "${GREEN}✓ libwebsockets 4.3.3 installed${NC}"
+    # Mark as installed by us
+    echo "libwebsockets=installed" >> "$MANIFEST_FILE"
+    echo -e "${GREEN}✓ libwebsockets 4.3.3 installed${NC}"
+fi
 
 # ============================================================================
 # Step 3: Build AWS SDK C++ (for mod_aws_transcribe)
 # ============================================================================
 echo -e "${GREEN}[Step 3/6] Building AWS SDK C++ 1.11.345...${NC}"
-echo "This will take 20-30 minutes..."
 
-cd /usr/local/src
-if [ ! -d "aws-sdk-cpp" ]; then
-    git clone --depth 1 -b 1.11.345 https://github.com/aws/aws-sdk-cpp.git
-    cd aws-sdk-cpp
-    git submodule update --init --recursive
+# Check if AWS SDK already exists
+if ldconfig -p | grep -q aws-cpp-sdk-transcribestreaming; then
+    echo -e "${YELLOW}ℹ${NC} AWS SDK C++ already installed - skipping (will not remove during cleanup)"
+    echo "aws-sdk-cpp=existing" >> "$MANIFEST_FILE"
+    echo -e "${GREEN}✓ Using existing AWS SDK C++${NC}"
 else
-    cd aws-sdk-cpp
-fi
+    echo "Installing AWS SDK C++ 1.11.345..."
+    echo "This will take 20-30 minutes..."
+
+    cd /usr/local/src || exit 1
+    if [ ! -d "aws-sdk-cpp" ]; then
+        if ! git clone --depth 1 -b 1.11.345 https://github.com/aws/aws-sdk-cpp.git; then
+            echo -e "${RED}✗ Failed to clone AWS SDK repository${NC}"
+            exit 1
+        fi
+        cd aws-sdk-cpp || exit 1
+        if ! git submodule update --init --recursive; then
+            echo -e "${RED}✗ Failed to initialize AWS SDK submodules${NC}"
+            exit 1
+        fi
+    else
+        cd aws-sdk-cpp || exit 1
+    fi
 
 mkdir -p build && cd build
 cmake .. \
@@ -200,16 +234,28 @@ cmake .. \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull -Wno-error=deprecated-declarations"
 
-make -j ${BUILD_CPUS}
-make install
-ldconfig
+    if ! make -j ${BUILD_CPUS}; then
+        echo -e "${RED}✗ Failed to compile AWS SDK${NC}"
+        exit 1
+    fi
 
-echo -e "${GREEN}✓ AWS SDK C++ 1.11.345 installed${NC}"
+    if ! make install; then
+        echo -e "${RED}✗ Failed to install AWS SDK${NC}"
+        exit 1
+    fi
+
+    ldconfig
+
+    # Mark as installed by us
+    echo "aws-sdk-cpp=installed" >> "$MANIFEST_FILE"
+    echo -e "${GREEN}✓ AWS SDK C++ 1.11.345 installed${NC}"
+fi
 
 # ============================================================================
 # Step 4: Install FreeSWITCH (if not skipped)
 # ============================================================================
 if [ "$SKIP_FREESWITCH" = false ]; then
+    echo "freeswitch=installed" >> "$MANIFEST_FILE"
     echo -e "${GREEN}[Step 4/6] Installing FreeSWITCH 1.10.11...${NC}"
     echo "This will take 15-20 minutes..."
     
@@ -326,6 +372,9 @@ g++ -shared \
     -lcrypto
 
 echo -e "${GREEN}✓ mod_deepgram_transcribe built${NC}"
+
+# Mark modules as installed
+echo "modules=installed" >> "$MANIFEST_FILE"
 
 # Set permissions
 chown freeswitch:daemon ${FS_PREFIX}/lib/freeswitch/mod/mod_*.so

@@ -31,6 +31,8 @@ KEEP_FREESWITCH=false
 KEEP_SOURCES=false
 AUTO_YES=false
 FS_PREFIX="/usr/local/freeswitch"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MANIFEST_FILE="${SCRIPT_DIR}/.freeswitch-install-manifest.txt"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -151,42 +153,62 @@ else
 fi
 
 # ============================================================================
-# Remove libwebsockets
+# Remove libwebsockets (only if we installed it)
 # ============================================================================
 echo "Removing libwebsockets..."
-LWS_FOUND=false
-if ls /usr/local/lib/libwebsockets* 1> /dev/null 2>&1; then
-    rm -f /usr/local/lib/libwebsockets*
-    rm -f /usr/local/lib/pkgconfig/libwebsockets*.pc
-    rm -rf /usr/local/include/libwebsockets*
-    LWS_FOUND=true
-fi
-ldconfig 2>/dev/null || true
 
-if [ "$LWS_FOUND" = true ]; then
-    echo -e "${GREEN}✓${NC} Removed libwebsockets"
-else
-    echo -e "${YELLOW}ℹ${NC} libwebsockets not found (already removed or never installed)"
+# Check manifest to see if we installed it
+SHOULD_REMOVE_LWS=true
+if [ -f "$MANIFEST_FILE" ] && grep -q "libwebsockets=existing" "$MANIFEST_FILE"; then
+    echo -e "${YELLOW}ℹ${NC} libwebsockets was already installed - keeping it (not installed by us)"
+    SHOULD_REMOVE_LWS=false
+fi
+
+if [ "$SHOULD_REMOVE_LWS" = true ]; then
+    LWS_FOUND=false
+    if ls /usr/local/lib/libwebsockets* 1> /dev/null 2>&1; then
+        rm -f /usr/local/lib/libwebsockets*
+        rm -f /usr/local/lib/pkgconfig/libwebsockets*.pc
+        rm -rf /usr/local/include/libwebsockets*
+        LWS_FOUND=true
+    fi
+    ldconfig 2>/dev/null || true
+
+    if [ "$LWS_FOUND" = true ]; then
+        echo -e "${GREEN}✓${NC} Removed libwebsockets"
+    else
+        echo -e "${YELLOW}ℹ${NC} libwebsockets not found (already removed or never installed)"
+    fi
 fi
 
 # ============================================================================
-# Remove AWS SDK C++
+# Remove AWS SDK C++ (only if we installed it)
 # ============================================================================
 echo "Removing AWS SDK C++..."
-AWS_FOUND=false
-if ls /usr/local/lib/libaws-* 1> /dev/null 2>&1; then
-    rm -f /usr/local/lib/libaws-*
-    rm -f /usr/local/lib/pkgconfig/aws-*.pc
-    rm -rf /usr/local/include/aws
-    rm -rf /usr/local/include/smithy
-    AWS_FOUND=true
-fi
-ldconfig 2>/dev/null || true
 
-if [ "$AWS_FOUND" = true ]; then
-    echo -e "${GREEN}✓${NC} Removed AWS SDK C++"
-else
-    echo -e "${YELLOW}ℹ${NC} AWS SDK C++ not found (already removed or never installed)"
+# Check manifest to see if we installed it
+SHOULD_REMOVE_AWS=true
+if [ -f "$MANIFEST_FILE" ] && grep -q "aws-sdk-cpp=existing" "$MANIFEST_FILE"; then
+    echo -e "${YELLOW}ℹ${NC} AWS SDK C++ was already installed - keeping it (not installed by us)"
+    SHOULD_REMOVE_AWS=false
+fi
+
+if [ "$SHOULD_REMOVE_AWS" = true ]; then
+    AWS_FOUND=false
+    if ls /usr/local/lib/libaws-* 1> /dev/null 2>&1; then
+        rm -f /usr/local/lib/libaws-*
+        rm -f /usr/local/lib/pkgconfig/aws-*.pc
+        rm -rf /usr/local/include/aws
+        rm -rf /usr/local/include/smithy
+        AWS_FOUND=true
+    fi
+    ldconfig 2>/dev/null || true
+
+    if [ "$AWS_FOUND" = true ]; then
+        echo -e "${GREEN}✓${NC} Removed AWS SDK C++"
+    else
+        echo -e "${YELLOW}ℹ${NC} AWS SDK C++ not found (already removed or never installed)"
+    fi
 fi
 
 # ============================================================================
