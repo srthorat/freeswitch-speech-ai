@@ -1,0 +1,204 @@
+#!/bin/bash
+# ============================================================================
+# FreeSWITCH Speech AI - Complete Cleanup Script
+# ============================================================================
+# Removes EVERYTHING installed by install-all.sh:
+#   - FreeSWITCH
+#   - All 3 modules
+#   - libwebsockets
+#   - AWS SDK C++
+#   - Source directories
+#
+# Usage:
+#   sudo ./cleanup-all.sh [OPTIONS]
+#
+# Options:
+#   --keep-freeswitch      Keep FreeSWITCH installation (remove only modules and dependencies)
+#   --keep-sources         Keep source directories in /usr/local/src
+#   --yes                  Skip confirmation prompts
+# ============================================================================
+
+set -e
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# Defaults
+KEEP_FREESWITCH=false
+KEEP_SOURCES=false
+AUTO_YES=false
+FS_PREFIX="/usr/local/freeswitch"
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --keep-freeswitch)
+            KEEP_FREESWITCH=true
+            shift
+            ;;
+        --keep-sources)
+            KEEP_SOURCES=true
+            shift
+            ;;
+        --yes)
+            AUTO_YES=true
+            shift
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            exit 1
+            ;;
+    esac
+done
+
+# Check root
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}Error: This script must be run as root${NC}"
+    exit 1
+fi
+
+echo -e "${RED}=============================================${NC}"
+echo -e "${RED}COMPLETE CLEANUP${NC}"
+echo -e "${RED}=============================================${NC}"
+echo ""
+echo "This will remove:"
+if [ "$KEEP_FREESWITCH" = false ]; then
+    echo "  ✗ FreeSWITCH ($FS_PREFIX)"
+fi
+echo "  ✗ mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe"
+echo "  ✗ libwebsockets (/usr/local/lib/libwebsockets*)"
+echo "  ✗ AWS SDK C++ (/usr/local/lib/libaws-*)"
+if [ "$KEEP_SOURCES" = false ]; then
+    echo "  ✗ Source directories (/usr/local/src/{freeswitch,libwebsockets,aws-sdk-cpp})"
+fi
+echo ""
+
+if [ "$AUTO_YES" = false ]; then
+    read -p "Are you ABSOLUTELY sure? This CANNOT be undone! (type 'yes' to confirm): " -r
+    if [ "$REPLY" != "yes" ]; then
+        echo "Aborted."
+        exit 1
+    fi
+fi
+
+echo ""
+echo -e "${YELLOW}Starting cleanup...${NC}"
+
+# ============================================================================
+# Stop FreeSWITCH
+# ============================================================================
+echo "Stopping FreeSWITCH..."
+systemctl stop freeswitch 2>/dev/null || true
+killall freeswitch 2>/dev/null || true
+sleep 2
+
+# ============================================================================
+# Remove Modules
+# ============================================================================
+echo "Removing modules..."
+if [ -d "${FS_PREFIX}/lib/freeswitch/mod" ]; then
+    for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
+        rm -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so"
+        echo -e "${GREEN}✓${NC} Removed ${module}.so"
+    done
+fi
+
+# ============================================================================
+# Remove FreeSWITCH
+# ============================================================================
+if [ "$KEEP_FREESWITCH" = false ]; then
+    echo "Removing FreeSWITCH..."
+    
+    # Remove systemd service
+    if [ -f "/etc/systemd/system/freeswitch.service" ]; then
+        systemctl disable freeswitch 2>/dev/null || true
+        rm -f /etc/systemd/system/freeswitch.service
+        systemctl daemon-reload
+    fi
+    
+    # Remove installation
+    if [ -d "$FS_PREFIX" ]; then
+        rm -rf "$FS_PREFIX"
+        echo -e "${GREEN}✓${NC} Removed FreeSWITCH installation"
+    fi
+    
+    # Remove user
+    userdel freeswitch 2>/dev/null || true
+else
+    echo -e "${YELLOW}ℹ${NC} Keeping FreeSWITCH installation"
+fi
+
+# ============================================================================
+# Remove libwebsockets
+# ============================================================================
+echo "Removing libwebsockets..."
+rm -f /usr/local/lib/libwebsockets*
+rm -f /usr/local/lib/pkgconfig/libwebsockets*.pc
+rm -rf /usr/local/include/libwebsockets*
+ldconfig
+echo -e "${GREEN}✓${NC} Removed libwebsockets"
+
+# ============================================================================
+# Remove AWS SDK C++
+# ============================================================================
+echo "Removing AWS SDK C++..."
+rm -f /usr/local/lib/libaws-*
+rm -f /usr/local/lib/pkgconfig/aws-*.pc
+rm -rf /usr/local/include/aws
+rm -rf /usr/local/include/smithy
+ldconfig
+echo -e "${GREEN}✓${NC} Removed AWS SDK C++"
+
+# ============================================================================
+# Remove Source Directories
+# ============================================================================
+if [ "$KEEP_SOURCES" = false ]; then
+    echo "Removing source directories..."
+    rm -rf /usr/local/src/freeswitch
+    rm -rf /usr/local/src/libwebsockets
+    rm -rf /usr/local/src/aws-sdk-cpp
+    echo -e "${GREEN}✓${NC} Removed source directories"
+else
+    echo -e "${YELLOW}ℹ${NC} Keeping source directories"
+fi
+
+# ============================================================================
+# Clean build artifacts in current directory
+# ============================================================================
+echo "Cleaning build artifacts..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+for module_dir in modules/mod_audio_fork modules/mod_aws_transcribe modules/mod_deepgram_transcribe; do
+    if [ -d "$module_dir" ]; then
+        rm -f ${module_dir}/*.o ${module_dir}/*.so
+    fi
+done
+
+echo ""
+echo -e "${GREEN}=============================================${NC}"
+echo -e "${GREEN}✓ Cleanup Complete${NC}"
+echo -e "${GREEN}=============================================${NC}"
+echo ""
+echo "Removed:"
+if [ "$KEEP_FREESWITCH" = false ]; then
+    echo "  ✓ FreeSWITCH"
+fi
+echo "  ✓ Transcription modules"
+echo "  ✓ libwebsockets"
+echo "  ✓ AWS SDK C++"
+if [ "$KEEP_SOURCES" = false ]; then
+    echo "  ✓ Source directories"
+fi
+echo ""
+
+if [ "$KEEP_FREESWITCH" = false ]; then
+    echo "To reinstall everything, run:"
+    echo "  sudo ./install-all.sh"
+else
+    echo "To reinstall modules only, run:"
+    echo "  sudo ./install-modules-only.sh"
+fi
+echo ""
