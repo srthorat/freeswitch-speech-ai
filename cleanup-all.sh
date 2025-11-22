@@ -77,7 +77,16 @@ fi
 echo ""
 
 if [ "$AUTO_YES" = false ]; then
+    # First confirmation
     read -p "Are you ABSOLUTELY sure? This CANNOT be undone! (type 'yes' to confirm): " -r
+    if [ "$REPLY" != "yes" ]; then
+        echo "Aborted."
+        exit 1
+    fi
+
+    # Second confirmation
+    echo ""
+    read -p "FINAL WARNING: All selected components will be permanently deleted. Type 'yes' again to proceed: " -r
     if [ "$REPLY" != "yes" ]; then
         echo "Aborted."
         exit 1

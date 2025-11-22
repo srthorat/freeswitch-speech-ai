@@ -47,13 +47,24 @@ echo -e "${YELLOW}=============================================${NC}"
 echo "FreeSWITCH Prefix: $FS_PREFIX"
 echo ""
 
-# Confirmation
+# First confirmation
 read -p "This will remove mod_audio_fork, mod_aws_transcribe, and mod_deepgram_transcribe. Continue? (y/N) " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted."
     exit 1
 fi
 
+# Second confirmation
+echo ""
+read -p "Are you sure? This action will remove all module files and configuration. (y/N) " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 1
+fi
+
+echo ""
 # Remove module files
 echo "Removing module files..."
 for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do

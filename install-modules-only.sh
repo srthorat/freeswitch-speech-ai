@@ -12,8 +12,10 @@
 #
 # Options:
 #   --freeswitch-prefix PATH    FreeSWITCH installation path (default: /usr/local/freeswitch)
-#   --copy-dialplan             Copy example dialplan
 #   --build-cpus N              Number of CPUs for build (default: 4)
+#
+# Note: This script does NOT copy dialplan files.
+#       Use install-all.sh for full installation with dialplan.
 # ============================================================================
 
 set -e
@@ -26,7 +28,6 @@ NC='\033[0m'
 
 # Default values
 FS_PREFIX="/usr/local/freeswitch"
-COPY_DIALPLAN=false
 BUILD_CPUS=4
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -37,16 +38,13 @@ while [[ $# -gt 0 ]]; do
             FS_PREFIX="$2"
             shift 2
             ;;
-        --copy-dialplan)
-            COPY_DIALPLAN=true
-            shift
-            ;;
         --build-cpus)
             BUILD_CPUS="$2"
             shift 2
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
+            echo "Usage: $0 [--freeswitch-prefix PATH] [--build-cpus N]"
             exit 1
             ;;
     esac
@@ -179,11 +177,10 @@ if [ -f "$MODULES_CONF" ]; then
     fi
 fi
 
-if [ "$COPY_DIALPLAN" = true ]; then
-    cp ${SCRIPT_DIR}/examples/freeswitch-config/dialplan/default.xml ${FS_PREFIX}/conf/dialplan/
-    cp ${SCRIPT_DIR}/examples/freeswitch-config/directory/100*.xml ${FS_PREFIX}/conf/directory/default/ 2>/dev/null || true
-    echo -e "${GREEN}✓ Dialplan copied${NC}"
-fi
+# Note: Dialplan is NOT copied by this script
+# If you need the example dialplan, manually copy from:
+#   examples/freeswitch-config/dialplan/default.xml -> ${FS_PREFIX}/conf/dialplan/
+#   examples/freeswitch-config/directory/100*.xml -> ${FS_PREFIX}/conf/directory/default/
 
 # ============================================================================
 # Validate

@@ -13,9 +13,10 @@
 #
 # Options:
 #   --skip-freeswitch       Skip FreeSWITCH installation (install modules only)
-#   --copy-dialplan         Copy example dialplan from examples/
 #   --no-validation         Skip module validation
 #   --build-cpus N          Number of CPUs for build (default: 4)
+#
+# Note: This script ALWAYS copies the example dialplan from examples/ directory.
 #
 # Environment Variables (set before running):
 #   DEEPGRAM_API_KEY        Deepgram API key
@@ -39,7 +40,6 @@ NC='\033[0m' # No Color
 
 # Default values
 SKIP_FREESWITCH=false
-COPY_DIALPLAN=false
 NO_VALIDATION=false
 BUILD_CPUS=4
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,10 +53,6 @@ while [[ $# -gt 0 ]]; do
             SKIP_FREESWITCH=true
             shift
             ;;
-        --copy-dialplan)
-            COPY_DIALPLAN=true
-            shift
-            ;;
         --no-validation)
             NO_VALIDATION=true
             shift
@@ -67,7 +63,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
-            echo "Usage: $0 [--skip-freeswitch] [--copy-dialplan] [--no-validation] [--build-cpus N]"
+            echo "Usage: $0 [--skip-freeswitch] [--no-validation] [--build-cpus N]"
             exit 1
             ;;
     esac
@@ -86,7 +82,7 @@ echo -e "${GREEN}=============================================${NC}"
 echo ""
 echo "Configuration:"
 echo "  Install FreeSWITCH: $([ "$SKIP_FREESWITCH" = false ] && echo "Yes" || echo "No (modules only)")"
-echo "  Copy Dialplan: $([ "$COPY_DIALPLAN" = true ] && echo "Yes" || echo "No")"
+echo "  Copy Dialplan: Yes (always)"
 echo "  Build CPUs: $BUILD_CPUS"
 echo "  Install Prefix: $INSTALL_PREFIX"
 echo ""
@@ -324,18 +320,16 @@ if [ -f "$MODULES_CONF" ]; then
     fi
 fi
 
-# Copy dialplan if requested
-if [ "$COPY_DIALPLAN" = true ]; then
-    echo "Copying example dialplan..."
-    cp ${SCRIPT_DIR}/examples/freeswitch-config/dialplan/default.xml \
-       ${FS_PREFIX}/conf/dialplan/default.xml
-    
-    cp ${SCRIPT_DIR}/examples/freeswitch-config/directory/100*.xml \
-       ${FS_PREFIX}/conf/directory/default/ 2>/dev/null || true
-    
-    chown -R freeswitch:daemon ${FS_PREFIX}/conf
-    echo -e "${GREEN}✓ Example dialplan copied${NC}"
-fi
+# Always copy dialplan
+echo "Copying example dialplan..."
+cp ${SCRIPT_DIR}/examples/freeswitch-config/dialplan/default.xml \
+   ${FS_PREFIX}/conf/dialplan/default.xml
+
+cp ${SCRIPT_DIR}/examples/freeswitch-config/directory/100*.xml \
+   ${FS_PREFIX}/conf/directory/default/ 2>/dev/null || true
+
+chown -R freeswitch:daemon ${FS_PREFIX}/conf
+echo -e "${GREEN}✓ Example dialplan copied${NC}"
 
 # Set environment variables in systemd service (if exists)
 if [ -f "/etc/systemd/system/freeswitch.service" ]; then
