@@ -124,21 +124,23 @@
     <!-- ================================================================ -->
     <!--
       For outbound calls to external numbers (PSTN, mobile, etc.):
+      Uses AWS Transcribe for outbound calls (you can use different service than inbound)
+
       - Caller info: Pulled from user directory (who's calling)
       - Callee info: Set manually based on destination number (who they're calling)
 
-      Example: Extension 1000 calls +15551234567
+      Example: Extension 1003 calls +15551234567
       Result in Pusher:
       {
         "type": "final",
-        "speaker_id": "John Doe(1000)",  // Channel 0 (caller)
+        "speaker_id": "David Wilson(1003)",  // Channel 0 (caller)
         "text": "Hello there",
         "timestamp": "2025-11-22T20:00:00Z"
       }
       {
         "type": "final",
         "speaker_id": "External +15551234567",  // Channel 1 (callee)
-        "text": "Hi John",
+        "text": "Hi there",
         "timestamp": "2025-11-22T20:00:05Z"
       }
     -->
@@ -158,9 +160,9 @@
           <!-- <action application="set" data="callee_id_name=${odbc(SELECT name FROM contacts WHERE phone='$1')}"/> -->
           <!-- <action application="set" data="callee_id_name=${callee_id_name:-External $1}"/> -->
 
-          <action application="log" data="INFO [EXTERNAL-OUT] ${caller_id_name}(${caller_id_number}) calling external ${callee_id_name}"/>
+          <action application="log" data="INFO [EXTERNAL-OUT-DEEPGRAM] ${caller_id_name}(${caller_id_number}) calling external ${callee_id_name}"/>
 
-          <!-- Start Deepgram transcription -->
+          <!-- Start Deepgram Transcribe for outbound calls -->
           <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
           <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
           <action application="set" data="DEEPGRAM_SPEECH_DIARIZE=true"/>
