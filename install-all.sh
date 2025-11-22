@@ -102,8 +102,13 @@ fi
 # ============================================================================
 echo -e "${GREEN}[Step 1/6] Installing system dependencies...${NC}"
 
-apt-get update
-apt-get install -y \
+if ! apt-get update; then
+    echo -e "${RED}✗ Failed to update package lists${NC}"
+    echo "Check your internet connection and try again"
+    exit 1
+fi
+
+if ! apt-get install -y \
     build-essential \
     git \
     cmake \
@@ -123,7 +128,10 @@ apt-get install -y \
     libspeexdsp-dev \
     libedit-dev \
     libsqlite3-dev \
-    libldns-dev
+    libldns-dev; then
+    echo -e "${RED}✗ Failed to install system dependencies${NC}"
+    exit 1
+fi
 
 echo -e "${GREEN}✓ System dependencies installed${NC}"
 
@@ -132,16 +140,38 @@ echo -e "${GREEN}✓ System dependencies installed${NC}"
 # ============================================================================
 echo -e "${GREEN}[Step 2/6] Building libwebsockets 4.3.3...${NC}"
 
-cd /usr/local/src
+cd /usr/local/src || exit 1
+
 if [ ! -d "libwebsockets" ]; then
-    git clone --depth 1 -b v4.3.3 https://github.com/warmcat/libwebsockets.git
+    echo "Cloning libwebsockets repository..."
+    if ! git clone --depth 1 -b v4.3.3 https://github.com/warmcat/libwebsockets.git; then
+        echo -e "${RED}✗ Failed to clone libwebsockets repository${NC}"
+        echo "Check your internet connection and try again"
+        exit 1
+    fi
 fi
 
-cd libwebsockets
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
-make -j ${BUILD_CPUS}
-make install
+cd libwebsockets || exit 1
+mkdir -p build && cd build || exit 1
+
+echo "Configuring libwebsockets..."
+if ! cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo; then
+    echo -e "${RED}✗ Failed to configure libwebsockets${NC}"
+    exit 1
+fi
+
+echo "Compiling libwebsockets (this may take a few minutes)..."
+if ! make -j ${BUILD_CPUS}; then
+    echo -e "${RED}✗ Failed to compile libwebsockets${NC}"
+    exit 1
+fi
+
+echo "Installing libwebsockets..."
+if ! make install; then
+    echo -e "${RED}✗ Failed to install libwebsockets${NC}"
+    exit 1
+fi
+
 ldconfig
 
 echo -e "${GREEN}✓ libwebsockets 4.3.3 installed${NC}"
