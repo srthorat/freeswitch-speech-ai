@@ -2,18 +2,19 @@ version: '3.8'
 
 services:
   freeswitch-speech-ai:
-    image: freeswitch-speech-ai:latest
+    image: freeswitch-speech-ai:all-modules
     container_name: freeswitch-speech-ai
     hostname: freeswitch
 
     # Build configuration (optional - use pre-built image or build locally)
     build:
       context: .
-      dockerfile: dockerfiles/Dockerfile.all-modules
+      dockerfile: Dockerfile
       args:
         BUILD_CPUS: 4
         AWS_SDK_CPP_VERSION: 1.11.345
         LIBWEBSOCKETS_VERSION: 4.3.3
+        GRPC_VERSION: 1.64.2
 
     # Network ports
     ports:
@@ -27,15 +28,23 @@ services:
       # RTP media
       - "16384-16484:16384-16484/udp"
 
-    # Environment variables for AWS (optional - can also use IAM roles)
+    # Environment variables for all transcription services
     environment:
-      # AWS Credentials (optional - remove if using IAM roles)
+      # Deepgram API Key (for mod_deepgram_transcribe)
+      # - DEEPGRAM_API_KEY=your_deepgram_api_key_here
+
+      # AWS Credentials (for mod_aws_transcribe - optional if using IAM roles)
       # - AWS_ACCESS_KEY_ID=your_access_key_here
       # - AWS_SECRET_ACCESS_KEY=your_secret_key_here
       # - AWS_REGION=us-east-1
+      # - AWS_SESSION_TOKEN=your_session_token_here  # For temporary credentials (ASIA*)
 
-      # Deepgram API Key (optional - can also set per-call via channel variables)
-      # - DEEPGRAM_API_KEY=your_deepgram_api_key_here
+      # Azure Cognitive Services (for mod_azure_transcribe)
+      # - AZURE_SUBSCRIPTION_KEY=your_azure_key_here
+      # - AZURE_REGION=eastus
+
+      # Google Cloud (for mod_google_transcribe)
+      # - GOOGLE_APPLICATION_CREDENTIALS=/etc/google/credentials.json
 
       # FreeSWITCH logging
       - FREESWITCH_LOG_LEVEL=INFO
@@ -48,6 +57,9 @@ services:
     volumes:
       # Logs
       - ./logs:/usr/local/freeswitch/log
+
+      # Google Cloud credentials (uncomment and set path if using mod_google_transcribe)
+      # - /path/to/your/google-credentials.json:/etc/google/credentials.json:ro
 
       # Configuration (optional - uncomment to customize)
       # - ./config/freeswitch.xml:/usr/local/freeswitch/conf/freeswitch.xml:ro
