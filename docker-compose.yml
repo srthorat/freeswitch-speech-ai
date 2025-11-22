@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  freeswitch-speech-ai:
+    image: freeswitch-speech-ai:latest
+    container_name: freeswitch-speech-ai
+    hostname: freeswitch
+
+    # Build configuration (optional - use pre-built image or build locally)
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.all-modules
+      args:
+        BUILD_CPUS: 4
+        AWS_SDK_CPP_VERSION: 1.11.345
+        LIBWEBSOCKETS_VERSION: 4.3.3
+
+    # Network ports
+    ports:
+      # SIP
+      - "5060:5060/tcp"
+      - "5060:5060/udp"
+      - "5080:5080/tcp"
+      - "5080:5080/udp"
+      # Event Socket (fs_cli)
+      - "8021:8021/tcp"
+      # RTP media
+      - "16384-16484:16384-16484/udp"
+
+    # Environment variables for AWS (optional - can also use IAM roles)
+    environment:
+      # AWS Credentials (optional - remove if using IAM roles)
+      # - AWS_ACCESS_KEY_ID=your_access_key_here
+      # - AWS_SECRET_ACCESS_KEY=your_secret_key_here
+      # - AWS_REGION=us-east-1
+
+      # Deepgram API Key (optional - can also set per-call via channel variables)
+      # - DEEPGRAM_API_KEY=your_deepgram_api_key_here
+
+      # FreeSWITCH logging
+      - FREESWITCH_LOG_LEVEL=INFO
+
+      # Module buffer settings (optional)
+      - MOD_AUDIO_FORK_BUFFER_SECS=2
+      - MOD_AUDIO_FORK_SERVICE_THREADS=1
+
+    # Volume mounts for persistence and configuration
+    volumes:
+      # Logs
+      - ./logs:/usr/local/freeswitch/log
+
+      # Configuration (optional - uncomment to customize)
+      # - ./config/freeswitch.xml:/usr/local/freeswitch/conf/freeswitch.xml:ro
+      # - ./config/dialplan:/usr/local/freeswitch/conf/dialplan:ro
+      # - ./config/directory:/usr/local/freeswitch/conf/directory:ro
+
+      # Recordings (optional)
+      # - ./recordings:/usr/local/freeswitch/recordings
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits (optional)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '1'
+    #       memory: 1G
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "/usr/local/freeswitch/bin/fs_cli", "-x", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Network mode
+    network_mode: bridge
+
+# Optional: Add a network for multiple services
+networks:
+  default:
+    name: freeswitch-network
+    driver: bridge
+
+# Optional: Named volumes for persistence
+volumes:
+  freeswitch-logs:
+    driver: local
+  freeswitch-recordings:
+    driver: local

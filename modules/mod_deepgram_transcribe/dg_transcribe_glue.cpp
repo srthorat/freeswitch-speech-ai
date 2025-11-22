@@ -16,7 +16,6 @@
 #include <unordered_map>
 
 #include "mod_deepgram_transcribe.h"
-#include "simple_buffer.h"
 #include "parser.hpp"
 #include "audio_pipe.hpp"
 
@@ -261,7 +260,7 @@ namespace {
       oss <<  var;
     }
    oss <<  "&encoding=linear16";
-   oss <<  "&sample_rate=8000";
+   oss <<  "&sample_rate=" << sampleRate;
    path = oss.str();
    return path;
   }
@@ -319,16 +318,29 @@ namespace {
       switch_core_session_rwunlock(session);
     }
   }
-  switch_status_t fork_data_init(private_t *tech_pvt, switch_core_session_t *session, 
-    int sampling, int desiredSampling, int channels, char *lang, int interim, 
-    char* bugname, responseHandler_t responseHandler) {
+  static void emit_metadata_event(switch_core_session_t* session, const char* metadata, const char* event_name, const char* bugname) {
+    if (metadata && strlen(metadata) > 0) {
+      switch_event_t *event;
+      switch_channel_t *channel = switch_core_session_get_channel(session);
+      switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, event_name);
+      switch_channel_event_set_data(channel, event);
+      switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "transcription-vendor", "deepgram");
+      switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "media-bugname", bugname);
+      switch_event_add_body(event, "%s", metadata);
+      switch_event_fire(&event);
+    }
+  }
+
+  switch_status_t fork_data_init(private_t *tech_pvt, switch_core_session_t *session,
+    int sampling, int desiredSampling, int channels, char *lang, int interim,
+    char* bugname, char* metadata, responseHandler_t responseHandler) {
 
     int err;
     switch_codec_implementation_t read_impl;
     switch_channel_t *channel = switch_core_session_get_channel(session);
 
     switch_core_session_get_read_impl(session, &read_impl);
-  
+
     memset(tech_pvt, 0, sizeof(private_t));
   
     std::string path;
@@ -338,7 +350,12 @@ namespace {
     strncpy(tech_pvt->sessionId, switch_core_session_get_uuid(session), MAX_SESSION_ID);
     strncpy(tech_pvt->host, "api.deepgram.com", MAX_WS_URL_LEN);
     tech_pvt->port = 443;
-    strncpy(tech_pvt->path, path.c_str(), MAX_PATH_LEN);    
+    strncpy(tech_pvt->path, path.c_str(), MAX_PATH_LEN);
+    strncpy(tech_pvt->bugname, bugname, MAX_BUG_LEN);
+    if (metadata && strlen(metadata) > 0) {
+      strncpy(tech_pvt->metadata, metadata, MAX_METADATA_LEN - 1);
+      tech_pvt->metadata[MAX_METADATA_LEN - 1] = '\0';
+    }
     tech_pvt->sampling = desiredSampling;
     tech_pvt->responseHandler = responseHandler;
     tech_pvt->channels = channels;
@@ -428,10 +445,10 @@ extern "C" {
     return SWITCH_STATUS_FALSE;
   }
 	
-  switch_status_t dg_transcribe_session_init(switch_core_session_t *session, 
-    responseHandler_t responseHandler, uint32_t samples_per_second, uint32_t channels, 
-    char* lang, int interim, char* bugname, void **ppUserData)
-  {    	
+  switch_status_t dg_transcribe_session_init(switch_core_session_t *session,
+    responseHandler_t responseHandler, uint32_t samples_per_second, uint32_t channels,
+    char* lang, int interim, char* bugname, char* metadata, void **ppUserData)
+  {
     int err;
 
     // allocate per-session data structure
@@ -441,10 +458,21 @@ extern "C" {
       return SWITCH_STATUS_FALSE;
     }
 
-    if (SWITCH_STATUS_SUCCESS != fork_data_init(tech_pvt, session, samples_per_second, 8000, channels, lang, interim, bugname, responseHandler)) {
+    // Get actual codec sample rate for resampling
+    switch_codec_implementation_t read_impl = {};
+    switch_core_session_get_read_impl(session, &read_impl);
+    uint32_t codec_sample_rate = !strcasecmp(read_impl.iananame, "g722") ?
+      read_impl.actual_samples_per_second : read_impl.samples_per_second;
+
+    // User-configurable target sampling rate (samples_per_second parameter)
+    // Note: Deepgram supports 8kHz, 16kHz, and other rates
+    if (SWITCH_STATUS_SUCCESS != fork_data_init(tech_pvt, session, codec_sample_rate, samples_per_second, channels, lang, interim, bugname, metadata, responseHandler)) {
       destroy_tech_pvt(tech_pvt);
       return SWITCH_STATUS_FALSE;
     }
+
+    // Emit session start event with metadata
+    emit_metadata_event(session, metadata, TRANSCRIBE_EVENT_SESSION_START, bugname);
 
     *ppUserData = tech_pvt;
 
@@ -468,7 +496,10 @@ extern "C" {
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) dg_transcribe_session_stop\n", id);
 
     if (!tech_pvt) return SWITCH_STATUS_FALSE;
-      
+
+    // Emit session stop event with metadata
+    emit_metadata_event(session, tech_pvt->metadata, TRANSCRIBE_EVENT_SESSION_STOP, bugname);
+
     // close connection and get final responses
     switch_mutex_lock(tech_pvt->mutex);
     switch_channel_set_private(channel, bugname, NULL);

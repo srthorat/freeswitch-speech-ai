@@ -21,10 +21,12 @@
 #include <aws/transcribestreaming/model/StartStreamTranscriptionRequest.h>
 
 #include "mod_aws_transcribe.h"
-#include "simple_buffer.h"
 
 #define BUFFER_SECS (3)
-#define CHUNKSIZE (320)
+// Pre-connection buffer size: 1 second of audio at 16kHz
+// 16000 Hz * 2 bytes/sample * 1 second = 32000 bytes
+// This is stored as a deque of variable-size audio chunks (like Deepgram/mod_audio_fork)
+#define PRE_CONNECT_BUFFER_SIZE (32000)
 
 using namespace Aws;
 using namespace Aws::Utils;
@@ -37,6 +39,27 @@ const char ALLOC_TAG[] = "drachtio";
 
 static bool hasDefaultCredentials = false;
 
+// Helper function to emit metadata events
+static void emit_metadata_event(switch_core_session_t* session, const char* metadata, const char* event_name, const char* bugname) {
+	if (metadata && strlen(metadata) > 0) {
+		switch_event_t *event;
+		switch_channel_t *channel = switch_core_session_get_channel(session);
+
+		switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, event_name);
+		switch_channel_event_set_data(channel, event);
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "transcription-vendor", "aws");
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "media-bugname", bugname);
+		switch_event_add_body(event, "%s", metadata);
+		switch_event_fire(&event);
+
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+			"Emitted %s event with metadata: %s\n", event_name, metadata);
+	}
+}
+
+// NOTE: This class is named "GStreamer" but does NOT use the GStreamer multimedia framework
+// It's a direct AWS SDK implementation for streaming audio to AWS Transcribe
+// The name is historical/legacy - consider it as "AWS Audio Streamer"
 class GStreamer {
 public:
 	GStreamer(
@@ -50,10 +73,14 @@ public:
 		const char* awsAccessKeyId,
 		const char* awsSecretAccessKey,
 		const char* awsSessionToken,
+		const char* metadata,
 		responseHandler_t responseHandler
   ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_interim(interim), m_finishing(false), m_connected(false), m_connecting(false),
-	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr),
-			m_audioBuffer(320 * 2, 15) {  // Always 16kHz (640 bytes = 20ms at 16kHz)
+	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr), m_preConnectAudioSize(0) {
+		// Store metadata
+		if (metadata && strlen(metadata) > 0) {
+			m_metadata = metadata;
+		}
 		Aws::Client::ClientConfiguration config;
 		if (region != nullptr && strlen(region) > 0) {
 			config.region = region;
@@ -115,9 +142,9 @@ public:
 			}
     });
 
-		// AWS Transcribe quality is significantly better at 16kHz vs 8kHz
-		// ALWAYS resample to 16kHz for best quality (even from 8kHz telephony codecs)
-    m_request.SetMediaSampleRateHertz(16000);
+		// User-configurable sampling rate (8kHz or 16kHz)
+		// Note: AWS Transcribe quality is better at 16kHz, but 8kHz is supported
+    m_request.SetMediaSampleRateHertz(samples_per_second);
     m_request.SetLanguageCode(LanguageCodeMapper::GetLanguageCodeForName(lang));
     m_request.SetMediaEncoding(MediaEncoding::pcm);
     m_request.SetEventStreamHandler(m_handler);
@@ -160,20 +187,30 @@ public:
 				m_pStream = &stream;
 				m_connected = true;
 
+				// Emit session start event with metadata
+				emit_metadata_event(psession, m_metadata.c_str(), TRANSCRIBE_EVENT_SESSION_START, m_bugname.c_str());
 
-				// send any buffered audio
-				int nFrames = m_audioBuffer.getNumItems();
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p got stream ready, %d buffered frames\n", this, nFrames);	
-				if (nFrames) {
-					char *p;
-					do {
-						p = m_audioBuffer.getNextChunk();
-						if (p) {
-							write(p, CHUNKSIZE);
-						}
-					} while (p);
+				// Send session start to Pusher (if configured)
+				const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+				if (sip_call_id) {
+					send_session_start_to_pusher(psession, sip_call_id);
 				}
-	
+
+				// Send any pre-connection buffered audio (simple deque approach like Deepgram)
+				std::lock_guard<std::mutex> lk(m_mutex);
+				size_t bufferedChunks = m_deqPreConnectAudio.size();
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p AWS stream ready! Sending %zu buffered chunks (%u bytes) to AWS\n",
+					this, bufferedChunks, m_preConnectAudioSize);
+
+				while (!m_deqPreConnectAudio.empty()) {
+					Aws::Vector<unsigned char>& bits = m_deqPreConnectAudio.front();
+					Aws::TranscribeStreamingService::Model::AudioEvent event(std::move(bits));
+					m_pStream->WriteAudioEvent(event);
+					m_deqPreConnectAudio.pop_front();
+				}
+				m_preConnectAudioSize = 0;
+
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p sent all buffered audio to AWS\n", this);
 				switch_core_session_rwunlock(psession);
 			}
     };
@@ -225,22 +262,41 @@ public:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write not writing because we are finished, %p\n", this);
 			return false;
 		}
-    if (!m_connected) {
-      if (datalen % CHUNKSIZE == 0) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write queuing %d bytes\n", datalen);
-        m_audioBuffer.add(data, datalen);
-      }
-      return true;
-    }
+
+		if (datalen == 0) return true;
 
 		std::lock_guard<std::mutex> lk(m_mutex);
 
+		// Simple deque approach (like Deepgram/mod_audio_fork)
+		// Accept ANY size audio - no chunking, no SimpleBuffer complexity
 		const auto beg = static_cast<const unsigned char*>(data);
 		const auto end = beg + datalen;
 		Aws::Vector<unsigned char> bits { beg, end };
+
+		if (!m_connected) {
+			// Pre-connection: Buffer audio in deque (check size limit)
+			if (m_preConnectAudioSize + datalen <= PRE_CONNECT_BUFFER_SIZE) {
+				m_deqPreConnectAudio.push_back(bits);
+				m_preConnectAudioSize += datalen;
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write queuing %d bytes (pre-connection, total: %u)\n",
+					datalen, m_preConnectAudioSize);
+			} else {
+				// Buffer full - drop oldest to make room (circular buffer behavior)
+				if (!m_deqPreConnectAudio.empty()) {
+					m_preConnectAudioSize -= m_deqPreConnectAudio.front().size();
+					m_deqPreConnectAudio.pop_front();
+				}
+				m_deqPreConnectAudio.push_back(bits);
+				m_preConnectAudioSize += datalen;
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write buffer full, dropping oldest (size: %u)\n",
+					m_preConnectAudioSize);
+			}
+			return true;
+		}
+
+		// Post-connection: Send immediately
 		m_deqAudio.push_back(bits);
 		m_packets++;
-
 		m_cond.notify_one();
 
 		return true;
@@ -271,31 +327,96 @@ public:
 				switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
 				if (psession) {
 
-					//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::got a transcript to send out %p\n", this);
 					bool isFinal = false;
 					std::ostringstream s;
 					s << "[";
+
+					bool firstResult = true;
 					for (auto&& r : m_transcript.GetTranscript().GetResults()) {
-						int count = 0;
-						std::ostringstream t1;
+						if (!firstResult) s << ", ";
+						firstResult = false;
+
 						if (!isFinal && !r.GetIsPartial()) isFinal = true;
-						t1 << "{\"is_final\": " << (r.GetIsPartial() ? "false" : "true") << ", \"alternatives\": [";
+
+						std::ostringstream t1;
+						t1 << "{\"is_final\": " << (r.GetIsPartial() ? "false" : "true");
+
+						// Add channel_id if present (for channel identification)
+						if (!r.GetChannelId().empty()) {
+							t1 << ", \"channel_id\": \"" << r.GetChannelId() << "\"";
+						}
+
+						// Add result_id if available
+						if (!r.GetResultId().empty()) {
+							t1 << ", \"result_id\": \"" << r.GetResultId() << "\"";
+						}
+
+						// Add start/end time if available
+						if (r.GetStartTime() > 0.0) {
+							t1 << ", \"start_time\": " << r.GetStartTime();
+						}
+						if (r.GetEndTime() > 0.0) {
+							t1 << ", \"end_time\": " << r.GetEndTime();
+						}
+
+						// Add alternatives with full details
+						t1 << ", \"alternatives\": [";
+						int altCount = 0;
 						for (auto&& alt : r.GetAlternatives()) {
-							std::ostringstream t2;
-							if (count++ == 0) t2 << "{\"transcript\": \"" << alt.GetTranscript() << "\"}";
-							else t2 << ", {\"transcript\": \"" << alt.GetTranscript() << "\"}";
-							t1 << t2.str();
+							if (altCount++ > 0) t1 << ", ";
+
+							t1 << "{\"transcript\": \"" << alt.GetTranscript() << "\"";
+
+							// Add items array with speaker labels, timestamps, confidence
+							const auto& items = alt.GetItems();
+							if (!items.empty()) {
+								t1 << ", \"items\": [";
+								bool firstItem = true;
+								for (auto&& item : items) {
+									if (!firstItem) t1 << ", ";
+									firstItem = false;
+
+									t1 << "{\"content\": \"" << item.GetContent() << "\"";
+
+									// Add type (pronunciation or punctuation)
+									t1 << ", \"type\": \"" << ItemTypeMapper::GetNameForItemType(item.GetType()) << "\"";
+
+									// Add timestamps (only for pronunciation items)
+									if (item.GetType() == ItemType::pronunciation) {
+										if (item.GetStartTime() > 0.0) {
+											t1 << ", \"start_time\": " << item.GetStartTime();
+										}
+										if (item.GetEndTime() > 0.0) {
+											t1 << ", \"end_time\": " << item.GetEndTime();
+										}
+										if (item.GetConfidence() > 0.0) {
+											t1 << ", \"confidence\": " << item.GetConfidence();
+										}
+									}
+
+									// Add speaker label if present (for speaker diarization)
+									if (!item.GetSpeaker().empty()) {
+										t1 << ", \"speaker_label\": \"" << item.GetSpeaker() << "\"";
+									}
+
+									t1 << "}";
+								}
+								t1 << "]";
+							}
+
+							t1 << "}";
 						}
 						t1 << "]}";
 						s << t1.str();
 					}
 					s << "]";
+
 					if (0 != s.str().compare("[]") && (isFinal || m_interim)) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::writing transcript %p: %s\n", this, s.str().c_str() );
 						m_responseHandler(psession, s.str().c_str(), m_bugname.c_str());
 					}
 					TranscriptEvent empty;
-					m_transcript = empty; 
+					m_transcript = empty;
 
 					switch_core_session_rwunlock(psession);
 				}
@@ -330,6 +451,7 @@ private:
 	std::string m_sessionId;
 	std::string m_bugname;
 	std::string  m_region;
+	std::string m_metadata;
 	Aws::UniquePtr<TranscribeStreamingServiceClient> m_client;
 	AudioStream* m_pStream;
 	StartStreamTranscriptionRequest m_request;
@@ -344,15 +466,19 @@ private:
 	uint32_t m_packets;
 	std::mutex m_mutex;
 	std::condition_variable m_cond;
+	// Post-connection audio queue (sent to AWS immediately)
 	std::deque< Aws::Vector<unsigned char> > m_deqAudio;
-	SimpleBuffer m_audioBuffer;
+	// Pre-connection audio queue (simple approach like Deepgram/mod_audio_fork)
+	// Stores variable-size chunks as-is, no fixed chunking required
+	std::deque< Aws::Vector<unsigned char> > m_deqPreConnectAudio;
+	uint32_t m_preConnectAudioSize;
 };
 
 static void *SWITCH_THREAD_FUNC aws_transcribe_thread(switch_thread_t *thread, void *obj) {
 	struct cap_cb *cb = (struct cap_cb *) obj;
 	bool ok = true;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: starting cb %p\n", (void *) cb);
-	GStreamer* pStreamer = new GStreamer(cb->sessionId, cb->bugname, cb->channels, cb->lang, cb->interim, cb->samples_per_second, cb->region, cb->awsAccessKeyId, cb->awsSecretAccessKey, cb->awsSessionToken,
+	GStreamer* pStreamer = new GStreamer(cb->sessionId, cb->bugname, cb->channels, cb->lang, cb->interim, cb->samples_per_second, cb->region, cb->awsAccessKeyId, cb->awsSecretAccessKey, cb->awsSessionToken, cb->metadata,
 		cb->responseHandler);
 	if (!pStreamer) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: Error allocating streamer\n");
@@ -478,8 +604,8 @@ extern "C" {
 	}
 
 	// start transcribe on a channel
-	switch_status_t aws_transcribe_session_init(switch_core_session_t *session, responseHandler_t responseHandler, 
-          uint32_t samples_per_second, uint32_t channels, char* lang, int interim, char* bugname, void **ppUserData
+	switch_status_t aws_transcribe_session_init(switch_core_session_t *session, responseHandler_t responseHandler,
+          uint32_t samples_per_second, uint32_t channels, char* lang, int interim, char* bugname, char* metadata, void **ppUserData
 	) {
 		switch_status_t status = SWITCH_STATUS_SUCCESS;
 		switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -606,16 +732,25 @@ extern "C" {
 
 		cb->interim = interim;
 		strncpy(cb->lang, lang, MAX_LANG);
-		cb->samples_per_second = sampleRate;
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "sample rate of rtp stream is %d\n", samples_per_second);
+		if (metadata && strlen(metadata) > 0) {
+			strncpy(cb->metadata, metadata, MAX_METADATA_LEN - 1);
+			cb->metadata[MAX_METADATA_LEN - 1] = '\0';
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Stored metadata: %s\n", cb->metadata);
+		} else {
+			cb->metadata[0] = '\0';
+		}
+		// Use user-configured sampling rate (not codec rate)
+		cb->samples_per_second = samples_per_second;
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "codec sample rate: %dHz, target sample rate: %dHz\n",
+			sampleRate, samples_per_second);
 
-		// ALWAYS resample to 16kHz for AWS Transcribe (best quality)
-		// This is critical for 8kHz telephony codecs (PCMU/PCMA) which are common in VoIP
-		if (sampleRate != 16000) {
+		// Resample from codec rate to user-requested rate (if different)
+		// Note: AWS Transcribe quality is better at 16kHz, but 8kHz is supported
+		if (sampleRate != samples_per_second) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-				"%s: Initializing resampler %dHz -> 16000Hz for better transcription quality\n",
-				switch_channel_get_name(channel), sampleRate);
-			cb->resampler = speex_resampler_init(1, sampleRate, 16000, SWITCH_RESAMPLE_QUALITY, &err);
+				"%s: Initializing resampler %dHz -> %dHz\n",
+				switch_channel_get_name(channel), sampleRate, samples_per_second);
+			cb->resampler = speex_resampler_init(1, sampleRate, samples_per_second, SWITCH_RESAMPLE_QUALITY, &err);
 			if (0 != err) {
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n",
 							switch_channel_get_name(channel), speex_resampler_strerror(err));
@@ -624,8 +759,8 @@ extern "C" {
 			}
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
-				"%s: Sample rate already 16kHz, no resampling needed\n",
-				switch_channel_get_name(channel));
+				"%s: Sample rate already %dHz, no resampling needed\n",
+				switch_channel_get_name(channel), samples_per_second);
 		}
 
 		// allocate vad if we are delaying connecting to the recognizer until we detect speech
@@ -677,6 +812,9 @@ extern "C" {
 		if (bug) {
 			struct cap_cb *cb = (struct cap_cb *) switch_core_media_bug_get_user_data(bug);
 			switch_status_t st;
+
+			// Emit session stop event with metadata
+			emit_metadata_event(session, cb->metadata, TRANSCRIBE_EVENT_SESSION_STOP, bugname);
 
 			// close connection and get final responses
 			switch_mutex_lock(cb->mutex);

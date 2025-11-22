@@ -8,12 +8,14 @@
 #
 # Examples:
 #   ./run-on-macbook.sh srt2011/freeswitch-base:latest
+#   ./run-on-macbook.sh srt2011/freeswitch-speech-ai:latest  # All modules (audio_fork, AWS, Deepgram)
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-audio-fork:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest
 #
 # With API keys for transcription:
+#   ./run-on-macbook.sh srt2011/freeswitch-speech-ai:latest YOUR_DEEPGRAM_KEY "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest "" YOUR_AZURE_KEY eastus
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1
@@ -41,14 +43,19 @@ if [ -z "$REMOTE_IMAGE" ]; then
     echo ""
     echo "Examples:"
     echo "  $0 srt2011/freeswitch-base:latest"
+    echo "  $0 srt2011/freeswitch-speech-ai:latest  # All modules (audio_fork, AWS, Deepgram)"
     echo "  $0 srt2011/freeswitch-mod-audio-fork:latest"
     echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest"
     echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest"
     echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest"
     echo ""
     echo "With API keys:"
-    echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY"
-    echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
+    echo "  All-modules image (Deepgram + AWS):"
+    echo "    $0 srt2011/freeswitch-speech-ai:latest YOUR_DEEPGRAM_KEY \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1"
+    echo ""
+    echo "  Individual modules:"
+    echo "    $0 srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY"
+    echo "    $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
     echo ""
     echo "AWS Transcribe - Permanent credentials (AKIA*):"
     echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1"
@@ -214,28 +221,58 @@ if [ -z "$MODULE_CHECK" ]; then
 else
     echo "$MODULE_CHECK"
     echo ""
-    if echo "$MODULE_CHECK" | grep -q "deepgram"; then
+
+    # Count loaded modules
+    MODULE_COUNT=$(echo "$MODULE_CHECK" | wc -l)
+
+    # Check each module type
+    AUDIO_FORK=$(echo "$MODULE_CHECK" | grep "audio_fork" || echo "")
+    DEEPGRAM=$(echo "$MODULE_CHECK" | grep "deepgram" || echo "")
+    AZURE=$(echo "$MODULE_CHECK" | grep "azure" || echo "")
+    AWS=$(echo "$MODULE_CHECK" | grep "aws" || echo "")
+
+    echo "Module Status:"
+    if [ -n "$AUDIO_FORK" ]; then
+        echo "  ✅ mod_audio_fork loaded"
+    fi
+    if [ -n "$DEEPGRAM" ]; then
         if [ -n "$DEEPGRAM_API_KEY" ]; then
-            echo "✅ Deepgram transcription is configured and ready"
+            echo "  ✅ mod_deepgram_transcribe loaded and configured"
         else
-            echo "⚠️  Deepgram module loaded but API key not configured"
+            echo "  ⚠️  mod_deepgram_transcribe loaded (API key not configured)"
         fi
     fi
-    if echo "$MODULE_CHECK" | grep -q "azure"; then
+    if [ -n "$AZURE" ]; then
         if [ -n "$AZURE_SUBSCRIPTION_KEY" ]; then
-            echo "✅ Azure transcription is configured and ready"
+            echo "  ✅ mod_azure_transcribe loaded and configured"
         else
-            echo "⚠️  Azure module loaded but API key not configured"
+            echo "  ⚠️  mod_azure_transcribe loaded (API key not configured)"
         fi
     fi
-    if echo "$MODULE_CHECK" | grep -q "aws"; then
+    if [ -n "$AWS" ]; then
         if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-            echo "✅ AWS transcription is configured and ready"
+            echo "  ✅ mod_aws_transcribe loaded and configured"
         else
-            echo "⚠️  AWS module loaded but API key not configured"
+            echo "  ⚠️  mod_aws_transcribe loaded (credentials not configured)"
         fi
     fi
+
+    echo ""
+    echo "Total transcription modules loaded: $MODULE_COUNT"
 fi
+echo ""
+
+# Module verification command
+echo "============================================="
+echo "Module Verification Command"
+echo "============================================="
+echo "To verify all modules are loaded, run:"
+echo "  docker exec $CONTAINER_NAME fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram|aws'"
+echo ""
+echo "Expected output (for all-modules image):"
+echo "  api,uuid_audio_fork,mod_audio_fork,/usr/local/freeswitch/lib/freeswitch/mod/mod_audio_fork.so"
+echo "  api,uuid_aws_transcribe,mod_aws_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so"
+echo "  api,uuid_deepgram_transcribe,mod_deepgram_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so"
 echo ""
 
 # Get MacBook IP

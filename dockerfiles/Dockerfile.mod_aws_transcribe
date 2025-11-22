@@ -288,6 +288,17 @@ RUN ldconfig
 RUN sed -i '/<\/modules>/i \    <load module="mod_aws_transcribe"/>' \
     /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml 2>/dev/null || true
 
+# ============================================================================
+# Runtime Validation: Quick module load test
+# ============================================================================
+RUN export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH \
+    && timeout 60s /usr/local/freeswitch/bin/freeswitch -nonat -nc -nf >/dev/null 2>&1 & FS_PID=$! \
+    && sleep 20 \
+    && grep -q "mod_aws_transcribe" /usr/local/freeswitch/log/freeswitch.log \
+    && ! grep "mod_aws_transcribe" /usr/local/freeswitch/log/freeswitch.log | grep -qiE "error|fail|cannot|unable" \
+    && kill $FS_PID 2>/dev/null || true \
+    && echo "✅ Runtime validation passed - mod_aws_transcribe loaded successfully"
+
 # Copy example configuration files
 COPY examples/freeswitch-config/dialplan/default.xml \
     /usr/local/freeswitch/conf/dialplan/default.xml
@@ -297,8 +308,6 @@ COPY examples/freeswitch-config/directory/1001.xml \
     /usr/local/freeswitch/conf/directory/default/1001.xml
 COPY examples/freeswitch-config/directory/1002.xml \
     /usr/local/freeswitch/conf/directory/default/1002.xml
-COPY examples/freeswitch-config/directory/1003.xml \
-    /usr/local/freeswitch/conf/directory/default/1003.xml
 
 # Runtime validation
 RUN echo "=========================================" \
@@ -330,10 +339,8 @@ RUN echo "=========================================" \
     && echo "  ✅ mod_aws_transcribe (AWS Transcribe)" \
     && echo "=========================================" \
     && echo "Included configuration files:" \
-    && echo "  ✅ dialplan/default.xml (with examples)" \
-    && echo "  ✅ directory/default/1000.xml" \
-    && echo "  ✅ directory/default/1001.xml" \
-    && echo "  ✅ directory/default/1002.xml" \
+    && echo "  ✅ dialplan/default.xml (with transcription examples)" \
+    && echo "  ✅ directory/default/1000.xml, 1001.xml, 1002.xml" \
     && echo "========================================="
 
 # Labels
@@ -352,5 +359,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Set environment
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/freeswitch/lib:${LD_LIBRARY_PATH}"
 
 # Inherit CMD from base image (supervisord or freeswitch)

@@ -42,6 +42,17 @@ This directory contains technical documentation and guides for the freeswitch-sp
   - Use case recommendations
   - Migration guide between modules
 
+- **[Audio Module Technical Reference](./AUDIO_MODULE_TECHNICAL_REFERENCE.md)** - Deep technical analysis of audio processing in mod_audio_fork, mod_deepgram_transcribe, and mod_aws_transcribe, including:
+  - Mix-type support (mono/mixed/stereo) implementation details
+  - Sampling rate handling and resampling logic
+  - Metadata processing and enrichment patterns
+  - Audio processing pipelines and data flow
+  - Buffer implementation strategies
+  - Speaker mapping and channel identification
+  - Pusher integration with complete data formats
+  - Real-world examples with interim and final transcriptions
+  - Complete API reference for all parameters
+
 ## Module-Specific Documentation
 
 Each transcription module has its own detailed README:

@@ -796,6 +796,428 @@ If experiencing connection problems:
 3. Ensure DNS can resolve Deepgram endpoints
 4. Check network latency - Deepgram has global endpoints
 
+---
+
+## Pusher Integration (Real-time Transcription Delivery)
+
+mod_deepgram_transcribe includes built-in Pusher integration for delivering real-time transcriptions to your frontend applications via WebSocket.
+
+### How It Works
+
+When Pusher is configured, the module automatically:
+1. Receives transcription from Deepgram API
+2. Transforms the data to a standardized format
+3. Maps speaker identity using caller/callee metadata
+4. Sends the transformed data to Pusher in real-time
+5. Your frontend receives immediate transcription updates
+
+### Pusher Configuration
+
+Set these environment variables when running FreeSWITCH:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PUSHER_APP_ID` | Yes | - | Your Pusher application ID |
+| `PUSHER_KEY` | Yes | - | Your Pusher API key (public) |
+| `PUSHER_SECRET` | Yes | - | Your Pusher secret key (for HMAC signing) |
+| `PUSHER_CLUSTER` | No | `ap2` | Pusher cluster (us2, us3, eu, ap1, ap2, ap3, ap4) |
+| `PUSHER_CHANNEL_PREFIX` | No | `call-` | Prefix for channel names |
+| `PUSHER_EVENT_SESSION_START` | No | `session-start` | Event name for session start notification |
+| `PUSHER_EVENT_FINAL` | No | `transcription-final` | Event name for final transcriptions |
+| `PUSHER_EVENT_INTERIM` | No | `transcription-interim` | Event name for interim transcriptions |
+
+### Docker Run with Pusher
+
+**Deepgram + Pusher:**
+```bash
+docker run -d --name freeswitch \
+  -p 5060:5060/udp -p 8021:8021 \
+  -e DEEPGRAM_API_KEY=your-deepgram-api-key \
+  -e PUSHER_APP_ID=123456 \
+  -e PUSHER_KEY=your-pusher-key \
+  -e PUSHER_SECRET=your-pusher-secret \
+  -e PUSHER_CLUSTER=ap2 \
+  freeswitch-speech-ai:latest
+```
+
+**All optional Pusher settings:**
+```bash
+docker run -d --name freeswitch \
+  -p 5060:5060/udp -p 8021:8021 \
+  -e DEEPGRAM_API_KEY=your-deepgram-api-key \
+  -e PUSHER_APP_ID=123456 \
+  -e PUSHER_KEY=your-pusher-key \
+  -e PUSHER_SECRET=your-pusher-secret \
+  -e PUSHER_CLUSTER=ap2 \
+  -e PUSHER_CHANNEL_PREFIX=transcription- \
+  -e PUSHER_EVENT_SESSION_START=session-start \
+  -e PUSHER_EVENT_FINAL=final \
+  -e PUSHER_EVENT_INTERIM=interim \
+  freeswitch-speech-ai:latest
+```
+
+### Pusher Data Format
+
+The module sends two types of messages to Pusher:
+
+#### 1. Session Start Message
+
+Sent when the call is answered and transcription session begins:
+
+```json
+{
+  "type": "session_start",
+  "caller_id": "John Doe(1000)",
+  "callee_id": "Jane Smith(1002)",
+  "timestamp": "2025-11-21T21:30:40Z"
+}
+```
+
+**Fields:**
+- `type`: Always `"session_start"`
+- `caller_id`: `"{name}({number})"` - caller identity from channel variables
+- `callee_id`: `"{name}({number})"` - callee identity from channel variables
+- `timestamp`: ISO 8601 UTC timestamp when session started
+
+#### 2. Transcription Messages
+
+Sent for each transcription result (interim and final):
+
+```json
+{
+  "type": "final",
+  "speaker_id": "John Doe(1000)",
+  "text": "Hello, how can I help you today?",
+  "timestamp": "2025-11-21T21:30:45Z"
+}
+```
+
+**Fields:**
+- `type`: `"final"` or `"interim"` - transcription finality
+- `speaker_id`: `"{name}({number})"` - speaker identity mapped from metadata
+- `text`: The transcribed text (never empty - validated before sending)
+- `timestamp`: ISO 8601 UTC timestamp
+
+### Channel Naming
+
+Pusher channels are automatically created based on the SIP Call-ID:
+- Format: `{PUSHER_CHANNEL_PREFIX}{sip_call_id}`
+- Example: `call-abc123-def456@domain.com`
+- Default prefix: `call-`
+
+### Frontend Integration
+
+**JavaScript/TypeScript Example:**
+
+```javascript
+import Pusher from 'pusher-js';
+
+// Initialize Pusher client
+const pusher = new Pusher('your-pusher-key', {
+  cluster: 'ap2'
+});
+
+// Subscribe to call channel (use SIP Call-ID from your call setup)
+const callId = 'abc123-def456@domain.com';
+const channel = pusher.subscribe(`call-${callId}`);
+
+// Listen for session start (when call is answered)
+channel.bind('session-start', (data) => {
+  console.log(`Call session started: ${data.caller_id} -> ${data.callee_id}`);
+  // Initialize UI, show participants, etc.
+  initializeCallSession(data.caller_id, data.callee_id);
+});
+
+// Listen for final transcriptions
+channel.bind('transcription-final', (data) => {
+  console.log(`[${data.speaker_id}] ${data.text}`);
+  // Display in UI - this is the final, accurate transcription
+  addToTranscript(data.speaker_id, data.text, 'final');
+});
+
+// Listen for interim transcriptions (real-time updates)
+channel.bind('transcription-interim', (data) => {
+  console.log(`[${data.speaker_id}] (interim) ${data.text}`);
+  // Update live preview - this may change
+  updateLivePreview(data.speaker_id, data.text);
+});
+
+// Cleanup when call ends
+function endCall() {
+  channel.unbind_all();
+  pusher.unsubscribe(`call-${callId}`);
+}
+```
+
+**React Example:**
+
+```jsx
+import { useEffect, useState } from 'react';
+import Pusher from 'pusher-js';
+
+function TranscriptionDisplay({ callId }) {
+  const [transcripts, setTranscripts] = useState([]);
+  const [liveText, setLiveText] = useState('');
+  const [sessionInfo, setSessionInfo] = useState(null);
+
+  useEffect(() => {
+    const pusher = new Pusher(process.env.REACT_APP_PUSHER_KEY, {
+      cluster: 'ap2'
+    });
+
+    const channel = pusher.subscribe(`call-${callId}`);
+
+    // Session start - show call participants
+    channel.bind('session-start', (data) => {
+      setSessionInfo({
+        caller: data.caller_id,
+        callee: data.callee_id,
+        startTime: data.timestamp
+      });
+    });
+
+    // Final transcriptions - add to permanent list
+    channel.bind('transcription-final', (data) => {
+      setTranscripts(prev => [...prev, {
+        speaker: data.speaker_id,
+        text: data.text,
+        timestamp: data.timestamp,
+        type: data.type
+      }]);
+      setLiveText(''); // Clear interim
+    });
+
+    // Interim transcriptions - show as live preview
+    channel.bind('transcription-interim', (data) => {
+      setLiveText(`${data.speaker_id}: ${data.text}`);
+    });
+
+    return () => {
+      channel.unbind_all();
+      pusher.unsubscribe(`call-${callId}`);
+    };
+  }, [callId]);
+
+  return (
+    <div>
+      <h2>Transcription</h2>
+      {/* Session info */}
+      {sessionInfo && (
+        <div className="session-info">
+          <p><strong>Caller:</strong> {sessionInfo.caller}</p>
+          <p><strong>Callee:</strong> {sessionInfo.callee}</p>
+        </div>
+      )}
+      {/* Final transcripts */}
+      <div className="transcripts">
+        {transcripts.map((t, i) => (
+          <div key={i} className="transcript-line">
+            <strong>{t.speaker}</strong>: {t.text}
+          </div>
+        ))}
+      </div>
+      {/* Live interim preview */}
+      {liveText && (
+        <div className="interim-preview" style={{ opacity: 0.6 }}>
+          {liveText}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### Security Considerations
+
+**Environment Variables (Recommended):**
+- Store `PUSHER_SECRET` as environment variable only
+- Never commit secrets to version control
+- Use different Pusher apps for dev/staging/production
+
+**Channel Permissions:**
+- Pusher channels are public by default
+- For private channels, implement server-side authorization
+- Use Pusher's auth endpoint feature for sensitive data
+
+**Best Practices:**
+- Rotate Pusher secrets periodically
+- Use Pusher's encrypted channels for sensitive transcriptions
+- Implement call ID validation in your frontend
+- Clean up subscriptions when calls end
+
+### Troubleshooting Pusher Integration
+
+**Issue: Transcriptions not appearing in frontend**
+
+1. Check Pusher credentials are set:
+   ```bash
+   docker exec freeswitch env | grep PUSHER
+   ```
+
+2. Verify channel name format (check SIP Call-ID):
+   ```bash
+   docker logs freeswitch | grep "sip_call_id"
+   ```
+
+3. Enable Pusher debug logging in frontend:
+   ```javascript
+   Pusher.logToConsole = true;
+   const pusher = new Pusher('key', { cluster: 'ap2' });
+   ```
+
+4. Check Pusher dashboard for event delivery stats
+
+**Issue: Wrong speaker identification**
+
+- Verify caller/callee metadata is set in dialplan
+- Check that `sip_call_id` channel variable exists
+- Ensure stereo mode is used for accurate speaker separation
+
+**Issue: Delayed transcriptions**
+
+- Check network latency to Pusher cluster
+- Consider using a geographically closer cluster
+- Verify FreeSWITCH server has good network connectivity
+
+### Disabling Pusher
+
+Pusher integration is **optional**. If Pusher credentials are not configured, the module:
+- Continues to work normally
+- Only sends transcriptions as FreeSWITCH events
+- Does not attempt Pusher API calls
+- Logs no errors about missing Pusher config
+
+To disable, simply don't set `PUSHER_APP_ID`, `PUSHER_KEY`, or `PUSHER_SECRET`.
+
+---
+
+## Outbound Call Handling
+
+When making outbound calls from FreeSWITCH (originating calls to external numbers), the channel mapping for speaker identification remains consistent with inbound calls:
+
+### Channel Mapping - Based on Caller/Callee Roles
+
+**IMPORTANT**: Channel assignment is based on **caller/callee roles**, NOT on which side is FreeSWITCH.
+
+**Stereo Mode Channel Assignment:**
+- **Channel 0** = Caller (whoever initiated/originated the call)
+- **Channel 1** = Callee (whoever received/answered the call)
+
+**This works automatically for both directions:**
+
+**Inbound calls TO FreeSWITCH:**
+- Channel 0 = External customer (the caller)
+- Channel 1 = FreeSWITCH extension/agent (the callee)
+
+**Outbound calls FROM FreeSWITCH:**
+- Channel 0 = FreeSWITCH extension/agent (the caller)
+- Channel 1 = External customer (the callee)
+
+### Why No Swap Is Needed
+
+FreeSWITCH automatically sets channel variables based on signaling roles:
+- `caller_id_number` / `caller_id_name` = Always the caller (Channel 0)
+- `destination_number` / `callee_id_name` = Always the callee (Channel 1)
+
+The media bug stereo streams (READ/WRITE) naturally align with these same roles because the media bug is attached to the A-leg, where:
+- **READ stream** = Audio from A-leg = Caller
+- **WRITE stream** = Audio to A-leg (from B-leg) = Callee
+
+**No manual swapping or special logic is required** - the module automatically extracts the correct speaker identities from FreeSWITCH channel variables.
+
+### Dialplan Configuration for Outbound Calls
+
+**Using `api_on_answer` for outbound calls:**
+
+```xml
+<extension name="outbound_call_with_transcription">
+  <condition field="destination_number" expression="^9(\d{10})$">
+    <action application="set" data="DEEPGRAM_API_KEY=${ENV(DEEPGRAM_API_KEY)}"/>
+    <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+    <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+
+    <!-- Start transcription AFTER call is answered -->
+    <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
+    <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
+
+    <!-- Bridge to external number -->
+    <action application="bridge" data="sofia/external/1$1@sip-provider.com"/>
+  </condition>
+</extension>
+```
+
+**Using JavaScript/Lua for outbound calls:**
+
+```javascript
+// Using drachtio-fsmrf for outbound calls
+const ms = await mrf.connect({...});
+const ep = await ms.createEndpoint();
+
+// Set transcription config before making call
+await ep.set({
+  DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY,
+  DEEPGRAM_SPEECH_MODEL: 'phonecall',
+  DEEPGRAM_SPEECH_TIER: 'nova'
+});
+
+// Make outbound call
+await ep.execute('bridge', 'sofia/external/15551234567@provider.com');
+
+// Start transcription after answer
+await ep.api('uuid_deepgram_transcribe', `${ep.uuid} start en-US interim stereo`);
+```
+
+### Metadata and Speaker Identification for Outbound Calls
+
+The module automatically extracts caller/callee information from FreeSWITCH channel variables:
+
+**For Outbound Calls:**
+- `caller_id_name` / `caller_id_number` → Channel 0 (FreeSWITCH/Originator)
+- `destination_number` / `callee_id_name` → Channel 1 (External party/Destination)
+
+**Example metadata for outbound call to +15551234567:**
+
+```json
+{
+  "callerName": "Extension 1000",
+  "callerNumber": "1000",
+  "calleeName": "Unknown",
+  "calleeNumber": "15551234567",
+  "call-Id": "abc123-def456@domain.com"
+}
+```
+
+### Pusher Integration for Outbound Calls
+
+When using Pusher for real-time transcription delivery, outbound calls work identically to inbound calls:
+
+**Transformed format sent to Pusher:**
+
+```json
+{
+  "type": "final",
+  "speaker_id": "Extension 1000(1000)",
+  "text": "Hello, this is John calling about...",
+  "timestamp": "2025-11-21T10:30:45Z"
+}
+```
+
+```json
+{
+  "type": "interim",
+  "speaker_id": "Unknown(15551234567)",
+  "text": "Hi John, how can I help you?",
+  "timestamp": "2025-11-21T10:30:52Z"
+}
+```
+
+**Key Points:**
+- Speaker mapping uses `channel_index` ONLY (not AI speaker detection)
+- Channel 0 always maps to caller (originator)
+- Channel 1 always maps to callee (destination)
+- Metadata is extracted automatically from channel variables
+- Works with both inbound and outbound call scenarios
+
 ## Examples
 
 See the examples directory for sample applications demonstrating Deepgram transcription with FreeSWITCH.
