@@ -31,6 +31,9 @@ FS_PREFIX="/usr/local/freeswitch"
 BUILD_CPUS=4
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Installation manifest file
+MANIFEST_FILE="${SCRIPT_DIR}/.freeswitch-install-manifest.txt"
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -70,6 +73,16 @@ if [ ! -d "$FS_PREFIX" ]; then
     exit 1
 fi
 
+# Initialize or update manifest
+if [ ! -f "$MANIFEST_FILE" ]; then
+    echo "# FreeSWITCH Speech AI Installation Manifest" > "$MANIFEST_FILE"
+    echo "# Created: $(date)" >> "$MANIFEST_FILE"
+    echo "# This file tracks what was installed by installation scripts" >> "$MANIFEST_FILE"
+    echo "# Format: component=status (installed|existing)" >> "$MANIFEST_FILE"
+    echo "" >> "$MANIFEST_FILE"
+    echo "freeswitch=existing" >> "$MANIFEST_FILE"
+fi
+
 # ============================================================================
 # Install Dependencies
 # ============================================================================
@@ -96,6 +109,10 @@ fi
 # Build libwebsockets if not present
 if ! ldconfig -p | grep -q libwebsockets; then
     echo "Building libwebsockets 4.3.3..."
+
+    # Remove old entry if exists
+    sed -i '/^libwebsockets=/d' "$MANIFEST_FILE" 2>/dev/null || true
+
     cd /usr/local/src || exit 1
 
     if [ ! -d "libwebsockets" ]; then
@@ -129,15 +146,26 @@ if ! ldconfig -p | grep -q libwebsockets; then
     fi
 
     ldconfig
+
+    # Mark as installed by us
+    echo "libwebsockets=installed" >> "$MANIFEST_FILE"
     echo -e "${GREEN}✓ libwebsockets built and installed${NC}"
 else
     echo -e "${YELLOW}ℹ${NC} libwebsockets already installed"
+    # Mark as existing (not installed by us)
+    if ! grep -q "^libwebsockets=" "$MANIFEST_FILE"; then
+        echo "libwebsockets=existing" >> "$MANIFEST_FILE"
+    fi
 fi
 
 # Build AWS SDK if not present
 if ! ldconfig -p | grep -q aws-cpp-sdk-transcribestreaming; then
     echo "Building AWS SDK C++ 1.11.345..."
     echo "This will take 20-30 minutes..."
+
+    # Remove old entry if exists
+    sed -i '/^aws-sdk-cpp=/d' "$MANIFEST_FILE" 2>/dev/null || true
+
     cd /usr/local/src || exit 1
 
     if [ ! -d "aws-sdk-cpp" ]; then
@@ -185,9 +213,16 @@ if ! ldconfig -p | grep -q aws-cpp-sdk-transcribestreaming; then
     fi
 
     ldconfig
+
+    # Mark as installed by us
+    echo "aws-sdk-cpp=installed" >> "$MANIFEST_FILE"
     echo -e "${GREEN}✓ AWS SDK built and installed${NC}"
 else
     echo -e "${YELLOW}ℹ${NC} AWS SDK already installed"
+    # Mark as existing (not installed by us)
+    if ! grep -q "^aws-sdk-cpp=" "$MANIFEST_FILE"; then
+        echo "aws-sdk-cpp=existing" >> "$MANIFEST_FILE"
+    fi
 fi
 
 echo -e "${GREEN}✓ Dependencies installed${NC}"
@@ -271,6 +306,10 @@ if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
     exit 1
 fi
 echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
+
+# Mark modules as installed
+sed -i '/^modules=/d' "$MANIFEST_FILE" 2>/dev/null || true
+echo "modules=installed" >> "$MANIFEST_FILE"
 
 # ============================================================================
 # Configure FreeSWITCH
