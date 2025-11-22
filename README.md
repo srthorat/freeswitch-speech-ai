@@ -16,134 +16,316 @@ A collection of production-ready FreeSWITCH modules for real-time speech-to-text
 
 ## Quick Start
 
-Choose your build method:
+### Build All 5 Modules
 
-| Script | Best For | Time | Location |
-|--------|----------|------|----------|
-| `./build-locally.sh` | Production/CI/CD | 60-90 min | Docker container |
-| `sudo ./build-batch.sh all` | Production standalone | 75-130 min | /usr/local/src |
-| `sudo ./test-batch-simple.sh all` | Testing/Validation | 75-130 min | /tmp/freeswitch-build |
+```bash
+./build-all-modules.sh
+```
+
+**Build time:** 45-60 minutes (includes all SDKs)
+**Final size:** ~1.5 GB
+
+### Run with Docker Compose
+
+```bash
+docker-compose up -d
+```
+
+### Or Run with Script
+
+```bash
+# Basic run (no credentials)
+./run-all-modules.sh freeswitch-speech-ai:all-modules
+
+# With all API keys
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  DEEPGRAM_KEY \
+  AZURE_KEY eastus \
+  AWS_KEY AWS_SECRET us-east-1 \
+  "" \
+  /path/to/google-credentials.json
+```
 
 ---
 
 ## Building
 
-### Option 1: Docker Build (Production)
+### Docker Build (All 5 Modules)
 
-**Best for:** Production deployment, CI/CD pipelines
+**Build options:**
 
 ```bash
-./build-locally.sh
+# Default build (4 CPUs)
+./build-all-modules.sh
+
+# Custom build
+./build-all-modules.sh --cpus 8 --tag my-custom-tag
+
+# Without cache
+./build-all-modules.sh --no-cache
 ```
 
 **Features:**
-- Isolated, reproducible builds
-- Optimized container (~500MB)
-- All 5 modules included
-- **Automated validation** - Build fails if modules missing or have dependency issues
-- Production-ready
+- ✅ All 5 modules in one image
+- ✅ Automated validation (build fails if issues detected)
+- ✅ Multi-stage build (optimized size)
+- ✅ Based on freeswitch-base:latest
 
 **Build validation:**
 During the Docker build, all modules are automatically validated:
 - ✓ Verifies all 5 module .so files exist
 - ✓ Checks dependencies with `ldd` (no missing libraries)
+- ✓ Runtime validation (modules load successfully)
 - ✓ Build fails immediately if any module has issues
 
-**Run the container:**
+**Modules included:**
+- mod_audio_fork (WebSocket streaming)
+- mod_aws_transcribe (AWS Transcribe)
+- mod_deepgram_transcribe (Deepgram)
+- mod_azure_transcribe (Azure Cognitive Services)
+- mod_google_transcribe (Google Cloud Speech-to-Text)
+
+**Dependencies:**
+- libwebsockets 4.3.3
+- AWS SDK C++ 1.11.345
+- gRPC 1.64.2 + protobuf + googleapis
+- Azure Speech SDK (latest)
+
+---
+
+## Running
+
+### Option 1: Docker Compose (Recommended)
+
+Edit `docker-compose.yml` and uncomment API keys:
+
+```yaml
+environment:
+  # Deepgram
+  - DEEPGRAM_API_KEY=your_key_here
+
+  # AWS (permanent credentials)
+  - AWS_ACCESS_KEY_ID=AKIA***
+  - AWS_SECRET_ACCESS_KEY=***
+  - AWS_REGION=us-east-1
+
+  # AWS (temporary STS credentials)
+  - AWS_ACCESS_KEY_ID=ASIA***
+  - AWS_SECRET_ACCESS_KEY=***
+  - AWS_SESSION_TOKEN=IQoJ***  # Required for ASIA* keys
+  - AWS_REGION=us-east-1
+
+  # Azure
+  - AZURE_SUBSCRIPTION_KEY=your_key
+  - AZURE_REGION=eastus
+
+  # Google Cloud
+  - GOOGLE_APPLICATION_CREDENTIALS=/etc/google/credentials.json
+
+volumes:
+  # Google credentials file
+  - /path/to/google-credentials.json:/etc/google/credentials.json:ro
+```
+
+Then run:
 ```bash
-docker run -d \
-  --name freeswitch \
-  -p 5060:5060/udp \
-  -p 5060:5060/tcp \
-  -p 8021:8021/tcp \
-  -v $(pwd)/logs:/usr/local/freeswitch/log \
-  freeswitch-transcribe:latest
+docker-compose up -d
+```
+
+### Option 2: Run Script
+
+```bash
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  [DEEPGRAM_KEY] \
+  [AZURE_KEY] [AZURE_REGION] \
+  [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] \
+  [AWS_SESSION_TOKEN] \
+  [GOOGLE_CREDENTIALS_PATH]
+```
+
+**Examples:**
+
+```bash
+# Deepgram only
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  sk_***
+
+# AWS permanent credentials (AKIA*)
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  "" "" "" \
+  AKIA*** secret us-east-1
+
+# AWS temporary STS credentials (ASIA*)
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  "" "" "" \
+  ASIA*** secret us-east-1 IQoJ***
+
+# All services
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  sk_deepgram \
+  azure_key eastus \
+  AKIA*** aws_secret us-east-1 \
+  "" \
+  /path/to/google-creds.json
 ```
 
 ---
 
-### Option 2: Batch Build (Production Standalone)
+## AWS Credentials (Including STS Tokens)
 
-**Best for:** Production standalone builds, learning dependencies, debugging
+### Permanent Credentials (AKIA*)
 
-**Prerequisites:**
-- Ubuntu 20.04/22.04/24.04 or Debian 11
-- Root access (sudo)
-- 20GB+ free disk space
-- 8GB+ RAM
-- 4+ CPU cores
-
-**Build all batches:**
 ```bash
-sudo ./build-batch.sh all
+docker run -e AWS_ACCESS_KEY_ID=AKIA*** \
+           -e AWS_SECRET_ACCESS_KEY=*** \
+           -e AWS_REGION=us-east-1 \
+           freeswitch-speech-ai:all-modules
 ```
 
-**Or build individually:**
+### Temporary STS Credentials (ASIA*)
+
+**Important:** ASIA* keys require `AWS_SESSION_TOKEN`
+
 ```bash
-sudo ./build-batch.sh 1  # CMake (1 min)
-sudo ./build-batch.sh 2  # gRPC + Protobuf (15-30 min)
-sudo ./build-batch.sh 3  # googleapis + libwebsockets (5-10 min)
-sudo ./build-batch.sh 4  # Azure Speech SDK (1 min)
-sudo ./build-batch.sh 5  # spandsp + sofia-sip + libfvad (10-15 min)
-sudo ./build-batch.sh 6  # AWS SDK C++ + AWS C Common (20-40 min)
-sudo ./build-batch.sh 7  # FreeSWITCH + Modules (20-30 min)
+docker run -e AWS_ACCESS_KEY_ID=ASIA*** \
+           -e AWS_SECRET_ACCESS_KEY=*** \
+           -e AWS_SESSION_TOKEN=IQoJ*** \
+           -e AWS_REGION=us-east-1 \
+           freeswitch-speech-ai:all-modules
 ```
 
-**Features:**
-- Catch errors early (fail fast)
-- Resume from last successful batch
-- Understand dependencies step-by-step
-- Production-ready standalone builds
+### IAM Roles (EC2/ECS)
 
-**What it does:**
-1. Installs system dependencies
-2. Builds CMake 3.28.3
-3. Builds gRPC 1.64.2 + Protocol Buffers
-4. Builds googleapis for Google Cloud
-5. Builds libwebsockets 4.3.3
-6. Installs Azure Speech SDK 1.37.0
-7. Builds spandsp, sofia-sip 1.13.17, libfvad
-8. Builds AWS SDK C++ 1.11.345
-9. Builds FreeSWITCH 1.10.11
-10. Copies and builds all 5 modules
-11. Verifies all modules load correctly
+No credentials needed - automatically uses instance role:
 
-**Duration:** 75-130 minutes
-
-**Output:** FreeSWITCH installed at `/usr/local/freeswitch/`
+```bash
+docker run freeswitch-speech-ai:all-modules
+```
 
 ---
 
-### Option 3: Simplified Test Build
+## Configuration
 
-**Best for:** Testing without apt-get, validation
+### Extension Setup
 
-```bash
-# Run all batches
-sudo ./test-batch-simple.sh all
+Each extension can have different transcription services enabled:
 
-# Or specific batch
-sudo ./test-batch-simple.sh 6
+```xml
+<!-- User Directory: /usr/local/freeswitch/conf/directory/default/1000.xml -->
+<user id="1000">
+  <params>
+    <param name="password" value="1234"/>
+  </params>
+  <variables>
+    <variable name="effective_caller_id_name" value="Alice Johnson"/>
+    <variable name="effective_caller_id_number" value="1000"/>
+
+    <!-- Enable service for this extension -->
+    <variable name="enable_audio_fork" value="true"/>
+    <!-- or -->
+    <variable name="enable_deepgram" value="true"/>
+    <!-- or -->
+    <variable name="enable_aws_transcribe" value="true"/>
+    <!-- or -->
+    <variable name="enable_azure" value="true"/>
+    <!-- or -->
+    <variable name="enable_google_transcribe" value="true"/>
+  </variables>
+</user>
 ```
 
-**Features:**
-- Builds in `/tmp/freeswitch-build/`
-- No system package installation
-- Requires root only for `make install` and `ldconfig`
-- Good for restricted environments
+### Dialplan Configuration
+
+See `examples/freeswitch-config/dialplan/default.xml` for complete examples with:
+- Speaker information setup
+- Conditional transcription based on user flags
+- External inbound/outbound call handling
+- Pusher integration with enhanced metadata
 
 ---
 
-## Build Scripts Comparison
+## API Commands
 
-| Feature | Docker | Batch | Test |
-|---------|--------|-------|------|
-| Install system packages | ✓ | ✓ | ✗ |
-| Requires root | ✓ | ✓ | ✓* |
-| Build location | Container | /usr/local/src | /tmp |
-| Resume capability | ✗ | ✓ | ✓ |
-| Module verification | ✓ | ✓ | ✓ |
-| Production ready | ✓ | ✓ | ✗ |
+### mod_audio_fork
+
+```bash
+# Start streaming
+uuid_audio_fork <uuid> start ws://server:port/path [mono|mixed|stereo] [8k|16k|48k]
+
+# Stop streaming
+uuid_audio_fork <uuid> stop
+```
+
+### mod_deepgram_transcribe
+
+```bash
+# Start transcription
+uuid_deepgram_transcribe <uuid> start <lang> [interim] [stereo]
+
+# Stop transcription
+uuid_deepgram_transcribe <uuid> stop
+```
+
+### mod_aws_transcribe
+
+```bash
+# Start transcription
+uuid_aws_transcribe <uuid> start <lang> [interim] [stereo]
+
+# Stop transcription
+uuid_aws_transcribe <uuid> stop
+```
+
+### mod_azure_transcribe
+
+```bash
+# Start transcription
+uuid_azure_transcribe <uuid> start <lang> [interim]
+
+# Stop transcription
+uuid_azure_transcribe <uuid> stop
+```
+
+### mod_google_transcribe
+
+```bash
+# Start transcription
+uuid_google_transcribe <uuid> start <lang> [interim]
+
+# Stop transcription
+uuid_google_transcribe <uuid> stop
+```
+
+---
+
+## Testing
+
+### Extension Credentials
+
+| Extension | Username | Password | Service Enabled |
+|-----------|----------|----------|-----------------|
+| 1000 | 1000 | 1234 | Audio Fork |
+| 1001 | 1001 | 1234 | Deepgram |
+| 1002 | 1002 | 1234 | Azure |
+| 1003 | 1003 | 1234 | AWS |
+| 1004 | 1004 | 1234 | Google |
+
+### Verify Modules
+
+```bash
+# Access FreeSWITCH CLI
+docker exec -it freeswitch fs_cli
+
+# Check loaded modules
+freeswitch@internal> show modules | grep -E 'audio_fork|deepgram|aws|azure|google'
+
+# Expected output (all 5 modules):
+api,uuid_audio_fork,mod_audio_fork,/usr/local/freeswitch/lib/freeswitch/mod/mod_audio_fork.so
+api,uuid_aws_transcribe,mod_aws_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so
+api,uuid_azure_transcribe,mod_azure_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so
+api,uuid_deepgram_transcribe,mod_deepgram_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so
+api,uuid_google_transcribe,mod_google_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so
+```
 
 *Only for `make install` and `ldconfig`
 
