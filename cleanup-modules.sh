@@ -11,7 +11,7 @@
 #   sudo ./cleanup-modules.sh [--freeswitch-prefix PATH]
 # ============================================================================
 
-set -e
+# Note: Don't use 'set -e' to allow script to continue even if components are missing
 
 # Colors
 GREEN='\033[0;32m'
@@ -65,44 +65,75 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 
 echo ""
+
+# Check if FreeSWITCH exists
+if [ ! -d "$FS_PREFIX" ]; then
+    echo -e "${YELLOW}⚠${NC}  FreeSWITCH not found at $FS_PREFIX"
+    echo -e "${YELLOW}ℹ${NC}  Nothing to clean up"
+    exit 0
+fi
+
 # Remove module files
 echo "Removing module files..."
+MODULES_REMOVED=0
 for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
     if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
         rm -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so"
         echo -e "${GREEN}✓${NC} Removed ${module}.so"
+        MODULES_REMOVED=$((MODULES_REMOVED + 1))
     else
-        echo -e "${YELLOW}ℹ${NC} ${module}.so not found"
+        echo -e "${YELLOW}ℹ${NC} ${module}.so not found (already removed or never installed)"
     fi
 done
+
+if [ $MODULES_REMOVED -eq 0 ]; then
+    echo -e "${YELLOW}⚠${NC}  No modules were found to remove"
+fi
 
 # Remove from modules.conf.xml
 MODULES_CONF="${FS_PREFIX}/conf/autoload_configs/modules.conf.xml"
 if [ -f "$MODULES_CONF" ]; then
     echo "Removing from modules.conf.xml..."
-    
-    # Backup first
-    cp "$MODULES_CONF" "${MODULES_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
-    
-    # Remove module entries
-    sed -i '/mod_audio_fork/d' "$MODULES_CONF"
-    sed -i '/mod_aws_transcribe/d' "$MODULES_CONF"
-    sed -i '/mod_deepgram_transcribe/d' "$MODULES_CONF"
-    sed -i '/Speech Transcription Modules/d' "$MODULES_CONF"
-    
-    echo -e "${GREEN}✓${NC} Removed from configuration"
+
+    # Check if modules are configured
+    if grep -q "mod_audio_fork\|mod_aws_transcribe\|mod_deepgram_transcribe" "$MODULES_CONF"; then
+        # Backup first
+        cp "$MODULES_CONF" "${MODULES_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
+
+        # Remove module entries
+        sed -i '/mod_audio_fork/d' "$MODULES_CONF"
+        sed -i '/mod_aws_transcribe/d' "$MODULES_CONF"
+        sed -i '/mod_deepgram_transcribe/d' "$MODULES_CONF"
+        sed -i '/Speech Transcription Modules/d' "$MODULES_CONF"
+
+        echo -e "${GREEN}✓${NC} Removed from configuration"
+    else
+        echo -e "${YELLOW}ℹ${NC} Modules not found in configuration (already removed)"
+    fi
+else
+    echo -e "${YELLOW}⚠${NC}  modules.conf.xml not found at $MODULES_CONF"
 fi
 
 # Clean up build artifacts
 echo "Cleaning build artifacts..."
-cd $(dirname "$0")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+ARTIFACTS_FOUND=false
 for module_dir in modules/mod_audio_fork modules/mod_aws_transcribe modules/mod_deepgram_transcribe; do
     if [ -d "$module_dir" ]; then
-        cd "$module_dir"
-        rm -f *.o *.so
-        cd - > /dev/null
+        if ls ${module_dir}/*.o 1> /dev/null 2>&1 || ls ${module_dir}/*.so 1> /dev/null 2>&1; then
+            rm -f ${module_dir}/*.o ${module_dir}/*.so
+            ARTIFACTS_FOUND=true
+        fi
     fi
 done
+
+if [ "$ARTIFACTS_FOUND" = true ]; then
+    echo -e "${GREEN}✓${NC} Cleaned build artifacts"
+else
+    echo -e "${YELLOW}ℹ${NC} No build artifacts found"
+fi
 
 echo ""
 echo -e "${GREEN}=============================================${NC}"

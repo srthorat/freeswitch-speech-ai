@@ -75,53 +75,119 @@ fi
 # ============================================================================
 echo -e "${GREEN}[1/4] Installing dependencies...${NC}"
 
-apt-get update
-apt-get install -y \
+# Install system dependencies
+if ! apt-get update; then
+    echo -e "${RED}✗ Failed to update package lists${NC}"
+    echo "Check your internet connection and try again"
+    exit 1
+fi
+
+if ! apt-get install -y \
     build-essential \
     git \
     cmake \
     libcurl4-openssl-dev \
     libssl-dev \
-    zlib1g-dev
+    zlib1g-dev; then
+    echo -e "${RED}✗ Failed to install system dependencies${NC}"
+    exit 1
+fi
 
 # Build libwebsockets if not present
 if ! ldconfig -p | grep -q libwebsockets; then
     echo "Building libwebsockets 4.3.3..."
-    cd /usr/local/src
+    cd /usr/local/src || exit 1
+
     if [ ! -d "libwebsockets" ]; then
-        git clone --depth 1 -b v4.3.3 https://github.com/warmcat/libwebsockets.git
+        echo "Cloning libwebsockets repository..."
+        if ! git clone --depth 1 -b v4.3.3 https://github.com/warmcat/libwebsockets.git; then
+            echo -e "${RED}✗ Failed to clone libwebsockets repository${NC}"
+            echo "Check your internet connection and try again"
+            exit 1
+        fi
     fi
-    cd libwebsockets
-    mkdir -p build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
-    make -j ${BUILD_CPUS}
-    make install
+
+    cd libwebsockets || exit 1
+    mkdir -p build && cd build || exit 1
+
+    echo "Configuring libwebsockets..."
+    if ! cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo; then
+        echo -e "${RED}✗ Failed to configure libwebsockets${NC}"
+        exit 1
+    fi
+
+    echo "Compiling libwebsockets (this may take a few minutes)..."
+    if ! make -j ${BUILD_CPUS}; then
+        echo -e "${RED}✗ Failed to compile libwebsockets${NC}"
+        exit 1
+    fi
+
+    echo "Installing libwebsockets..."
+    if ! make install; then
+        echo -e "${RED}✗ Failed to install libwebsockets${NC}"
+        exit 1
+    fi
+
     ldconfig
+    echo -e "${GREEN}✓ libwebsockets built and installed${NC}"
+else
+    echo -e "${YELLOW}ℹ${NC} libwebsockets already installed"
 fi
 
 # Build AWS SDK if not present
 if ! ldconfig -p | grep -q aws-cpp-sdk-transcribestreaming; then
     echo "Building AWS SDK C++ 1.11.345..."
     echo "This will take 20-30 minutes..."
-    cd /usr/local/src
+    cd /usr/local/src || exit 1
+
     if [ ! -d "aws-sdk-cpp" ]; then
-        git clone --depth 1 -b 1.11.345 https://github.com/aws/aws-sdk-cpp.git
-        cd aws-sdk-cpp
-        git submodule update --init --recursive
+        echo "Cloning AWS SDK repository..."
+        if ! git clone --depth 1 -b 1.11.345 https://github.com/aws/aws-sdk-cpp.git; then
+            echo -e "${RED}✗ Failed to clone AWS SDK repository${NC}"
+            echo "Check your internet connection and try again"
+            exit 1
+        fi
+        cd aws-sdk-cpp || exit 1
+
+        echo "Initializing submodules..."
+        if ! git submodule update --init --recursive; then
+            echo -e "${RED}✗ Failed to initialize AWS SDK submodules${NC}"
+            exit 1
+        fi
     else
-        cd aws-sdk-cpp
+        cd aws-sdk-cpp || exit 1
     fi
-    
-    mkdir -p build && cd build
-    cmake .. \
+
+    mkdir -p build && cd build || exit 1
+
+    echo "Configuring AWS SDK..."
+    if ! cmake .. \
         -DBUILD_ONLY="transcribestreaming" \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DBUILD_SHARED_LIBS=ON \
         -DENABLE_TESTING=OFF \
-        -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull"
-    make -j ${BUILD_CPUS}
-    make install
+        -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull"; then
+        echo -e "${RED}✗ Failed to configure AWS SDK${NC}"
+        exit 1
+    fi
+
+    echo "Compiling AWS SDK (this will take 20-30 minutes)..."
+    if ! make -j ${BUILD_CPUS}; then
+        echo -e "${RED}✗ Failed to compile AWS SDK${NC}"
+        echo "Try reducing build parallelism: --build-cpus 2"
+        exit 1
+    fi
+
+    echo "Installing AWS SDK..."
+    if ! make install; then
+        echo -e "${RED}✗ Failed to install AWS SDK${NC}"
+        exit 1
+    fi
+
     ldconfig
+    echo -e "${GREEN}✓ AWS SDK built and installed${NC}"
+else
+    echo -e "${YELLOW}ℹ${NC} AWS SDK already installed"
 fi
 
 echo -e "${GREEN}✓ Dependencies installed${NC}"
@@ -131,32 +197,79 @@ echo -e "${GREEN}✓ Dependencies installed${NC}"
 # ============================================================================
 echo -e "${GREEN}[2/4] Building modules...${NC}"
 
+# Check if FreeSWITCH headers exist
+if [ ! -d "${FS_PREFIX}/include/freeswitch" ]; then
+    echo -e "${RED}✗ FreeSWITCH headers not found at ${FS_PREFIX}/include/freeswitch${NC}"
+    echo "FreeSWITCH may not be properly installed"
+    exit 1
+fi
+
 # mod_audio_fork
-cd ${SCRIPT_DIR}/modules/mod_audio_fork
-gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c
-g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
+echo "Building mod_audio_fork..."
+cd ${SCRIPT_DIR}/modules/mod_audio_fork || exit 1
+
+if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c; then
+    echo -e "${RED}✗ Failed to compile mod_audio_fork.c${NC}"
+    exit 1
+fi
+
+if ! g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp; then
+    echo -e "${RED}✗ Failed to compile mod_audio_fork C++ sources${NC}"
+    exit 1
+fi
+
 mkdir -p ${FS_PREFIX}/lib/freeswitch/mod
-g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto
+
+if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto; then
+    echo -e "${RED}✗ Failed to link mod_audio_fork${NC}"
+    exit 1
+fi
 echo -e "${GREEN}✓ mod_audio_fork${NC}"
 
 # mod_aws_transcribe
-cd ${SCRIPT_DIR}/modules/mod_aws_transcribe
-gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c
-g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp
-g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
+echo "Building mod_aws_transcribe..."
+cd ${SCRIPT_DIR}/modules/mod_aws_transcribe || exit 1
+
+if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c; then
+    echo -e "${RED}✗ Failed to compile mod_aws_transcribe.c${NC}"
+    exit 1
+fi
+
+if ! g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp; then
+    echo -e "${RED}✗ Failed to compile mod_aws_transcribe C++ sources${NC}"
+    exit 1
+fi
+
+if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
     mod_aws_transcribe.o aws_transcribe_glue.o \
     -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
     -laws-c-event-stream -laws-checksums -laws-c-common \
-    -lpthread -lcurl -lssl -lcrypto -lz
+    -lpthread -lcurl -lssl -lcrypto -lz; then
+    echo -e "${RED}✗ Failed to link mod_aws_transcribe${NC}"
+    exit 1
+fi
 echo -e "${GREEN}✓ mod_aws_transcribe${NC}"
 
 # mod_deepgram_transcribe
-cd ${SCRIPT_DIR}/modules/mod_deepgram_transcribe
-gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c
-g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp
-g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
+echo "Building mod_deepgram_transcribe..."
+cd ${SCRIPT_DIR}/modules/mod_deepgram_transcribe || exit 1
+
+if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c; then
+    echo -e "${RED}✗ Failed to compile mod_deepgram_transcribe.c${NC}"
+    exit 1
+fi
+
+if ! g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp; then
+    echo -e "${RED}✗ Failed to compile mod_deepgram_transcribe C++ sources${NC}"
+    exit 1
+fi
+
+if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
     mod_deepgram_transcribe.o dg_transcribe_glue.o audio_pipe.o parser.o \
-    -lwebsockets -lpthread -lssl -lcrypto
+    -lwebsockets -lpthread -lssl -lcrypto; then
+    echo -e "${RED}✗ Failed to link mod_deepgram_transcribe${NC}"
+    exit 1
+fi
 echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
 
 # ============================================================================

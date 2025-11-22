@@ -108,11 +108,19 @@ sleep 2
 # Remove Modules
 # ============================================================================
 echo "Removing modules..."
+MODULES_FOUND=false
 if [ -d "${FS_PREFIX}/lib/freeswitch/mod" ]; then
     for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
-        rm -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so"
-        echo -e "${GREEN}✓${NC} Removed ${module}.so"
+        if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
+            rm -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so"
+            echo -e "${GREEN}✓${NC} Removed ${module}.so"
+            MODULES_FOUND=true
+        fi
     done
+fi
+
+if [ "$MODULES_FOUND" = false ]; then
+    echo -e "${YELLOW}ℹ${NC} No modules found (already removed or never installed)"
 fi
 
 # ============================================================================
@@ -132,6 +140,8 @@ if [ "$KEEP_FREESWITCH" = false ]; then
     if [ -d "$FS_PREFIX" ]; then
         rm -rf "$FS_PREFIX"
         echo -e "${GREEN}✓${NC} Removed FreeSWITCH installation"
+    else
+        echo -e "${YELLOW}ℹ${NC} FreeSWITCH not found at $FS_PREFIX (already removed or never installed)"
     fi
     
     # Remove user
@@ -144,32 +154,68 @@ fi
 # Remove libwebsockets
 # ============================================================================
 echo "Removing libwebsockets..."
-rm -f /usr/local/lib/libwebsockets*
-rm -f /usr/local/lib/pkgconfig/libwebsockets*.pc
-rm -rf /usr/local/include/libwebsockets*
-ldconfig
-echo -e "${GREEN}✓${NC} Removed libwebsockets"
+LWS_FOUND=false
+if ls /usr/local/lib/libwebsockets* 1> /dev/null 2>&1; then
+    rm -f /usr/local/lib/libwebsockets*
+    rm -f /usr/local/lib/pkgconfig/libwebsockets*.pc
+    rm -rf /usr/local/include/libwebsockets*
+    LWS_FOUND=true
+fi
+ldconfig 2>/dev/null || true
+
+if [ "$LWS_FOUND" = true ]; then
+    echo -e "${GREEN}✓${NC} Removed libwebsockets"
+else
+    echo -e "${YELLOW}ℹ${NC} libwebsockets not found (already removed or never installed)"
+fi
 
 # ============================================================================
 # Remove AWS SDK C++
 # ============================================================================
 echo "Removing AWS SDK C++..."
-rm -f /usr/local/lib/libaws-*
-rm -f /usr/local/lib/pkgconfig/aws-*.pc
-rm -rf /usr/local/include/aws
-rm -rf /usr/local/include/smithy
-ldconfig
-echo -e "${GREEN}✓${NC} Removed AWS SDK C++"
+AWS_FOUND=false
+if ls /usr/local/lib/libaws-* 1> /dev/null 2>&1; then
+    rm -f /usr/local/lib/libaws-*
+    rm -f /usr/local/lib/pkgconfig/aws-*.pc
+    rm -rf /usr/local/include/aws
+    rm -rf /usr/local/include/smithy
+    AWS_FOUND=true
+fi
+ldconfig 2>/dev/null || true
+
+if [ "$AWS_FOUND" = true ]; then
+    echo -e "${GREEN}✓${NC} Removed AWS SDK C++"
+else
+    echo -e "${YELLOW}ℹ${NC} AWS SDK C++ not found (already removed or never installed)"
+fi
 
 # ============================================================================
 # Remove Source Directories
 # ============================================================================
 if [ "$KEEP_SOURCES" = false ]; then
     echo "Removing source directories..."
-    rm -rf /usr/local/src/freeswitch
-    rm -rf /usr/local/src/libwebsockets
-    rm -rf /usr/local/src/aws-sdk-cpp
-    echo -e "${GREEN}✓${NC} Removed source directories"
+    SOURCES_FOUND=false
+
+    if [ -d "/usr/local/src/freeswitch" ]; then
+        rm -rf /usr/local/src/freeswitch
+        SOURCES_FOUND=true
+    fi
+
+    if [ -d "/usr/local/src/libwebsockets" ]; then
+        rm -rf /usr/local/src/libwebsockets
+        SOURCES_FOUND=true
+    fi
+
+    if [ -d "/usr/local/src/aws-sdk-cpp" ]; then
+        rm -rf /usr/local/src/aws-sdk-cpp
+        SOURCES_FOUND=true
+    fi
+
+    if [ "$SOURCES_FOUND" = true ]; then
+        echo -e "${GREEN}✓${NC} Removed source directories"
+    else
+        echo -e "${YELLOW}ℹ${NC} No source directories found (already removed or never installed)"
+    fi
 else
     echo -e "${YELLOW}ℹ${NC} Keeping source directories"
 fi
