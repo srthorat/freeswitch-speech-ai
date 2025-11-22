@@ -21,7 +21,8 @@
       <variable name="toll_allow" value="domestic,international,local"/>
       <variable name="accountcode" value="1000"/>
       <variable name="user_context" value="default"/>
-      <variable name="effective_caller_id_name" value="Extension 1000"/>
+      <!-- ✅ SPEAKER INFORMATION (Required for Pusher) -->
+      <variable name="effective_caller_id_name" value="Alice Johnson"/>
       <variable name="effective_caller_id_number" value="1000"/>
 
       <!-- ⚙️ SERVICE FLAG: Audio Fork Enabled -->
