@@ -225,6 +225,23 @@ else
     fi
 fi
 
+# Fix cJSON header conflict between AWS SDK and FreeSWITCH
+echo "Fixing cJSON header conflict..."
+if [ -f /usr/local/include/aws/core/external/cjson/cJSON.h ]; then
+    # Check if fix is already applied
+    if ! grep -q '#ifndef cJSON__h' /usr/local/include/aws/core/external/cjson/cJSON.h; then
+        echo "Found AWS SDK cJSON header, adding header guards..."
+        sed -i '/#ifndef cJSON_AS4CPP__h/i #ifndef cJSON__h\n#define cJSON__h' \
+            /usr/local/include/aws/core/external/cjson/cJSON.h
+        echo '#endif' >> /usr/local/include/aws/core/external/cjson/cJSON.h
+        echo -e "${GREEN}✓ cJSON header guards added successfully${NC}"
+    else
+        echo -e "${GREEN}✓ cJSON header guards already applied${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠${NC}  WARNING: AWS SDK cJSON header not found at expected location"
+fi
+
 echo -e "${GREEN}✓ Dependencies installed${NC}"
 
 # ============================================================================
