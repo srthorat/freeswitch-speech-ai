@@ -2,28 +2,33 @@
 
 A collection of production-ready FreeSWITCH modules for real-time speech-to-text transcription and audio streaming.
 
-## Core Modules
+## Modules
 
 | Module | Provider | Protocol | Key Features |
 |--------|----------|----------|--------------|
 | [mod_audio_fork](modules/mod_audio_fork/) | Generic | WebSocket (libwebsockets) | Stream audio to external services |
 | [mod_aws_transcribe](modules/mod_aws_transcribe/) | AWS | Native SDK | Streaming transcription, speaker diarization |
+| [mod_azure_transcribe](modules/mod_azure_transcribe/) | Azure | WebSocket | Real-time transcription, language detection |
 | [mod_deepgram_transcribe](modules/mod_deepgram_transcribe/) | Deepgram | WebSocket | Fast transcription, keyword boosting |
+| [mod_google_transcribe](modules/mod_google_transcribe/) | Google Cloud | gRPC | High accuracy, punctuation, interim results |
 
-> **Note:** This repository focuses on the 3 most commonly used transcription modules. For Azure and Google Cloud support, see the archived branches.
+> **Deployment Options:**
+> - **Docker (root):** All 5 modules + all dependencies
+> - **Plain Linux (scripts/):** 3 core modules (audio_fork, aws, deepgram) + Pusher integration
 
 ---
 
 ## Quick Start
 
-### Build Core 3 Modules
+### Build All 5 Modules (Docker)
 
 ```bash
 ./build-all-modules.sh
 ```
 
-**Build time:** 25-30 minutes (includes AWS SDK and libwebsockets)
-**Final size:** ~800 MB
+**Build time:** 45-60 minutes (includes all SDKs)
+**Final size:** ~1.5 GB
+**Modules:** All 5 transcription modules
 
 ### Run with Docker Compose
 
@@ -49,7 +54,16 @@ docker-compose up -d
 
 For installing directly on Ubuntu/Debian Linux (without Docker), use the installation scripts in the `scripts/` directory.
 
+> **⚠️ Important:** Plain Linux installation includes **only 3 core modules** (audio_fork, aws, deepgram) + **Pusher integration**, unlike Docker which includes all 5 modules.
+
 > **📁 All scripts are in the `scripts/` folder.** See [scripts/README.md](scripts/README.md) for comprehensive documentation.
+
+**What's Included (Plain Linux):**
+- ✅ 3 core modules: mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe
+- ✅ Dependencies: libwebsockets 4.3.3, AWS SDK C++ 1.11.345
+- ✅ Pusher integration for real-time event delivery
+- ✅ Environment configuration for: Deepgram, AWS, Pusher
+- ❌ Azure and Google Cloud modules NOT included (Docker only)
 
 ### Pre-Flight Check (Recommended)
 
@@ -252,9 +266,9 @@ Comprehensive validation of all components:
 ./scripts/health-check.sh [--freeswitch-prefix PATH]
 ```
 
-**Checks performed:**
+**Checks performed (Plain Linux - 3 modules):**
 - ✓ FreeSWITCH responsive (via fs_cli)
-- ✓ All 3 core modules loaded
+- ✓ All 3 core modules loaded (audio_fork, aws, deepgram)
 - ✓ Module dependencies satisfied (ldd check)
 - ✓ Systemd service status
 - ✓ Configuration files present
@@ -347,6 +361,8 @@ systemctl restart freeswitch
 | **rollback.sh** | Restore from backup | `./scripts/rollback.sh` |
 | **configure-services.sh** | Interactive API credentials setup | `./scripts/configure-services.sh` |
 
+> **Note:** For Plain Linux, configure only **Deepgram**, **AWS**, and **Pusher** credentials. Azure and Google Cloud prompts can be skipped (those modules are Docker-only).
+
 **Example workflow with backups:**
 ```bash
 # Before upgrading
@@ -381,7 +397,7 @@ All scripts support common options:
 
 ## Building
 
-### Docker Build (Core 3 Modules)
+### Docker Build (All 5 Modules)
 
 **Build options:**
 
@@ -397,14 +413,14 @@ All scripts support common options:
 ```
 
 **Features:**
-- ✅ 3 core modules in one image
+- ✅ All 5 modules in one image
 - ✅ Automated validation (build fails if issues detected)
 - ✅ Multi-stage build (optimized size)
 - ✅ Based on freeswitch-base:latest
 
 **Build validation:**
 During the Docker build, all modules are automatically validated:
-- ✓ Verifies all 3 core module .so files exist
+- ✓ Verifies all 5 module .so files exist
 - ✓ Checks dependencies with `ldd` (no missing libraries)
 - ✓ Runtime validation (modules load successfully)
 - ✓ Build fails immediately if any module has issues
@@ -412,11 +428,15 @@ During the Docker build, all modules are automatically validated:
 **Modules included:**
 - mod_audio_fork (WebSocket streaming)
 - mod_aws_transcribe (AWS Transcribe)
+- mod_azure_transcribe (Azure Cognitive Services)
 - mod_deepgram_transcribe (Deepgram)
+- mod_google_transcribe (Google Cloud Speech-to-Text)
 
 **Dependencies:**
 - libwebsockets 4.3.3
 - AWS SDK C++ 1.11.345
+- gRPC 1.64.2 + protobuf
+- Azure Speech SDK 1.37.0
 
 ---
 
@@ -424,7 +444,7 @@ During the Docker build, all modules are automatically validated:
 
 ### Option 1: Docker Compose (Recommended)
 
-Edit `docker-compose.yml` and uncomment API keys:
+Edit `docker-compose.yml` and uncomment API keys for the services you want to use:
 
 ```yaml
 environment:
@@ -441,6 +461,13 @@ environment:
   - AWS_SECRET_ACCESS_KEY=***
   - AWS_SESSION_TOKEN=IQoJ***  # Required for ASIA* keys
   - AWS_REGION=us-east-1
+
+  # Azure Cognitive Services
+  - AZURE_SUBSCRIPTION_KEY=your_key_here
+  - AZURE_REGION=eastus
+
+  # Google Cloud Speech-to-Text
+  - GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
 ```
 
 Then run:
@@ -479,6 +506,8 @@ docker-compose up -d
   sk_deepgram \
   AKIA*** aws_secret us-east-1
 ```
+
+> **Note:** For Azure and Google Cloud, configure credentials in docker-compose.yml or pass as environment variables to docker run.
 
 ---
 

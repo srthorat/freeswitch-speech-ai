@@ -1,6 +1,12 @@
 # FreeSWITCH Speech AI Scripts
 
-This directory contains all installation, maintenance, and utility scripts for FreeSWITCH Speech AI modules.
+This directory contains all installation, maintenance, and utility scripts for **Plain Linux deployments** of FreeSWITCH Speech AI modules.
+
+> **⚠️ Plain Linux vs Docker:**
+> - **Plain Linux (these scripts):** 3 core modules (audio_fork, aws, deepgram) + Pusher integration
+> - **Docker (root scripts):** All 5 modules (audio_fork, aws, azure, deepgram, google) + all service integrations
+>
+> If you need Azure or Google Cloud modules, use Docker deployment instead.
 
 ## 📁 Script Categories
 
@@ -165,15 +171,20 @@ sudo ./scripts/cleanup-all.sh --yes
 
 ### install-all.sh
 
-**Purpose:** Full installation of FreeSWITCH, 3 core modules, and dependencies
+**Purpose:** Full installation of FreeSWITCH + 3 core modules + dependencies (Plain Linux)
 
 **What it installs:**
 - FreeSWITCH 1.10.11
 - libwebsockets 4.3.3
 - AWS SDK C++ 1.11.345
-- 3 core transcription modules (audio_fork, aws, deepgram)
+- 3 core transcription modules:
+  - mod_audio_fork
+  - mod_aws_transcribe
+  - mod_deepgram_transcribe
 - Example dialplan
 - Systemd service
+
+> **Note:** Azure and Google Cloud modules are NOT installed. Use Docker deployment if you need all 5 modules.
 
 **Options:**
 - `--freeswitch-prefix PATH` - Installation directory (default: /usr/local/freeswitch)
@@ -192,13 +203,18 @@ sudo ./scripts/install-all.sh --build-cpus 8 --freeswitch-prefix /opt/freeswitch
 
 ### install-modules-only.sh
 
-**Purpose:** Install only modules (FreeSWITCH must already exist)
+**Purpose:** Install only 3 core modules (FreeSWITCH must already exist)
 
 **What it does:**
 - Checks for existing dependencies
-- Installs missing dependencies only
-- Builds 3 core transcription modules (audio_fork, aws, deepgram)
+- Installs missing dependencies only (libwebsockets, AWS SDK)
+- Builds 3 core transcription modules:
+  - mod_audio_fork
+  - mod_aws_transcribe
+  - mod_deepgram_transcribe
 - Does NOT copy dialplan (preserves your configuration)
+
+> **Note:** Azure and Google Cloud modules are NOT installed. Use Docker deployment if you need all 5 modules.
 
 **Options:**
 - `--freeswitch-prefix PATH` - FreeSWITCH directory
@@ -338,9 +354,12 @@ sudo ./scripts/rollback.sh --backup /var/backups/freeswitch/backup-20251123-1030
 
 **Purpose:** Interactive wizard for configuring API credentials
 
-**What it configures:**
+**What it configures (for Plain Linux):**
 - Deepgram API key
 - AWS credentials (permanent or STS)
+- Pusher credentials (for real-time event delivery)
+
+> **Note:** The wizard also prompts for Azure and Google Cloud credentials, but these can be skipped as those modules are only available in Docker deployments.
 
 **Output files:**
 - `.env.transcription` - Environment file
