@@ -1,29 +1,29 @@
 # FreeSWITCH Transcription Modules
 
-A collection of production-ready FreeSWITCH modules for real-time speech-to-text transcription and audio streaming, supporting multiple cloud providers.
+A collection of production-ready FreeSWITCH modules for real-time speech-to-text transcription and audio streaming.
 
-## Modules
+## Core Modules
 
 | Module | Provider | Protocol | Key Features |
 |--------|----------|----------|--------------|
 | [mod_audio_fork](modules/mod_audio_fork/) | Generic | WebSocket (libwebsockets) | Stream audio to external services |
 | [mod_aws_transcribe](modules/mod_aws_transcribe/) | AWS | Native SDK | Streaming transcription, speaker diarization |
-| [mod_azure_transcribe](modules/mod_azure_transcribe/) | Azure | WebSocket | Real-time transcription, language detection |
 | [mod_deepgram_transcribe](modules/mod_deepgram_transcribe/) | Deepgram | WebSocket | Fast transcription, keyword boosting |
-| [mod_google_transcribe](modules/mod_google_transcribe/) | Google Cloud | gRPC | High accuracy, punctuation, interim results |
+
+> **Note:** This repository focuses on the 3 most commonly used transcription modules. For Azure and Google Cloud support, see the archived branches.
 
 ---
 
 ## Quick Start
 
-### Build All 5 Modules
+### Build Core 3 Modules
 
 ```bash
 ./scripts/build-all-modules.sh
 ```
 
-**Build time:** 45-60 minutes (includes all SDKs)
-**Final size:** ~1.5 GB
+**Build time:** 25-30 minutes (includes AWS SDK and libwebsockets)
+**Final size:** ~800 MB
 
 ### Run with Docker Compose
 
@@ -89,12 +89,12 @@ Installs FreeSWITCH, all dependencies, modules, and example dialplan:
 
 **What gets installed:**
 - ✅ FreeSWITCH 1.10.11
-- ✅ All 5 transcription modules
-- ✅ All dependencies (libwebsockets, AWS SDK, gRPC, Azure SDK)
+- ✅ 3 core transcription modules (audio_fork, aws, deepgram)
+- ✅ Required dependencies (libwebsockets, AWS SDK C++)
 - ✅ Example dialplan configuration
 - ✅ Systemd service (if available)
 
-**Installation time:** 45-60 minutes
+**Installation time:** 25-30 minutes
 
 ### Modules-Only Installation
 
@@ -115,11 +115,11 @@ If FreeSWITCH is already installed, install only the modules:
 ```
 
 **What gets installed:**
-- ✅ All 5 transcription modules
+- ✅ 3 core transcription modules (audio_fork, aws, deepgram)
 - ✅ Missing dependencies only (checks before installing)
 - ❌ Dialplan NOT copied (preserves your existing configuration)
 
-**Installation time:** 30-45 minutes (faster if dependencies exist)
+**Installation time:** 15-20 minutes (faster if dependencies exist)
 
 ### Installation Manifest System
 
@@ -215,9 +215,7 @@ Removes only the transcription modules (keeps FreeSWITCH and dependencies):
 **What gets removed:**
 - mod_audio_fork.so
 - mod_aws_transcribe.so
-- mod_azure_transcribe.so
 - mod_deepgram_transcribe.so
-- mod_google_transcribe.so
 
 ### Utility Scripts
 
@@ -259,7 +257,7 @@ Comprehensive validation of all components:
 
 **Checks performed:**
 - ✓ FreeSWITCH responsive (via fs_cli)
-- ✓ All 5 modules loaded
+- ✓ All 3 core modules loaded
 - ✓ Module dependencies satisfied (ldd check)
 - ✓ Systemd service status
 - ✓ Configuration files present
@@ -282,8 +280,6 @@ Modules:
 ✓ mod_audio_fork: Loaded, no missing dependencies
 ✓ mod_aws_transcribe: Loaded, no missing dependencies
 ✗ mod_deepgram_transcribe: Not loaded
-✓ mod_azure_transcribe: Loaded, no missing dependencies
-✓ mod_google_transcribe: Loaded, no missing dependencies
 
 Configuration:
 ✓ All .conf.xml files present
@@ -330,7 +326,7 @@ Update modules without rebuilding all dependencies:
 ./scripts/update-modules.sh --build-cpus 8
 ```
 
-**Update time:** 5-10 minutes (vs 45-60 minutes for full reinstall)
+**Update time:** 3-5 minutes (vs 25-30 minutes for full reinstall)
 
 **Backup location:**
 ```
@@ -388,7 +384,7 @@ All scripts support common options:
 
 ## Building
 
-### Docker Build (All 5 Modules)
+### Docker Build (Core 3 Modules)
 
 **Build options:**
 
@@ -404,14 +400,14 @@ All scripts support common options:
 ```
 
 **Features:**
-- ✅ All 5 modules in one image
+- ✅ 3 core modules in one image
 - ✅ Automated validation (build fails if issues detected)
 - ✅ Multi-stage build (optimized size)
 - ✅ Based on freeswitch-base:latest
 
 **Build validation:**
 During the Docker build, all modules are automatically validated:
-- ✓ Verifies all 5 module .so files exist
+- ✓ Verifies all 3 core module .so files exist
 - ✓ Checks dependencies with `ldd` (no missing libraries)
 - ✓ Runtime validation (modules load successfully)
 - ✓ Build fails immediately if any module has issues
@@ -420,14 +416,10 @@ During the Docker build, all modules are automatically validated:
 - mod_audio_fork (WebSocket streaming)
 - mod_aws_transcribe (AWS Transcribe)
 - mod_deepgram_transcribe (Deepgram)
-- mod_azure_transcribe (Azure Cognitive Services)
-- mod_google_transcribe (Google Cloud Speech-to-Text)
 
 **Dependencies:**
 - libwebsockets 4.3.3
 - AWS SDK C++ 1.11.345
-- gRPC 1.64.2 + protobuf + googleapis
-- Azure Speech SDK (latest)
 
 ---
 
@@ -452,17 +444,6 @@ environment:
   - AWS_SECRET_ACCESS_KEY=***
   - AWS_SESSION_TOKEN=IQoJ***  # Required for ASIA* keys
   - AWS_REGION=us-east-1
-
-  # Azure
-  - AZURE_SUBSCRIPTION_KEY=your_key
-  - AZURE_REGION=eastus
-
-  # Google Cloud
-  - GOOGLE_APPLICATION_CREDENTIALS=/etc/google/credentials.json
-
-volumes:
-  # Google credentials file
-  - /path/to/google-credentials.json:/etc/google/credentials.json:ro
 ```
 
 Then run:
@@ -475,10 +456,8 @@ docker-compose up -d
 ```bash
 ./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
   [DEEPGRAM_KEY] \
-  [AZURE_KEY] [AZURE_REGION] \
   [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] \
-  [AWS_SESSION_TOKEN] \
-  [GOOGLE_CREDENTIALS_PATH]
+  [AWS_SESSION_TOKEN]
 ```
 
 **Examples:**
@@ -490,21 +469,18 @@ docker-compose up -d
 
 # AWS permanent credentials (AKIA*)
 ./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
-  "" "" "" \
+  "" \
   AKIA*** secret us-east-1
 
 # AWS temporary STS credentials (ASIA*)
 ./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
-  "" "" "" \
+  "" \
   ASIA*** secret us-east-1 IQoJ***
 
-# All services
+# Both Deepgram and AWS
 ./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
   sk_deepgram \
-  azure_key eastus \
-  AKIA*** aws_secret us-east-1 \
-  "" \
-  /path/to/google-creds.json
+  AKIA*** aws_secret us-east-1
 ```
 
 ---
