@@ -532,13 +532,22 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     ./bootstrap.sh -j > /dev/null 2>&1
     check_success "Failed to bootstrap FreeSWITCH" "./bootstrap.sh"
 
+    log_substep "Ensuring critical modules are enabled (mod_event_socket)..."
+    grep -q "^event_handlers/mod_event_socket$" modules.conf || echo "event_handlers/mod_event_socket" >> modules.conf
+    echo -e "  ${GREEN}✓${NC} mod_event_socket enabled (required for fs_cli)"
+
     log_substep "Disabling optional modules (matching Dockerfile approach)..."
     sed -i 's/^endpoints\/mod_verto$/#&/' modules.conf
     sed -i 's/^endpoints\/mod_rtc$/#&/' modules.conf
+    sed -i 's/^endpoints\/mod_skinny$/#&/' modules.conf
     sed -i 's/^applications\/mod_signalwire$/#&/' modules.conf
+    sed -i 's/^applications\/mod_av$/#&/' modules.conf
     sed -i 's/^languages\/mod_python$/#&/' modules.conf
     sed -i 's/^languages\/mod_python3$/#&/' modules.conf
-    echo -e "  ${GREEN}✓${NC} Disabled mod_verto, mod_rtc, mod_signalwire, Python modules"
+    sed -i 's/^languages\/mod_java$/#&/' modules.conf
+    sed -i 's/^languages\/mod_perl$/#&/' modules.conf
+    sed -i 's/^languages\/mod_php$/#&/' modules.conf
+    echo -e "  ${GREEN}✓${NC} Disabled optional modules (verto, rtc, skinny, signalwire, av, python, java, perl, php)"
 
     log_substep "Configuring FreeSWITCH (prefix: ${FS_PREFIX})..."
     ./configure --prefix=${FS_PREFIX} \
@@ -569,9 +578,25 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     check_success "Failed to copy vanilla configuration" "cp vanilla config"
     echo -e "  ${GREEN}✓${NC} Sample configuration installed"
 
-    log_substep "Creating FreeSWITCH user and setting permissions..."
-    id -u freeswitch &>/dev/null || useradd -r -g daemon -s /bin/false -c "FreeSWITCH" freeswitch
-    chown -R freeswitch:daemon ${FS_PREFIX}
+    log_substep "Applying NAT fix for SIP profiles..."
+    if [ -f ${FS_PREFIX}/conf/sip_profiles/internal.xml ]; then
+        sed -i 's|value="\$\${external_rtp_ip}"|value="\$\${local_ip_v4}"|' ${FS_PREFIX}/conf/sip_profiles/internal.xml
+        sed -i 's|value="\$\${external_sip_ip}"|value="\$\${local_ip_v4}"|' ${FS_PREFIX}/conf/sip_profiles/internal.xml
+        echo -e "  ${GREEN}✓${NC} NAT fix applied (using local_ip_v4 instead of STUN)"
+    else
+        echo -e "  ${YELLOW}⚠${NC}  WARNING: SIP profile not found, skipping NAT fix"
+    fi
+
+    log_substep "Creating FreeSWITCH group and user..."
+    # Create freeswitch group if it doesn't exist
+    getent group freeswitch > /dev/null 2>&1 || groupadd -r freeswitch
+    # Create freeswitch user if it doesn't exist (with freeswitch group)
+    id -u freeswitch &>/dev/null || useradd -r -g freeswitch -s /bin/false -c "FreeSWITCH" freeswitch
+    echo -e "  ${GREEN}✓${NC} FreeSWITCH user and group created"
+
+    log_substep "Setting ownership and permissions..."
+    chown -R freeswitch:freeswitch ${FS_PREFIX}
+    echo -e "  ${GREEN}✓${NC} Ownership set to freeswitch:freeswitch"
 
     complete_step "FreeSWITCH 1.10.11 built and installed"
 else
@@ -722,9 +747,9 @@ complete_step "mod_aws_transcribe built and validated"
 # Mark modules as installed and set permissions
 echo "modules=installed" >> "$MANIFEST_FILE"
 log_substep "Setting module permissions..."
-chown freeswitch:daemon ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so 2>/dev/null || true
-chown freeswitch:daemon ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so 2>/dev/null || true
-chown freeswitch:daemon ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so 2>/dev/null || true
+chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so 2>/dev/null || true
+chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so 2>/dev/null || true
+chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so 2>/dev/null || true
 
 # ============================================================================
 # Step 10: Configure FreeSWITCH and Modules
@@ -759,7 +784,7 @@ if [ -d "${SCRIPT_DIR}/../examples/freeswitch-config/dialplan" ]; then
     cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/100*.xml \
        ${FS_PREFIX}/conf/directory/default/ 2>/dev/null || true
 
-    chown -R freeswitch:daemon ${FS_PREFIX}/conf 2>/dev/null || true
+    chown -R freeswitch:freeswitch ${FS_PREFIX}/conf 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} Example dialplan and directory configuration copied"
 else
     echo -e "  ${YELLOW}⚠${NC}  WARNING: Example configuration not found"
