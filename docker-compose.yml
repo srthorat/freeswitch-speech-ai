@@ -46,6 +46,12 @@ services:
       # Google Cloud (for mod_google_transcribe)
       # - GOOGLE_APPLICATION_CREDENTIALS=/etc/google/credentials.json
 
+      # Pusher (Real-time Event Delivery - optional)
+      # - PUSHER_APP_ID=123456
+      # - PUSHER_KEY=your_pusher_key
+      # - PUSHER_SECRET=your_pusher_secret
+      # - PUSHER_CLUSTER=ap2
+
       # FreeSWITCH logging
       - FREESWITCH_LOG_LEVEL=INFO
 
