@@ -19,7 +19,7 @@ A collection of production-ready FreeSWITCH modules for real-time speech-to-text
 ### Build All 5 Modules
 
 ```bash
-./build-all-modules.sh
+./scripts/build-all-modules.sh
 ```
 
 **Build time:** 45-60 minutes (includes all SDKs)
@@ -35,10 +35,10 @@ docker-compose up -d
 
 ```bash
 # Basic run (no credentials)
-./run-all-modules.sh freeswitch-speech-ai:all-modules
+./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules
 
 # With all API keys
-./run-all-modules.sh freeswitch-speech-ai:all-modules \
+./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
   DEEPGRAM_KEY \
   AZURE_KEY eastus \
   AWS_KEY AWS_SECRET us-east-1 \
@@ -50,14 +50,24 @@ docker-compose up -d
 
 ## Plain Linux Installation
 
-For installing directly on Ubuntu/Debian Linux (without Docker), use the installation scripts.
+For installing directly on Ubuntu/Debian Linux (without Docker), use the installation scripts in the `scripts/` directory.
+
+> **📁 All scripts are in the `scripts/` folder.** See [scripts/README.md](scripts/README.md) for comprehensive documentation.
+
+### Pre-Flight Check (Recommended)
+
+Before installation, verify your system meets all requirements:
+
+```bash
+./scripts/preflight-check.sh
+```
 
 ### Full Installation (FreeSWITCH + All Modules)
 
 Installs FreeSWITCH, all dependencies, modules, and example dialplan:
 
 ```bash
-./install-all.sh [OPTIONS]
+./scripts/install-all.sh [OPTIONS]
 ```
 
 **Options:**
@@ -68,13 +78,13 @@ Installs FreeSWITCH, all dependencies, modules, and example dialplan:
 **Example:**
 ```bash
 # Default installation
-./install-all.sh
+./scripts/install-all.sh
 
 # Custom installation path with 8 cores
-./install-all.sh --freeswitch-prefix /opt/freeswitch --build-cpus 8
+./scripts/install-all.sh --freeswitch-prefix /opt/freeswitch --build-cpus 8
 
 # Automated installation (CI/CD)
-./install-all.sh --yes
+./scripts/install-all.sh --yes
 ```
 
 **What gets installed:**
@@ -91,7 +101,7 @@ Installs FreeSWITCH, all dependencies, modules, and example dialplan:
 If FreeSWITCH is already installed, install only the modules:
 
 ```bash
-./install-modules-only.sh [OPTIONS]
+./scripts/install-modules-only.sh [OPTIONS]
 ```
 
 **Options:**
@@ -101,7 +111,7 @@ If FreeSWITCH is already installed, install only the modules:
 
 **Example:**
 ```bash
-./install-modules-only.sh --freeswitch-prefix /usr/local/freeswitch
+./scripts/install-modules-only.sh --freeswitch-prefix /usr/local/freeswitch
 ```
 
 **What gets installed:**
@@ -146,7 +156,7 @@ protobuf=existing
 Removes FreeSWITCH, modules, and dependencies we installed:
 
 ```bash
-./cleanup-all.sh [OPTIONS]
+./scripts/cleanup-all.sh [OPTIONS]
 ```
 
 **Options:**
@@ -162,10 +172,10 @@ Removes FreeSWITCH, modules, and dependencies we installed:
 **Example:**
 ```bash
 # Interactive cleanup (recommended)
-./cleanup-all.sh
+./scripts/cleanup-all.sh
 
 # Automated cleanup (use with caution!)
-./cleanup-all.sh --yes
+./scripts/cleanup-all.sh --yes
 ```
 
 **What happens when manifest exists:**
@@ -189,7 +199,7 @@ Continue with full cleanup anyway? (type 'yes' to confirm):
 Removes only the transcription modules (keeps FreeSWITCH and dependencies):
 
 ```bash
-./cleanup-modules.sh [OPTIONS]
+./scripts/cleanup-modules.sh [OPTIONS]
 ```
 
 **Options:**
@@ -216,7 +226,7 @@ Removes only the transcription modules (keeps FreeSWITCH and dependencies):
 Quickly check what's installed and running:
 
 ```bash
-./status.sh [--freeswitch-prefix PATH]
+./scripts/status.sh [--freeswitch-prefix PATH]
 ```
 
 **Output example:**
@@ -244,7 +254,7 @@ Installation Manifest:
 Comprehensive validation of all components:
 
 ```bash
-./health-check.sh [--freeswitch-prefix PATH]
+./scripts/health-check.sh [--freeswitch-prefix PATH]
 ```
 
 **Checks performed:**
@@ -285,7 +295,7 @@ Exit code: 1
 
 **Use in CI/CD:**
 ```bash
-./health-check.sh || exit 1  # Fail pipeline if health check fails
+./scripts/health-check.sh || exit 1  # Fail pipeline if health check fails
 ```
 
 #### Fast Module Updates
@@ -293,7 +303,7 @@ Exit code: 1
 Update modules without rebuilding all dependencies:
 
 ```bash
-./update-modules.sh [OPTIONS]
+./scripts/update-modules.sh [OPTIONS]
 ```
 
 **Options:**
@@ -311,13 +321,13 @@ Update modules without rebuilding all dependencies:
 **Example:**
 ```bash
 # Standard update (pulls, builds, restarts)
-./update-modules.sh
+./scripts/update-modules.sh
 
 # Update without restarting (for manual reload)
-./update-modules.sh --no-restart
+./scripts/update-modules.sh --no-restart
 
 # Fast update with 8 cores
-./update-modules.sh --build-cpus 8
+./scripts/update-modules.sh --build-cpus 8
 ```
 
 **Update time:** 5-10 minutes (vs 45-60 minutes for full reinstall)
@@ -333,6 +343,27 @@ Update modules without rebuilding all dependencies:
 BACKUP_DIR="/usr/local/freeswitch/lib/freeswitch/mod/.backup.20251123_103000"
 cp $BACKUP_DIR/*.so /usr/local/freeswitch/lib/freeswitch/mod/
 systemctl restart freeswitch
+```
+
+### Additional Utility Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| **preflight-check.sh** | Validate system requirements before installation | `./scripts/preflight-check.sh` |
+| **backup.sh** | Create backup before upgrades | `./scripts/backup.sh` |
+| **rollback.sh** | Restore from backup | `./scripts/rollback.sh` |
+| **configure-services.sh** | Interactive API credentials setup | `./scripts/configure-services.sh` |
+
+**Example workflow with backups:**
+```bash
+# Before upgrading
+./scripts/backup.sh
+
+# Perform upgrade
+./scripts/update-modules.sh
+
+# If something breaks, rollback
+./scripts/rollback.sh
 ```
 
 ### Script Options Reference
@@ -351,6 +382,8 @@ All scripts support common options:
 - ✅ Checks for existing installations before building
 - ✅ Validates dependencies before proceeding
 
+> **📖 For complete script documentation, see [scripts/README.md](scripts/README.md)**
+
 ---
 
 ## Building
@@ -361,13 +394,13 @@ All scripts support common options:
 
 ```bash
 # Default build (4 CPUs)
-./build-all-modules.sh
+./scripts/build-all-modules.sh
 
 # Custom build
-./build-all-modules.sh --cpus 8 --tag my-custom-tag
+./scripts/build-all-modules.sh --cpus 8 --tag my-custom-tag
 
 # Without cache
-./build-all-modules.sh --no-cache
+./scripts/build-all-modules.sh --no-cache
 ```
 
 **Features:**
@@ -440,7 +473,7 @@ docker-compose up -d
 ### Option 2: Run Script
 
 ```bash
-./run-all-modules.sh freeswitch-speech-ai:all-modules \
+./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
   [DEEPGRAM_KEY] \
   [AZURE_KEY] [AZURE_REGION] \
   [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] \
@@ -452,21 +485,21 @@ docker-compose up -d
 
 ```bash
 # Deepgram only
-./run-all-modules.sh freeswitch-speech-ai:all-modules \
+./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
   sk_***
 
 # AWS permanent credentials (AKIA*)
-./run-all-modules.sh freeswitch-speech-ai:all-modules \
+./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
   "" "" "" \
   AKIA*** secret us-east-1
 
 # AWS temporary STS credentials (ASIA*)
-./run-all-modules.sh freeswitch-speech-ai:all-modules \
+./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
   "" "" "" \
   ASIA*** secret us-east-1 IQoJ***
 
 # All services
-./run-all-modules.sh freeswitch-speech-ai:all-modules \
+./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
   sk_deepgram \
   azure_key eastus \
   AKIA*** aws_secret us-east-1 \
