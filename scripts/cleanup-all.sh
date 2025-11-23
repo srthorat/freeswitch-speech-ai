@@ -72,9 +72,11 @@ if [ "$KEEP_FREESWITCH" = false ]; then
 fi
 echo "  ✗ mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe"
 echo "  ✗ libwebsockets (/usr/local/lib/libwebsockets*)"
+echo "  ✗ spandsp (/usr/local/lib/libspandsp*)"
+echo "  ✗ sofia-sip (/usr/local/lib/libsofia-sip*)"
 echo "  ✗ AWS SDK C++ (/usr/local/lib/libaws-*)"
 if [ "$KEEP_SOURCES" = false ]; then
-    echo "  ✗ Source directories (/usr/local/src/{freeswitch,libwebsockets,aws-sdk-cpp})"
+    echo "  ✗ Source directories (/usr/local/src/{freeswitch,libwebsockets,aws-sdk-cpp,spandsp,sofia-sip})"
 fi
 echo ""
 
@@ -206,6 +208,53 @@ if [ "$SHOULD_REMOVE_LWS" = true ]; then
 fi
 
 # ============================================================================
+# Remove spandsp (only if we installed it OR no manifest exists)
+# ============================================================================
+echo "Removing spandsp..."
+
+SHOULD_REMOVE_SPANDSP=true
+if [ -f "$MANIFEST_FILE" ]; then
+    if grep -q "libspandsp=existing" "$MANIFEST_FILE"; then
+        echo -e "${YELLOW}ℹ${NC} spandsp was already installed - keeping it"
+        SHOULD_REMOVE_SPANDSP=false
+    elif grep -q "libspandsp=installed" "$MANIFEST_FILE"; then
+        echo "Removing spandsp (installed by our script)..."
+    fi
+fi
+
+if [ "$SHOULD_REMOVE_SPANDSP" = true ]; then
+    if ls /usr/local/lib/libspandsp* 1> /dev/null 2>&1; then
+        rm -f /usr/local/lib/libspandsp*
+        rm -rf /usr/local/include/spandsp*
+        echo -e "${GREEN}✓${NC} Removed spandsp libraries"
+    fi
+fi
+
+# ============================================================================
+# Remove sofia-sip (only if we installed it OR no manifest exists)
+# ============================================================================
+echo "Removing sofia-sip..."
+
+SHOULD_REMOVE_SOFIA=true
+if [ -f "$MANIFEST_FILE" ]; then
+    if grep -q "libsofia-sip=existing" "$MANIFEST_FILE"; then
+        echo -e "${YELLOW}ℹ${NC} sofia-sip was already installed - keeping it"
+        SHOULD_REMOVE_SOFIA=false
+    elif grep -q "libsofia-sip=installed" "$MANIFEST_FILE"; then
+        echo "Removing sofia-sip (installed by our script)..."
+    fi
+fi
+
+if [ "$SHOULD_REMOVE_SOFIA" = true ]; then
+    if ls /usr/local/lib/libsofia-sip* 1> /dev/null 2>&1; then
+        rm -f /usr/local/lib/libsofia-sip*
+        rm -rf /usr/local/include/sofia-sip*
+        rm -rf /usr/local/share/sofia-sip
+        echo -e "${GREEN}✓${NC} Removed sofia-sip libraries"
+    fi
+fi
+
+# ============================================================================
 # Remove AWS SDK C++ (only if we installed it OR no manifest exists)
 # ============================================================================
 echo "Removing AWS SDK C++..."
@@ -260,6 +309,16 @@ if [ "$KEEP_SOURCES" = false ]; then
 
     if [ -d "/usr/local/src/aws-sdk-cpp" ]; then
         rm -rf /usr/local/src/aws-sdk-cpp
+        SOURCES_FOUND=true
+    fi
+
+    if [ -d "/usr/local/src/spandsp" ]; then
+        rm -rf /usr/local/src/spandsp
+        SOURCES_FOUND=true
+    fi
+
+    if [ -d "/usr/local/src/sofia-sip" ]; then
+        rm -rf /usr/local/src/sofia-sip
         SOURCES_FOUND=true
     fi
 

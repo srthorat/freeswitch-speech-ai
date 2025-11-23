@@ -304,15 +304,38 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     echo -e "${GREEN}[Step 4/6] Installing FreeSWITCH 1.10.11...${NC}"
     echo "This will take 15-20 minutes..."
 
-    # Install FreeSWITCH build dependencies
+    # Install FreeSWITCH build dependencies (matching Dockerfile)
     apt-get install -y \
+        autoconf \
+        automake \
+        libtool \
+        libtool-bin \
+        pkg-config \
+        libssl-dev \
+        libcurl4-openssl-dev \
+        libpcre3-dev \
+        libspeex1 \
+        libspeexdsp-dev \
+        libedit-dev \
+        libtiff-dev \
+        libldns-dev \
+        uuid-dev \
+        libopus-dev \
+        libsndfile1-dev \
+        libshout3-dev \
+        libmpg123-dev \
+        libmp3lame-dev \
+        libsqlite3-dev \
+        libpq-dev \
+        unixodbc-dev \
+        libsrtp2-dev \
         libavformat-dev \
         libswscale-dev \
-        libswresample-dev \
-        liblua5.1-0-dev \
-        libopus-dev \
-        libsndfile-dev \
-        libtiff-dev
+        libxml2-dev \
+        liblua5.2-dev \
+        libgoogle-perftools-dev \
+        zlib1g-dev \
+        libjpeg-dev
 
     # Build spandsp from source (FreeSWITCH's 3.x version)
     cd /usr/local/src
