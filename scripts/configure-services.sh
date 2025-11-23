@@ -69,6 +69,10 @@ AWS_ACCESS_KEY_ID=""
 AWS_SECRET_ACCESS_KEY=""
 AWS_SESSION_TOKEN=""
 AWS_REGION=""
+PUSHER_APP_ID=""
+PUSHER_KEY=""
+PUSHER_SECRET=""
+PUSHER_CLUSTER=""
 AZURE_SUBSCRIPTION_KEY=""
 AZURE_REGION=""
 GOOGLE_CREDENTIALS_PATH=""
@@ -145,6 +149,34 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
 
     if [ -n "$AWS_ACCESS_KEY_ID" ] || [ "$AWS_CRED_TYPE" = "3" ]; then
         echo -e "  ${GREEN}✓ AWS configured${NC}"
+    fi
+fi
+echo ""
+
+# ============================================================================
+# Pusher Configuration
+# ============================================================================
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}Pusher Configuration (Real-time Event Delivery)${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+read -p "Configure Pusher for real-time transcription events? (y/N) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo ""
+    echo "Enter your Pusher credentials:"
+    echo "  Get from: https://dashboard.pusher.com/"
+    read -p "App ID: " PUSHER_APP_ID
+    read -p "Key (public): " PUSHER_KEY
+    read -sp "Secret: " PUSHER_SECRET
+    echo ""
+    read -p "Cluster (e.g., us2, eu, ap2) [default: ap2]: " PUSHER_CLUSTER
+    PUSHER_CLUSTER=${PUSHER_CLUSTER:-ap2}
+
+    if [ -n "$PUSHER_APP_ID" ] && [ -n "$PUSHER_KEY" ] && [ -n "$PUSHER_SECRET" ]; then
+        echo -e "  ${GREEN}✓ Pusher configured${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ Incomplete Pusher configuration (App ID, Key, and Secret are all required)${NC}"
     fi
 fi
 echo ""
@@ -242,6 +274,23 @@ fi
 
 cat >> "$OUTPUT_ENV" <<EOF
 
+# Pusher (Real-time Event Delivery)
+EOF
+
+if [ -n "$PUSHER_APP_ID" ]; then
+    echo "PUSHER_APP_ID=$PUSHER_APP_ID" >> "$OUTPUT_ENV"
+    echo "PUSHER_KEY=$PUSHER_KEY" >> "$OUTPUT_ENV"
+    echo "PUSHER_SECRET=$PUSHER_SECRET" >> "$OUTPUT_ENV"
+    echo "PUSHER_CLUSTER=$PUSHER_CLUSTER" >> "$OUTPUT_ENV"
+else
+    echo "# PUSHER_APP_ID=123456" >> "$OUTPUT_ENV"
+    echo "# PUSHER_KEY=your_key_here" >> "$OUTPUT_ENV"
+    echo "# PUSHER_SECRET=your_secret_here" >> "$OUTPUT_ENV"
+    echo "# PUSHER_CLUSTER=ap2" >> "$OUTPUT_ENV"
+fi
+
+cat >> "$OUTPUT_ENV" <<EOF
+
 # Azure Cognitive Services
 EOF
 
@@ -287,6 +336,10 @@ EOF
         [ -n "$AWS_SECRET_ACCESS_KEY" ] && echo "Environment=\"AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY\"" >> "$SYSTEMD_ENV"
         [ -n "$AWS_SESSION_TOKEN" ] && echo "Environment=\"AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN\"" >> "$SYSTEMD_ENV"
         [ -n "$AWS_REGION" ] && echo "Environment=\"AWS_REGION=$AWS_REGION\"" >> "$SYSTEMD_ENV"
+        [ -n "$PUSHER_APP_ID" ] && echo "Environment=\"PUSHER_APP_ID=$PUSHER_APP_ID\"" >> "$SYSTEMD_ENV"
+        [ -n "$PUSHER_KEY" ] && echo "Environment=\"PUSHER_KEY=$PUSHER_KEY\"" >> "$SYSTEMD_ENV"
+        [ -n "$PUSHER_SECRET" ] && echo "Environment=\"PUSHER_SECRET=$PUSHER_SECRET\"" >> "$SYSTEMD_ENV"
+        [ -n "$PUSHER_CLUSTER" ] && echo "Environment=\"PUSHER_CLUSTER=$PUSHER_CLUSTER\"" >> "$SYSTEMD_ENV"
         [ -n "$AZURE_SUBSCRIPTION_KEY" ] && echo "Environment=\"AZURE_SUBSCRIPTION_KEY=$AZURE_SUBSCRIPTION_KEY\"" >> "$SYSTEMD_ENV"
         [ -n "$AZURE_REGION" ] && echo "Environment=\"AZURE_REGION=$AZURE_REGION\"" >> "$SYSTEMD_ENV"
         [ -n "$GOOGLE_CREDENTIALS_PATH" ] && echo "Environment=\"GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_CREDENTIALS_PATH\"" >> "$SYSTEMD_ENV"
@@ -307,17 +360,20 @@ echo "========================================="
 echo ""
 [ -n "$DEEPGRAM_API_KEY" ] && echo -e "  ${GREEN}✓${NC} Deepgram configured"
 [ -n "$AWS_ACCESS_KEY_ID" ] && echo -e "  ${GREEN}✓${NC} AWS Transcribe configured"
-[ -n "$AZURE_SUBSCRIPTION_KEY" ] && echo -e "  ${GREEN}✓${NC} Azure Cognitive Services configured"
-[ -n "$GOOGLE_CREDENTIALS_PATH" ] && echo -e "  ${GREEN}✓${NC} Google Cloud Speech-to-Text configured"
+[ -n "$PUSHER_APP_ID" ] && echo -e "  ${GREEN}✓${NC} Pusher configured"
+[ -n "$AZURE_SUBSCRIPTION_KEY" ] && echo -e "  ${GREEN}✓${NC} Azure Cognitive Services configured (Docker only)"
+[ -n "$GOOGLE_CREDENTIALS_PATH" ] && echo -e "  ${GREEN}✓${NC} Google Cloud Speech-to-Text configured (Docker only)"
 echo ""
 
 echo "Next steps:"
 echo ""
-echo "  For Docker deployments:"
+echo "  For Docker deployments (all 5 modules):"
+echo "    - All configured services (Deepgram, AWS, Pusher, Azure, Google) are available"
 echo "    1. Copy variables from $OUTPUT_ENV to docker-compose.yml"
 echo "    2. Run: docker-compose up -d"
 echo ""
-echo "  For native installation:"
+echo "  For Plain Linux installation (3 core modules):"
+echo "    - Only Deepgram, AWS, and Pusher are used (Azure/Google modules not installed)"
 echo "    1. Credentials are already configured via systemd"
 echo "    2. Restart FreeSWITCH: sudo systemctl restart freeswitch"
 echo "    3. Verify: ./scripts/status.sh"
