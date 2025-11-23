@@ -847,9 +847,9 @@ if [ "$NO_VALIDATION" = false ]; then
         ${FS_PREFIX}/bin/freeswitch -nc -nonat > /dev/null 2>&1 &
         FS_PID=$!
 
-        # Wait for startup
-        echo -e "${CYAN}  ➜ Waiting 15 seconds for FreeSWITCH to start...${NC}"
-        sleep 15
+        # Wait for startup (modules need time to load)
+        echo -e "${CYAN}  ➜ Waiting 60 seconds for FreeSWITCH to fully start and load modules...${NC}"
+        sleep 60
 
         # Check if modules loaded
         MODULE_LOAD_FAILED=false
