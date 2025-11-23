@@ -305,13 +305,15 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     echo "This will take 15-20 minutes..."
     
     # Install FreeSWITCH dependencies
+    # Note: libspandsp-dev omitted (Ubuntu has old 0.0.6, FS needs 3.x, not required for speech modules)
     apt-get install -y \
         libavformat-dev \
         libswscale-dev \
-        libavresample-dev \
+        libswresample-dev \
         liblua5.1-0-dev \
         libopus-dev \
-        libsndfile-dev
+        libsndfile-dev \
+        libsofia-sip-ua-dev
     
     cd /usr/local/src
     if [ ! -d "freeswitch" ]; then
@@ -320,7 +322,16 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     
     cd freeswitch
     ./bootstrap.sh -j
-    ./configure --prefix=${FS_PREFIX}
+    # Disable unnecessary modules (we only need core + 3 speech modules)
+    sed -i 's/^endpoints\/mod_verto/#&/' modules.conf
+    sed -i 's/^endpoints\/mod_rtc/#&/' modules.conf
+    sed -i 's/^applications\/mod_signalwire/#&/' modules.conf
+    # Patch configure to skip version checks for Ubuntu packages that are older but functional
+    # - spandsp: Ubuntu has 0.0.6, FS needs 3.x (not required for speech modules)
+    # - sofia-sip: Ubuntu has 1.12.11, FS needs 1.13.17 (1.12.11 works fine for our use)
+    sed -i 's/as_fn_error \$? "no usable spandsp.*$/: # Skipping spandsp check/' configure
+    sed -i 's/as_fn_error \$? "no usable sofia-sip.*$/: # Skipping sofia-sip version check/' configure
+    ./configure --prefix=${FS_PREFIX} --without-spandsp
     make -j ${BUILD_CPUS}
     make install
     
