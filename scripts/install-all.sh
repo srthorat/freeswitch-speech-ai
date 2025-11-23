@@ -326,6 +326,9 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     sed -i 's/^endpoints\/mod_verto/#&/' modules.conf
     sed -i 's/^endpoints\/mod_rtc/#&/' modules.conf
     sed -i 's/^applications\/mod_signalwire/#&/' modules.conf
+    sed -i 's/^applications\/mod_spandsp/#&/' modules.conf
+    sed -i 's/^languages\/mod_python/#&/' modules.conf
+    sed -i 's/^languages\/mod_python3/#&/' modules.conf
     # Patch configure to skip version checks for Ubuntu packages that are older but functional
     # - spandsp: Ubuntu has 0.0.6, FS needs 3.x (not required for speech modules)
     # - sofia-sip: Ubuntu has 1.12.11, FS needs 1.13.17 (1.12.11 works fine for our use)
