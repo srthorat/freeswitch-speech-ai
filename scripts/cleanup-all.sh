@@ -32,7 +32,7 @@ KEEP_SOURCES=false
 AUTO_YES=false
 FS_PREFIX="/usr/local/freeswitch"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANIFEST_FILE="${SCRIPT_DIR}/.freeswitch-install-manifest.txt"
+MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do

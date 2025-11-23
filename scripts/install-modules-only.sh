@@ -29,10 +29,12 @@ NC='\033[0m'
 # Default values
 FS_PREFIX="/usr/local/freeswitch"
 BUILD_CPUS=4
+AUTO_YES=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Installation manifest file
-MANIFEST_FILE="${SCRIPT_DIR}/.freeswitch-install-manifest.txt"
+# Placed in repository root (parent of scripts/)
+MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -45,9 +47,32 @@ while [[ $# -gt 0 ]]; do
             BUILD_CPUS="$2"
             shift 2
             ;;
+        --yes)
+            AUTO_YES=true
+            shift
+            ;;
+        --help)
+            echo "FreeSWITCH Speech AI - Modules-Only Installation Script"
+            echo ""
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --freeswitch-prefix PATH  FreeSWITCH installation directory (default: /usr/local/freeswitch)"
+            echo "  --build-cpus N            Number of CPU cores for compilation (default: 4)"
+            echo "  --yes                     Skip confirmation prompts (auto-accept)"
+            echo "  --help                    Show this help message"
+            echo ""
+            echo "Example:"
+            echo "  sudo $0 --build-cpus 8 --freeswitch-prefix /usr/local/freeswitch"
+            echo ""
+            echo "Note: This script assumes FreeSWITCH is already installed."
+            echo "      Use install-all.sh for a complete installation."
+            exit 0
+            ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
-            echo "Usage: $0 [--freeswitch-prefix PATH] [--build-cpus N]"
+            echo "Usage: $0 [OPTIONS]"
+            echo "Try '$0 --help' for more information."
             exit 1
             ;;
     esac

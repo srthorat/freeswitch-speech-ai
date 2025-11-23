@@ -42,16 +42,29 @@ NC='\033[0m' # No Color
 SKIP_FREESWITCH=false
 NO_VALIDATION=false
 BUILD_CPUS=4
+AUTO_YES=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_PREFIX="/usr/local"
-FS_PREFIX="${INSTALL_PREFIX}/freeswitch"
+FS_PREFIX="/usr/local/freeswitch"
 
 # Installation manifest file - tracks what WE installed (not what already existed)
-MANIFEST_FILE="${SCRIPT_DIR}/.freeswitch-install-manifest.txt"
+# Placed in repository root (parent of scripts/)
+MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --freeswitch-prefix)
+            FS_PREFIX="$2"
+            shift 2
+            ;;
+        --build-cpus)
+            BUILD_CPUS="$2"
+            shift 2
+            ;;
+        --yes)
+            AUTO_YES=true
+            shift
+            ;;
         --skip-freeswitch)
             SKIP_FREESWITCH=true
             shift
@@ -60,13 +73,27 @@ while [[ $# -gt 0 ]]; do
             NO_VALIDATION=true
             shift
             ;;
-        --build-cpus)
-            BUILD_CPUS="$2"
-            shift 2
+        --help)
+            echo "FreeSWITCH Speech AI - Full Installation Script"
+            echo ""
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --freeswitch-prefix PATH  FreeSWITCH installation directory (default: /usr/local/freeswitch)"
+            echo "  --build-cpus N            Number of CPU cores for compilation (default: 4)"
+            echo "  --yes                     Skip confirmation prompts (auto-accept)"
+            echo "  --skip-freeswitch         Skip FreeSWITCH installation (modules only)"
+            echo "  --no-validation           Skip module validation after build"
+            echo "  --help                    Show this help message"
+            echo ""
+            echo "Example:"
+            echo "  sudo $0 --build-cpus 8 --freeswitch-prefix /opt/freeswitch"
+            exit 0
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
-            echo "Usage: $0 [--skip-freeswitch] [--no-validation] [--build-cpus N]"
+            echo "Usage: $0 [OPTIONS]"
+            echo "Try '$0 --help' for more information."
             exit 1
             ;;
     esac
