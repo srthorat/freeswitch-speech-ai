@@ -563,6 +563,12 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     make cd-sounds-install cd-moh-install > /dev/null 2>&1
     check_success "Failed to install FreeSWITCH sounds" "make cd-sounds-install"
 
+    log_substep "Installing sample configuration (vanilla)..."
+    mkdir -p ${FS_PREFIX}/conf
+    cp -r /usr/local/src/freeswitch/conf/vanilla/* ${FS_PREFIX}/conf/
+    check_success "Failed to copy vanilla configuration" "cp vanilla config"
+    echo -e "  ${GREEN}✓${NC} Sample configuration installed"
+
     log_substep "Creating FreeSWITCH user and setting permissions..."
     id -u freeswitch &>/dev/null || useradd -r -g daemon -s /bin/false -c "FreeSWITCH" freeswitch
     chown -R freeswitch:daemon ${FS_PREFIX}
