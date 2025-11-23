@@ -578,15 +578,6 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     check_success "Failed to copy vanilla configuration" "cp vanilla config"
     echo -e "  ${GREEN}✓${NC} Sample configuration installed"
 
-    log_substep "Applying NAT fix for SIP profiles..."
-    if [ -f ${FS_PREFIX}/conf/sip_profiles/internal.xml ]; then
-        sed -i 's|value="\$\${external_rtp_ip}"|value="\$\${local_ip_v4}"|' ${FS_PREFIX}/conf/sip_profiles/internal.xml
-        sed -i 's|value="\$\${external_sip_ip}"|value="\$\${local_ip_v4}"|' ${FS_PREFIX}/conf/sip_profiles/internal.xml
-        echo -e "  ${GREEN}✓${NC} NAT fix applied (using local_ip_v4 instead of STUN)"
-    else
-        echo -e "  ${YELLOW}⚠${NC}  WARNING: SIP profile not found, skipping NAT fix"
-    fi
-
     log_substep "Creating FreeSWITCH group and user..."
     # Create freeswitch group if it doesn't exist
     getent group freeswitch > /dev/null 2>&1 || groupadd -r freeswitch
