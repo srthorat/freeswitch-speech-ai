@@ -48,6 +48,311 @@ docker-compose up -d
 
 ---
 
+## Plain Linux Installation
+
+For installing directly on Ubuntu/Debian Linux (without Docker), use the installation scripts.
+
+### Full Installation (FreeSWITCH + All Modules)
+
+Installs FreeSWITCH, all dependencies, modules, and example dialplan:
+
+```bash
+./install-all.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - Installation directory (default: /usr/local/freeswitch)
+- `--build-cpus N` - Number of CPU cores for compilation (default: 4)
+- `--yes` - Skip confirmation prompts
+
+**Example:**
+```bash
+# Default installation
+./install-all.sh
+
+# Custom installation path with 8 cores
+./install-all.sh --freeswitch-prefix /opt/freeswitch --build-cpus 8
+
+# Automated installation (CI/CD)
+./install-all.sh --yes
+```
+
+**What gets installed:**
+- ✅ FreeSWITCH 1.10.11
+- ✅ All 5 transcription modules
+- ✅ All dependencies (libwebsockets, AWS SDK, gRPC, Azure SDK)
+- ✅ Example dialplan configuration
+- ✅ Systemd service (if available)
+
+**Installation time:** 45-60 minutes
+
+### Modules-Only Installation
+
+If FreeSWITCH is already installed, install only the modules:
+
+```bash
+./install-modules-only.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - FreeSWITCH installation directory
+- `--build-cpus N` - CPU cores for compilation
+- `--yes` - Skip confirmation prompts
+
+**Example:**
+```bash
+./install-modules-only.sh --freeswitch-prefix /usr/local/freeswitch
+```
+
+**What gets installed:**
+- ✅ All 5 transcription modules
+- ✅ Missing dependencies only (checks before installing)
+- ❌ Dialplan NOT copied (preserves your existing configuration)
+
+**Installation time:** 30-45 minutes (faster if dependencies exist)
+
+### Installation Manifest System
+
+Both installation scripts create a **manifest file** that tracks what was installed:
+
+**Location:** `.freeswitch-install-manifest.txt`
+
+**Format:**
+```
+# FreeSWITCH Speech AI Installation Manifest
+# Created: 2025-11-23 10:30:00
+# Format: component=status (installed|existing)
+
+freeswitch=installed
+libwebsockets=installed
+aws-sdk-cpp=installed
+grpc=existing
+protobuf=existing
+```
+
+**Component Status:**
+- `component=installed` - We installed it (will be removed during cleanup)
+- `component=existing` - Already existed (preserved during cleanup)
+
+**Why it matters:**
+- ✅ Smart cleanup - only removes what we installed
+- ✅ Preserves existing dependencies used by other applications
+- ✅ Prevents breaking other software on your system
+
+### Cleanup Scripts
+
+#### Complete Cleanup
+
+Removes FreeSWITCH, modules, and dependencies we installed:
+
+```bash
+./cleanup-all.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - Installation directory to remove
+- `--yes` - Skip confirmation prompts (requires TWO confirmations by default)
+
+**Safety features:**
+- 🔒 Requires double confirmation before starting
+- 🔒 Uses manifest to only remove what we installed
+- 🔒 Preserves pre-existing dependencies
+- ⚠️ Extra warning if manifest is missing
+
+**Example:**
+```bash
+# Interactive cleanup (recommended)
+./cleanup-all.sh
+
+# Automated cleanup (use with caution!)
+./cleanup-all.sh --yes
+```
+
+**What happens when manifest exists:**
+```bash
+# Will only remove components marked as "installed"
+libwebsockets=installed → ✓ Removed
+grpc=existing → ✗ Preserved (was already installed)
+```
+
+**What happens without manifest:**
+```bash
+# Extra warnings shown
+⚠️ Installation manifest not found
+⚠️ Without a manifest, we cannot determine what was installed by our scripts
+⚠️ We will remove ALL selected components (this may affect other applications)
+Continue with full cleanup anyway? (type 'yes' to confirm):
+```
+
+#### Modules-Only Cleanup
+
+Removes only the transcription modules (keeps FreeSWITCH and dependencies):
+
+```bash
+./cleanup-modules.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - FreeSWITCH installation directory
+- `--yes` - Skip confirmation prompts
+
+**Safety features:**
+- 🔒 Requires double confirmation
+- ✅ Preserves FreeSWITCH installation
+- ✅ Preserves all dependencies
+- ✅ Removes module configuration files
+
+**What gets removed:**
+- mod_audio_fork.so
+- mod_aws_transcribe.so
+- mod_azure_transcribe.so
+- mod_deepgram_transcribe.so
+- mod_google_transcribe.so
+
+### Utility Scripts
+
+#### Installation Status
+
+Quickly check what's installed and running:
+
+```bash
+./status.sh [--freeswitch-prefix PATH]
+```
+
+**Output example:**
+```
+FreeSWITCH Installation Status:
+✓ FreeSWITCH: Running
+  ✓ mod_audio_fork: Installed and loaded
+  ✓ mod_aws_transcribe: Installed and loaded
+  ⚠  mod_deepgram_transcribe: Installed but not loaded
+
+Installation Manifest:
+  ✓ freeswitch (installed by us)
+  ✓ libwebsockets (installed by us)
+  ℹ  grpc (was already installed)
+  ℹ  aws-sdk-cpp (was already installed)
+```
+
+**Use cases:**
+- Quick health check
+- Troubleshooting module loading issues
+- Verifying installation before running tests
+
+#### Health Check & Validation
+
+Comprehensive validation of all components:
+
+```bash
+./health-check.sh [--freeswitch-prefix PATH]
+```
+
+**Checks performed:**
+- ✓ FreeSWITCH responsive (via fs_cli)
+- ✓ All 5 modules loaded
+- ✓ Module dependencies satisfied (ldd check)
+- ✓ Systemd service status
+- ✓ Configuration files present
+- ✓ Log file permissions
+
+**Exit codes:**
+- `0` - All checks passed (CI/CD friendly)
+- `1` - One or more checks failed
+
+**Output example:**
+```
+Health Check Results:
+
+FreeSWITCH Core:
+✓ Installed at /usr/local/freeswitch
+✓ Running (PID: 12345)
+✓ Responsive to API commands
+
+Modules:
+✓ mod_audio_fork: Loaded, no missing dependencies
+✓ mod_aws_transcribe: Loaded, no missing dependencies
+✗ mod_deepgram_transcribe: Not loaded
+✓ mod_azure_transcribe: Loaded, no missing dependencies
+✓ mod_google_transcribe: Loaded, no missing dependencies
+
+Configuration:
+✓ All .conf.xml files present
+✓ Dialplan configuration valid
+
+Summary: 1 check(s) failed
+Exit code: 1
+```
+
+**Use in CI/CD:**
+```bash
+./health-check.sh || exit 1  # Fail pipeline if health check fails
+```
+
+#### Fast Module Updates
+
+Update modules without rebuilding all dependencies:
+
+```bash
+./update-modules.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - FreeSWITCH directory
+- `--build-cpus N` - CPU cores for compilation
+- `--no-restart` - Don't restart FreeSWITCH after update
+- `--yes` - Skip confirmation prompts
+
+**What it does:**
+1. 🔄 Pulls latest code from git repository
+2. 💾 Backs up existing modules
+3. 🔨 Rebuilds only the modules (fast!)
+4. 🔃 Restarts FreeSWITCH (optional)
+
+**Example:**
+```bash
+# Standard update (pulls, builds, restarts)
+./update-modules.sh
+
+# Update without restarting (for manual reload)
+./update-modules.sh --no-restart
+
+# Fast update with 8 cores
+./update-modules.sh --build-cpus 8
+```
+
+**Update time:** 5-10 minutes (vs 45-60 minutes for full reinstall)
+
+**Backup location:**
+```
+/usr/local/freeswitch/lib/freeswitch/mod/.backup.20251123_103000/
+```
+
+**Rollback if needed:**
+```bash
+# If update breaks something, restore from backup
+BACKUP_DIR="/usr/local/freeswitch/lib/freeswitch/mod/.backup.20251123_103000"
+cp $BACKUP_DIR/*.so /usr/local/freeswitch/lib/freeswitch/mod/
+systemctl restart freeswitch
+```
+
+### Script Options Reference
+
+All scripts support common options:
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--freeswitch-prefix PATH` | FreeSWITCH installation directory | `/usr/local/freeswitch` |
+| `--build-cpus N` | CPU cores for compilation | `4` |
+| `--yes` | Skip all confirmation prompts | Interactive mode |
+| `--help` | Show help message | - |
+
+**Environment detection:**
+- ✅ Automatically detects systemd availability
+- ✅ Checks for existing installations before building
+- ✅ Validates dependencies before proceeding
+
+---
+
 ## Building
 
 ### Docker Build (All 5 Modules)
