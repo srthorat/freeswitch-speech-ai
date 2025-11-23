@@ -24,7 +24,7 @@ This directory contains all installation, maintenance, and utility scripts for F
 
 | Script | Description | Typical Use |
 |--------|-------------|-------------|
-| **update-modules.sh** | Fast module updates (5-10 min) | Update modules without rebuilding dependencies |
+| **update-modules.sh** | Fast module updates (3-5 min) | Update modules without rebuilding dependencies |
 | **backup.sh** | Create backup of FreeSWITCH installation | Before upgrades or major changes |
 | **rollback.sh** | Restore from backup | Recover from failed upgrades |
 
@@ -34,13 +34,6 @@ This directory contains all installation, maintenance, and utility scripts for F
 |--------|-------------|--------|
 | **status.sh** | Quick installation status | What's installed and running |
 | **health-check.sh** | Comprehensive validation | Detailed health report (CI/CD friendly) |
-
-### 🐳 Docker Scripts
-
-| Script | Description | Build Time |
-|--------|-------------|------------|
-| **build-all-modules.sh** | Build Docker image with all 5 modules | 45-60 minutes |
-| **run-all-modules.sh** | Run Docker container with all modules | Instant |
 
 ---
 
@@ -172,15 +165,13 @@ sudo ./scripts/cleanup-all.sh --yes
 
 ### install-all.sh
 
-**Purpose:** Full installation of FreeSWITCH, all 5 modules, and dependencies
+**Purpose:** Full installation of FreeSWITCH, 3 core modules, and dependencies
 
 **What it installs:**
 - FreeSWITCH 1.10.11
 - libwebsockets 4.3.3
 - AWS SDK C++ 1.11.345
-- gRPC 1.64.2
-- Azure Speech SDK
-- All 5 transcription modules
+- 3 core transcription modules (audio_fork, aws, deepgram)
 - Example dialplan
 - Systemd service
 
@@ -189,7 +180,7 @@ sudo ./scripts/cleanup-all.sh --yes
 - `--build-cpus N` - CPU cores for compilation (default: 4)
 - `--yes` - Skip confirmation prompts
 
-**Installation time:** 45-60 minutes
+**Installation time:** 25-30 minutes
 
 **Example:**
 ```bash
@@ -206,7 +197,7 @@ sudo ./scripts/install-all.sh --build-cpus 8 --freeswitch-prefix /opt/freeswitch
 **What it does:**
 - Checks for existing dependencies
 - Installs missing dependencies only
-- Builds all 5 transcription modules
+- Builds 3 core transcription modules (audio_fork, aws, deepgram)
 - Does NOT copy dialplan (preserves your configuration)
 
 **Options:**
@@ -214,7 +205,7 @@ sudo ./scripts/install-all.sh --build-cpus 8 --freeswitch-prefix /opt/freeswitch
 - `--build-cpus N` - CPU cores for compilation
 - `--yes` - Skip confirmation prompts
 
-**Installation time:** 30-45 minutes (faster if dependencies exist)
+**Installation time:** 15-20 minutes (faster if dependencies exist)
 
 **Example:**
 ```bash
@@ -239,7 +230,7 @@ sudo ./scripts/install-modules-only.sh --freeswitch-prefix /usr/local/freeswitch
 - `--no-restart` - Don't restart FreeSWITCH
 - `--yes` - Skip confirmation
 
-**Update time:** 5-10 minutes
+**Update time:** 3-5 minutes
 
 **Backup location:** `/usr/local/freeswitch/lib/freeswitch/mod/.backup.YYYYMMDD_HHMMSS/`
 
@@ -350,8 +341,6 @@ sudo ./scripts/rollback.sh --backup /var/backups/freeswitch/backup-20251123-1030
 **What it configures:**
 - Deepgram API key
 - AWS credentials (permanent or STS)
-- Azure subscription key
-- Google Cloud credentials
 
 **Output files:**
 - `.env.transcription` - Environment file
@@ -424,52 +413,7 @@ sudo ./scripts/configure-services.sh  # Also configures systemd
 
 ---
 
-### build-all-modules.sh
-
-**Purpose:** Build Docker image with all 5 modules
-
-**Options:**
-- `--cpus N` - CPU cores for build
-- `--tag NAME` - Custom image tag
-- `--no-cache` - Build without cache
-
-**Build time:** 45-60 minutes
-
-**Example:**
-```bash
-./scripts/build-all-modules.sh
-./scripts/build-all-modules.sh --cpus 8 --tag my-custom-tag
-```
-
----
-
-### run-all-modules.sh
-
-**Purpose:** Run Docker container with all modules
-
-**Arguments:**
-```bash
-./scripts/run-all-modules.sh IMAGE_NAME \
-  [DEEPGRAM_KEY] \
-  [AZURE_KEY] [AZURE_REGION] \
-  [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] \
-  [AWS_SESSION_TOKEN] \
-  [GOOGLE_CREDENTIALS_PATH]
-```
-
-**Example:**
-```bash
-# Run with Deepgram only
-./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules sk_***
-
-# Run with all services
-./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
-  sk_deepgram \
-  azure_key eastus \
-  AKIA*** aws_secret us-east-1 \
-  "" \
-  /path/to/google-creds.json
-```
+> **Note:** Docker build/run scripts (`build-all-modules.sh` and `run-all-modules.sh`) are in the root directory, not in `scripts/`. See main [README.md](../README.md) for Docker documentation.
 
 ---
 

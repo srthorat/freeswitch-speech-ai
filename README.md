@@ -19,7 +19,7 @@ A collection of production-ready FreeSWITCH modules for real-time speech-to-text
 ### Build Core 3 Modules
 
 ```bash
-./scripts/build-all-modules.sh
+./build-all-modules.sh
 ```
 
 **Build time:** 25-30 minutes (includes AWS SDK and libwebsockets)
@@ -35,15 +35,12 @@ docker-compose up -d
 
 ```bash
 # Basic run (no credentials)
-./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules
+./run-all-modules.sh freeswitch-speech-ai:all-modules
 
-# With all API keys
-./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
+# With API keys
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
   DEEPGRAM_KEY \
-  AZURE_KEY eastus \
-  AWS_KEY AWS_SECRET us-east-1 \
-  "" \
-  /path/to/google-credentials.json
+  AWS_KEY AWS_SECRET us-east-1
 ```
 
 ---
@@ -390,13 +387,13 @@ All scripts support common options:
 
 ```bash
 # Default build (4 CPUs)
-./scripts/build-all-modules.sh
+./build-all-modules.sh
 
 # Custom build
-./scripts/build-all-modules.sh --cpus 8 --tag my-custom-tag
+./build-all-modules.sh --cpus 8 --tag my-custom-tag
 
 # Without cache
-./scripts/build-all-modules.sh --no-cache
+./build-all-modules.sh --no-cache
 ```
 
 **Features:**
@@ -454,7 +451,7 @@ docker-compose up -d
 ### Option 2: Run Script
 
 ```bash
-./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
   [DEEPGRAM_KEY] \
   [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] \
   [AWS_SESSION_TOKEN]
@@ -464,21 +461,21 @@ docker-compose up -d
 
 ```bash
 # Deepgram only
-./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
   sk_***
 
 # AWS permanent credentials (AKIA*)
-./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
   "" \
   AKIA*** secret us-east-1
 
 # AWS temporary STS credentials (ASIA*)
-./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
   "" \
   ASIA*** secret us-east-1 IQoJ***
 
 # Both Deepgram and AWS
-./scripts/run-all-modules.sh freeswitch-speech-ai:all-modules \
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
   sk_deepgram \
   AKIA*** aws_secret us-east-1
 ```
