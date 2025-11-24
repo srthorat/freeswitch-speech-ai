@@ -191,16 +191,30 @@ public:
 				emit_metadata_event(psession, m_metadata.c_str(), TRANSCRIBE_EVENT_SESSION_START, m_bugname.c_str());
 
 				// Send session start to Pusher (if configured)
-				// Try multiple call ID sources (fallback order: sip_call_id, uuid, call_uuid)
-				const char* call_id = switch_channel_get_variable(channel, "sip_call_id");
-				if (!call_id) call_id = switch_core_session_get_uuid(psession);
-				if (!call_id) call_id = switch_channel_get_variable(channel, "call_uuid");
+				// Wait for sip_call_id to become available (retry up to 10 times with 50ms delay)
+				const char* sip_call_id = NULL;
+				int retry_count = 0;
+				const int max_retries = 10;
+				const int retry_delay_ms = 50;
 
-				if (call_id) {
-					send_session_start_to_pusher(psession, call_id);
+				while (retry_count < max_retries) {
+					sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+					if (sip_call_id) {
+						break;
+					}
+					retry_count++;
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG,
+						"Waiting for sip_call_id to become available (attempt %d/%d)\n",
+						retry_count, max_retries);
+					switch_yield(retry_delay_ms * 1000); // Convert ms to microseconds
+				}
+
+				if (sip_call_id) {
+					send_session_start_to_pusher(psession, sip_call_id);
 				} else {
-					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_WARNING,
-						"Cannot send session_start to Pusher: no call ID found (sip_call_id, uuid, call_uuid all missing)\n");
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_ERROR,
+						"Cannot send session_start to Pusher: sip_call_id not available after %d retries (%dms total)\n",
+						max_retries, max_retries * retry_delay_ms);
 				}
 
 				// Send any pre-connection buffered audio (simple deque approach like Deepgram)

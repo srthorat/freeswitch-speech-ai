@@ -411,26 +411,38 @@ static void responseHandler(switch_core_session_t* session,
 
 	// Send session start to Pusher on successful connection
 	if (0 == strcmp(eventName, TRANSCRIBE_EVENT_CONNECT_SUCCESS)) {
-		// Try multiple call ID sources (fallback order: sip_call_id, uuid, call_uuid)
-		const char* call_id = switch_channel_get_variable(channel, "sip_call_id");
-		if (!call_id) call_id = switch_core_session_get_uuid(session);
-		if (!call_id) call_id = switch_channel_get_variable(channel, "call_uuid");
+		// Wait for sip_call_id to become available (retry up to 10 times with 50ms delay)
+		const char* sip_call_id = NULL;
+		int retry_count = 0;
+		const int max_retries = 10;
+		const int retry_delay_ms = 50;
 
-		if (call_id) {
-			send_session_start_to_pusher(session, call_id);
+		while (retry_count < max_retries) {
+			sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+			if (sip_call_id) {
+				break;
+			}
+			retry_count++;
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+				"Waiting for sip_call_id to become available (attempt %d/%d)\n",
+				retry_count, max_retries);
+			switch_yield(retry_delay_ms * 1000); // Convert ms to microseconds
+		}
+
+		if (sip_call_id) {
+			send_session_start_to_pusher(session, sip_call_id);
 		} else {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
-				"Cannot send session_start to Pusher: no call ID found (sip_call_id, uuid, call_uuid all missing)\n");
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+				"Cannot send session_start to Pusher: sip_call_id not available after %d retries (%dms total)\n",
+				max_retries, max_retries * retry_delay_ms);
 		}
 	}
 
 	// Send transcription results to Pusher (if configured)
-	// Try multiple call ID sources for transcription events
-	const char* call_id = switch_channel_get_variable(channel, "sip_call_id");
-	if (!call_id) call_id = switch_core_session_get_uuid(session);
-	if (!call_id) call_id = switch_channel_get_variable(channel, "call_uuid");
+	// Use sip_call_id only (should be available by now)
+	const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
 
-	if (call_id && json) {
+	if (sip_call_id && json) {
 		// Determine if this is final or interim based on JSON content
 		switch_bool_t is_final = SWITCH_FALSE;
 		cJSON* root = cJSON_Parse(json);
@@ -445,7 +457,7 @@ static void responseHandler(switch_core_session_t* session,
 			}
 			cJSON_Delete(root);
 		}
-		send_to_pusher(session, json, call_id, is_final);
+		send_to_pusher(session, json, sip_call_id, is_final);
 	}
 
 	switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, eventName);
