@@ -153,8 +153,16 @@ handle_error() {
     echo -e "${YELLOW}Troubleshooting:${NC}"
     echo -e "  1. Check the error message above for details"
     echo -e "  2. Review the installation manifest: ${MANIFEST_FILE}"
-    echo -e "  3. Check system logs: /var/log/syslog or journalctl"
-    echo -e "  4. Run cleanup script and try again: sudo ./cleanup-all.sh"
+    echo -e "  3. Check detailed build logs in /tmp/:"
+    echo -e "     • spandsp: /tmp/spandsp_*.log"
+    echo -e "     • sofia-sip: /tmp/sofia_*.log" 
+    echo -e "     • FreeSWITCH: /tmp/freeswitch_*.log"
+    echo -e "     • mod_audio_fork: /tmp/mod_audio_fork_*.log"
+    echo -e "     • mod_deepgram: /tmp/mod_deepgram_*.log"
+    echo -e "     • mod_aws: /tmp/mod_aws_*.log"
+    echo -e "  4. Check system logs: /var/log/syslog or journalctl"
+    echo -e "  5. View recent log files: ls -la /tmp/*_{make,configure,install}.log"
+    echo -e "  6. Run cleanup script and try again: sudo ./cleanup-all.sh"
     echo ""
 
     exit $exit_code
@@ -235,7 +243,7 @@ echo "Configuration:"
 echo "  Install FreeSWITCH: $([ "$SKIP_FREESWITCH" = false ] && echo "Yes" || echo "No (modules only)")"
 echo "  Copy Dialplan: Yes (always)"
 echo "  Build CPUs: $BUILD_CPUS"
-echo "  Install Prefix: $INSTALL_PREFIX"
+echo "  Install Prefix: $FS_PREFIX"
 echo ""
 
 # Check if FreeSWITCH is already installed
@@ -253,6 +261,11 @@ fi
 # ============================================================================
 CURRENT_STEP=1
 show_progress $CURRENT_STEP "Install System Dependencies"
+
+# Clean up any previous build logs
+log_substep "Cleaning up previous build logs..."
+rm -f /tmp/{spandsp,sofia,freeswitch,mod_*}_{clone,checkout,bootstrap,configure,make,install,gcc,g++,link}.log 2>/dev/null || true
+echo -e "  ${GREEN}✓${NC} Previous build logs cleared"
 
 log_substep "Updating package lists..."
 apt-get update > /dev/null 2>&1
@@ -465,24 +478,26 @@ else
 
     # Always ensure we're on the right version
     log_substep "Checking out spandsp commit 0d2e6ac..."
-    git checkout 0d2e6ac > /dev/null 2>&1
-    check_success "Failed to checkout spandsp version" "git checkout 0d2e6ac"
+    git checkout 0d2e6ac 2>&1 | tee /tmp/spandsp_checkout.log
+    check_success "Failed to checkout spandsp version (check /tmp/spandsp_checkout.log)" "git checkout 0d2e6ac"
 
     log_substep "Bootstrapping spandsp..."
-    ./bootstrap.sh > /dev/null 2>&1
-    check_success "Failed to bootstrap spandsp" "./bootstrap.sh"
+    ./bootstrap.sh 2>&1 | tee /tmp/spandsp_bootstrap.log
+    check_success "Failed to bootstrap spandsp (check /tmp/spandsp_bootstrap.log)" "./bootstrap.sh"
 
     log_substep "Configuring spandsp..."
-    ./configure > /dev/null 2>&1
-    check_success "Failed to configure spandsp" "./configure"
+    ./configure 2>&1 | tee /tmp/spandsp_configure.log
+    check_success "Failed to configure spandsp (check /tmp/spandsp_configure.log)" "./configure"
 
     log_substep "Compiling spandsp (using ${BUILD_CPUS} CPU cores)..."
-    make -j ${BUILD_CPUS} > /dev/null 2>&1
-    check_success "Failed to compile spandsp" "make -j ${BUILD_CPUS}"
+    echo -e "  ${CYAN}[$(date +%T)] Running: make -j ${BUILD_CPUS}${NC}"
+    make -j ${BUILD_CPUS} 2>&1 | tee /tmp/spandsp_make.log
+    check_success "Failed to compile spandsp (check /tmp/spandsp_make.log)" "make -j ${BUILD_CPUS}"
+    echo -e "  ${GREEN}[$(date +%T)] ✓ spandsp compilation completed${NC}"
 
     log_substep "Installing spandsp..."
-    make install > /dev/null 2>&1
-    check_success "Failed to install spandsp" "make install"
+    make install 2>&1 | tee /tmp/spandsp_install.log
+    check_success "Failed to install spandsp (check /tmp/spandsp_install.log)" "make install"
 
     ldconfig
     echo "libspandsp=installed" >> "$MANIFEST_FILE"
@@ -513,20 +528,22 @@ else
     cd sofia-sip
 
     log_substep "Bootstrapping sofia-sip..."
-    ./bootstrap.sh > /dev/null 2>&1
-    check_success "Failed to bootstrap sofia-sip" "./bootstrap.sh"
+    ./bootstrap.sh 2>&1 | tee /tmp/sofia_bootstrap.log
+    check_success "Failed to bootstrap sofia-sip (check /tmp/sofia_bootstrap.log)" "./bootstrap.sh"
 
     log_substep "Configuring sofia-sip..."
-    ./configure > /dev/null 2>&1
-    check_success "Failed to configure sofia-sip" "./configure"
+    ./configure 2>&1 | tee /tmp/sofia_configure.log
+    check_success "Failed to configure sofia-sip (check /tmp/sofia_configure.log)" "./configure"
 
     log_substep "Compiling sofia-sip (using ${BUILD_CPUS} CPU cores)..."
-    make -j ${BUILD_CPUS} > /dev/null 2>&1
-    check_success "Failed to compile sofia-sip" "make -j ${BUILD_CPUS}"
+    echo -e "  ${CYAN}[$(date +%T)] Running: make -j ${BUILD_CPUS}${NC}"
+    make -j ${BUILD_CPUS} 2>&1 | tee /tmp/sofia_make.log
+    check_success "Failed to compile sofia-sip (check /tmp/sofia_make.log)" "make -j ${BUILD_CPUS}"
+    echo -e "  ${GREEN}[$(date +%T)] ✓ sofia-sip compilation completed${NC}"
 
     log_substep "Installing sofia-sip..."
-    make install > /dev/null 2>&1
-    check_success "Failed to install sofia-sip" "make install"
+    make install 2>&1 | tee /tmp/sofia_install.log
+    check_success "Failed to install sofia-sip (check /tmp/sofia_install.log)" "make install"
 
     ldconfig
     echo "libsofia-sip=installed" >> "$MANIFEST_FILE"
@@ -577,36 +594,62 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     sed -i 's/^languages\/mod_php$/#&/' modules.conf
     echo -e "  ${GREEN}✓${NC} Disabled optional modules (verto, rtc, skinny, signalwire, av, python, java, perl, php)"
 
-    log_substep "Configuring FreeSWITCH (prefix: ${FS_PREFIX})..."
-    echo -e "  ${CYAN}[$(date +%T)] Running: ./configure --prefix=${FS_PREFIX} --enable-core-pgsql-support --enable-core-odbc-support --enable-tcmalloc --without-python --without-python3 --without-java --without-perl${NC}"
-    ./configure --prefix=${FS_PREFIX} \
+    log_substep "Configuring FreeSWITCH with full prefix paths..."
+    echo -e "  ${CYAN}[$(date +%T)] Running: ./configure with correct path prefixes${NC}"
+    ./configure \
+        --prefix=${FS_PREFIX} \
+        --exec-prefix=${FS_PREFIX} \
+        --bindir=${FS_PREFIX}/bin \
+        --sbindir=${FS_PREFIX}/bin \
+        --sysconfdir=${FS_PREFIX}/conf \
+        --localstatedir=${FS_PREFIX} \
+        --with-rundir=${FS_PREFIX}/run \
+        --with-logdir=${FS_PREFIX}/log \
+        --with-modinstdir=${FS_PREFIX}/lib/freeswitch/mod \
         --enable-core-pgsql-support \
         --enable-core-odbc-support \
         --enable-tcmalloc \
         --without-python \
         --without-python3 \
         --without-java \
-        --without-perl
-    check_success "Failed to configure FreeSWITCH" "./configure"
+        --without-perl 2>&1 | tee /tmp/freeswitch_configure.log
+    check_success "Failed to configure FreeSWITCH (check /tmp/freeswitch_configure.log)" "./configure"
     echo -e "  ${GREEN}[$(date +%T)] ✓ Configure completed${NC}"
 
     log_substep "Compiling FreeSWITCH (using ${BUILD_CPUS} CPU cores, 15-20 min)..."
     echo -e "  ${CYAN}[$(date +%T)] Running: make -j ${BUILD_CPUS}${NC}"
-    echo -e "  ${YELLOW}This will take 15-20 minutes. All compilation output will be shown below...${NC}"
-    make -j ${BUILD_CPUS}
-    check_success "Failed to compile FreeSWITCH" "make -j ${BUILD_CPUS}"
-    echo -e "  ${GREEN}[$(date +%T)] ✓ Compilation completed${NC}"
+    echo -e "  ${YELLOW}⚠  This will take 15-20 minutes. Build output logged to /tmp/freeswitch_make.log${NC}"
+    echo -e "  ${YELLOW}⚠  You can monitor progress with: tail -f /tmp/freeswitch_make.log${NC}"
+    
+    # Show compilation progress with timestamped markers
+    echo -e "  ${CYAN}[$(date +%T)] ▶  Starting FreeSWITCH compilation...${NC}"
+    make -j ${BUILD_CPUS} 2>&1 | tee /tmp/freeswitch_make.log | while IFS= read -r line; do
+        # Show progress markers for major components
+        if echo "$line" | grep -q "make\[1\]: Entering directory"; then
+            echo -e "  ${BLUE}[$(date +%T)] ◉  $line${NC}"
+        elif echo "$line" | grep -q "CCLD.*\.la$"; then
+            echo -e "  ${GREEN}[$(date +%T)] ✓  $line${NC}"
+        fi
+    done
+    
+    # Check if make succeeded
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        echo -e "  ${RED}[$(date +%T)] ✗ Compilation failed${NC}"
+        check_success "Failed to compile FreeSWITCH (check /tmp/freeswitch_make.log)" "make -j ${BUILD_CPUS}"
+    fi
+    echo -e "  ${GREEN}[$(date +%T)] ✓ Compilation completed successfully${NC}"
 
     log_substep "Installing FreeSWITCH..."
     echo -e "  ${CYAN}[$(date +%T)] Running: make install${NC}"
-    make install
-    check_success "Failed to install FreeSWITCH" "make install"
+    make install 2>&1 | tee /tmp/freeswitch_install.log
+    check_success "Failed to install FreeSWITCH (check /tmp/freeswitch_install.log)" "make install"
     echo -e "  ${GREEN}[$(date +%T)] ✓ Installation completed${NC}"
 
     log_substep "Installing FreeSWITCH sounds and music on hold..."
     echo -e "  ${CYAN}[$(date +%T)] Running: make cd-sounds-install cd-moh-install${NC}"
-    make cd-sounds-install cd-moh-install
-    check_success "Failed to install FreeSWITCH sounds" "make cd-sounds-install"
+    echo -e "  ${YELLOW}⚠  Sound file downloads logged to /tmp/freeswitch_sounds.log${NC}"
+    make cd-sounds-install cd-moh-install 2>&1 | tee /tmp/freeswitch_sounds.log
+    check_success "Failed to install FreeSWITCH sounds (check /tmp/freeswitch_sounds.log)" "make cd-sounds-install"
     echo -e "  ${GREEN}[$(date +%T)] ✓ Sounds installation completed${NC}"
 
     log_substep "Installing sample configuration (vanilla)..."
@@ -675,8 +718,8 @@ echo -e "  ${CYAN}[$(date +%T)] Running: gcc -fPIC -c -I${FS_PREFIX}/include/fre
 gcc -fPIC -c \
     -I${FS_PREFIX}/include/freeswitch \
     -I/usr/local/include \
-    mod_audio_fork.c
-check_success "Failed to compile mod_audio_fork.c" "gcc mod_audio_fork.c"
+    mod_audio_fork.c 2>&1 | tee /tmp/mod_audio_fork_gcc.log
+check_success "Failed to compile mod_audio_fork.c (check /tmp/mod_audio_fork_gcc.log)" "gcc mod_audio_fork.c"
 echo -e "  ${GREEN}[$(date +%T)] ✓ mod_audio_fork.c compiled${NC}"
 
 log_substep "Compiling C++ files (lws_glue.cpp, audio_pipe.cpp, parser.cpp)..."
@@ -684,8 +727,8 @@ echo -e "  ${CYAN}[$(date +%T)] Running: g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/
 g++ -fPIC -c -std=c++11 \
     -I${FS_PREFIX}/include/freeswitch \
     -I/usr/local/include \
-    lws_glue.cpp audio_pipe.cpp parser.cpp
-check_success "Failed to compile C++ files" "g++ C++ files"
+    lws_glue.cpp audio_pipe.cpp parser.cpp 2>&1 | tee /tmp/mod_audio_fork_g++.log
+check_success "Failed to compile C++ files (check /tmp/mod_audio_fork_g++.log)" "g++ C++ files"
 echo -e "  ${GREEN}[$(date +%T)] ✓ C++ files compiled${NC}"
 
 log_substep "Linking mod_audio_fork.so..."
@@ -697,8 +740,8 @@ g++ -shared \
     -lwebsockets \
     -lpthread \
     -lssl \
-    -lcrypto
-check_success "Failed to link mod_audio_fork.so" "g++ linking"
+    -lcrypto 2>&1 | tee /tmp/mod_audio_fork_link.log
+check_success "Failed to link mod_audio_fork.so (check /tmp/mod_audio_fork_link.log)" "g++ linking"
 echo -e "  ${GREEN}[$(date +%T)] ✓ mod_audio_fork.so linked${NC}"
 
 log_substep "Validating mod_audio_fork.so with ldd..."
@@ -721,20 +764,25 @@ cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe
 check_success "Failed to change directory to mod_deepgram_transcribe" "cd modules/mod_deepgram_transcribe"
 
 log_substep "Compiling mod_deepgram_transcribe.c..."
+echo -e "  ${CYAN}[$(date +%T)] Running: gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c${NC}"
 gcc -fPIC -c \
     -I${FS_PREFIX}/include/freeswitch \
     -I/usr/local/include \
-    mod_deepgram_transcribe.c 2>&1 | tee /tmp/mod_deepgram_gcc.log > /dev/null
+    mod_deepgram_transcribe.c 2>&1 | tee /tmp/mod_deepgram_gcc.log
 check_success "Failed to compile mod_deepgram_transcribe.c (check /tmp/mod_deepgram_gcc.log)" "gcc mod_deepgram_transcribe.c"
+echo -e "  ${GREEN}[$(date +%T)] ✓ mod_deepgram_transcribe.c compiled${NC}"
 
 log_substep "Compiling C++ files (dg_transcribe_glue.cpp, audio_pipe.cpp, parser.cpp)..."
+echo -e "  ${CYAN}[$(date +%T)] Running: g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp${NC}"
 g++ -fPIC -c -std=c++11 \
     -I${FS_PREFIX}/include/freeswitch \
     -I/usr/local/include \
-    dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp 2>&1 | tee /tmp/mod_deepgram_g++.log > /dev/null
+    dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp 2>&1 | tee /tmp/mod_deepgram_g++.log
 check_success "Failed to compile C++ files (check /tmp/mod_deepgram_g++.log)" "g++ C++ files"
+echo -e "  ${GREEN}[$(date +%T)] ✓ C++ files compiled${NC}"
 
 log_substep "Linking mod_deepgram_transcribe.so..."
+echo -e "  ${CYAN}[$(date +%T)] Running: g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so *.o -lwebsockets -lpthread -lssl -lcrypto${NC}"
 g++ -shared \
     -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
     mod_deepgram_transcribe.o \
@@ -744,8 +792,9 @@ g++ -shared \
     -lwebsockets \
     -lpthread \
     -lssl \
-    -lcrypto 2>&1 | tee /tmp/mod_deepgram_link.log > /dev/null
+    -lcrypto 2>&1 | tee /tmp/mod_deepgram_link.log
 check_success "Failed to link mod_deepgram_transcribe.so (check /tmp/mod_deepgram_link.log)" "g++ linking"
+echo -e "  ${GREEN}[$(date +%T)] ✓ mod_deepgram_transcribe.so linked${NC}"
 
 log_substep "Validating mod_deepgram_transcribe.so with ldd..."
 if ldd ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so | grep -q "not found"; then
@@ -767,19 +816,24 @@ cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe
 check_success "Failed to change directory to mod_aws_transcribe" "cd modules/mod_aws_transcribe"
 
 log_substep "Compiling mod_aws_transcribe.c..."
+echo -e "  ${CYAN}[$(date +%T)] Running: gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c${NC}"
 gcc -fPIC -c \
     -I${FS_PREFIX}/include/freeswitch \
-    mod_aws_transcribe.c 2>&1 | tee /tmp/mod_aws_gcc.log > /dev/null
+    mod_aws_transcribe.c 2>&1 | tee /tmp/mod_aws_gcc.log
 check_success "Failed to compile mod_aws_transcribe.c (check /tmp/mod_aws_gcc.log)" "gcc mod_aws_transcribe.c"
+echo -e "  ${GREEN}[$(date +%T)] ✓ mod_aws_transcribe.c compiled${NC}"
 
 log_substep "Compiling aws_transcribe_glue.cpp..."
+echo -e "  ${CYAN}[$(date +%T)] Running: g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp${NC}"
 g++ -fPIC -c -std=c++11 \
     -I${FS_PREFIX}/include/freeswitch \
     -I/usr/local/include \
-    aws_transcribe_glue.cpp 2>&1 | tee /tmp/mod_aws_g++.log > /dev/null
+    aws_transcribe_glue.cpp 2>&1 | tee /tmp/mod_aws_g++.log
 check_success "Failed to compile aws_transcribe_glue.cpp (check /tmp/mod_aws_g++.log)" "g++ aws_transcribe_glue.cpp"
+echo -e "  ${GREEN}[$(date +%T)] ✓ aws_transcribe_glue.cpp compiled${NC}"
 
 log_substep "Linking mod_aws_transcribe.so with AWS SDK libraries..."
+echo -e "  ${CYAN}[$(date +%T)] Running: g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so *.o -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core...${NC}"
 g++ -shared \
     -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
     mod_aws_transcribe.o \
@@ -794,8 +848,9 @@ g++ -shared \
     -lcurl \
     -lssl \
     -lcrypto \
-    -lz 2>&1 | tee /tmp/mod_aws_link.log > /dev/null
+    -lz 2>&1 | tee /tmp/mod_aws_link.log
 check_success "Failed to link mod_aws_transcribe.so (check /tmp/mod_aws_link.log)" "g++ linking"
+echo -e "  ${GREEN}[$(date +%T)] ✓ mod_aws_transcribe.so linked${NC}"
 
 log_substep "Validating mod_aws_transcribe.so with ldd..."
 if ldd ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so | grep -q "not found"; then
@@ -855,6 +910,7 @@ fi
 
 # Create systemd service
 log_substep "Creating FreeSWITCH systemd service..."
+# Note: Running as root to avoid permission issues with scheduler and PID file management
 cat > /etc/systemd/system/freeswitch.service <<EOF
 [Unit]
 Description=FreeSWITCH
@@ -864,18 +920,21 @@ Wants=network-online.target
 [Service]
 Type=forking
 PIDFile=${FS_PREFIX}/run/freeswitch.pid
+Environment="LD_LIBRARY_PATH=/usr/local/lib"
 
-ExecStart=${FS_PREFIX}/bin/freeswitch -ncwait -nonat -conf ${FS_PREFIX}/conf -log ${FS_PREFIX}/log -db ${FS_PREFIX}/db
+ExecStartPre=/usr/bin/mkdir -p ${FS_PREFIX}/run
+ExecStart=${FS_PREFIX}/bin/freeswitch -nc -nonat -conf ${FS_PREFIX}/conf -log ${FS_PREFIX}/log -db ${FS_PREFIX}/db -run ${FS_PREFIX}/run
 ExecReload=/usr/bin/kill -HUP \$MAINPID
 ExecStop=${FS_PREFIX}/bin/freeswitch -stop
 
-User=freeswitch
-Group=freeswitch
-
-TimeoutStartSec=45s
+TimeoutStartSec=120s
 TimeoutStopSec=45s
 Restart=on-failure
-RestartSec=5s
+RestartSec=10s
+
+# Allow process to manage its own PID file
+GuessMainPID=yes
+RemainAfterExit=no
 
 [Install]
 WantedBy=multi-user.target
@@ -884,10 +943,10 @@ echo -e "  ${GREEN}✓${NC} FreeSWITCH systemd service created"
 
 # Create environment configuration in drop-in directory
 log_substep "Creating FreeSWITCH environment configuration..."
+# Note: LD_LIBRARY_PATH is set in main service file to avoid duplication
 mkdir -p /etc/systemd/system/freeswitch.service.d
 cat > /etc/systemd/system/freeswitch.service.d/environment.conf <<EOF
 [Service]
-Environment="LD_LIBRARY_PATH=/usr/local/lib"
 Environment="DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}"
 Environment="AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}"
 Environment="AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}"
@@ -898,11 +957,10 @@ Environment="PUSHER_KEY=${PUSHER_KEY:-}"
 Environment="PUSHER_SECRET=${PUSHER_SECRET:-}"
 Environment="PUSHER_CLUSTER=${PUSHER_CLUSTER:-}"
 EOF
-echo -e "  ${GREEN}✓${NC} Environment configuration created at /etc/systemd/system/freeswitch.service.d/environment.conf"
+echo -e "  ${GREEN}✓${NC} Environment configuration created (API keys only - LD_LIBRARY_PATH in main service)"
 
 # Create run directory for PID file
 mkdir -p ${FS_PREFIX}/run
-chown freeswitch:freeswitch ${FS_PREFIX}/run
 
 systemctl daemon-reload
 systemctl enable freeswitch.service
@@ -911,6 +969,15 @@ echo -e "  ${GREEN}✓${NC} FreeSWITCH systemd service enabled"
 # Configure system resource limits (ulimit)
 log_substep "Configuring system resource limits..."
 cat > /etc/security/limits.d/freeswitch.conf <<EOF
+root soft nofile 999999
+root hard nofile 999999
+root soft core unlimited
+root hard core unlimited
+root soft memlock unlimited
+root hard memlock unlimited
+root soft stack 240
+root hard stack 240
+# Keep freeswitch user limits for potential future use
 freeswitch soft nofile 999999
 freeswitch hard nofile 999999
 freeswitch soft core unlimited
@@ -920,7 +987,7 @@ freeswitch hard memlock unlimited
 freeswitch soft stack 240
 freeswitch hard stack 240
 EOF
-echo -e "  ${GREEN}✓${NC} Resource limits configured (file descriptors: 999999, core dumps: unlimited)"
+echo -e "  ${GREEN}✓${NC} Resource limits configured for root and freeswitch users"
 
 # Configure log rotation
 log_substep "Configuring log rotation..."
@@ -997,11 +1064,7 @@ echo -e "  ${GREEN}✓${NC} Working directories created (temp, cache, recordings
 # Configure core dumps
 log_substep "Configuring core dump collection..."
 mkdir -p /var/crash/freeswitch
-chown freeswitch:freeswitch /var/crash/freeswitch
-# Add core dump configuration to systemd service
-sed -i '/\[Service\]/a LimitCORE=infinity\nWorkingDirectory=/var/crash/freeswitch' /etc/systemd/system/freeswitch.service
-systemctl daemon-reload
-echo -e "  ${GREEN}✓${NC} Core dump collection enabled at /var/crash/freeswitch"
+echo -e "  ${GREEN}✓${NC} Core dump collection directory created at /var/crash/freeswitch"
 
 # Configure ACL and Event Socket security
 log_substep "Configuring Access Control Lists..."
@@ -1116,21 +1179,21 @@ if [ "$NO_VALIDATION" = false ]; then
         # Check if modules loaded
         MODULE_LOAD_FAILED=false
 
-        if ${FS_PREFIX}/bin/fs_cli -x "show modules" 2>/dev/null | grep -q "mod_audio_fork"; then
+        if LD_LIBRARY_PATH=/usr/local/lib ${FS_PREFIX}/bin/fs_cli -x "show modules" 2>/dev/null | grep -q "mod_audio_fork"; then
             echo -e "  ${GREEN}✓${NC} mod_audio_fork loaded successfully"
         else
             echo -e "  ${RED}✗${NC} mod_audio_fork failed to load"
             MODULE_LOAD_FAILED=true
         fi
 
-        if ${FS_PREFIX}/bin/fs_cli -x "show modules" 2>/dev/null | grep -q "mod_aws_transcribe"; then
+        if LD_LIBRARY_PATH=/usr/local/lib ${FS_PREFIX}/bin/fs_cli -x "show modules" 2>/dev/null | grep -q "mod_aws_transcribe"; then
             echo -e "  ${GREEN}✓${NC} mod_aws_transcribe loaded successfully"
         else
             echo -e "  ${RED}✗${NC} mod_aws_transcribe failed to load"
             MODULE_LOAD_FAILED=true
         fi
 
-        if ${FS_PREFIX}/bin/fs_cli -x "show modules" 2>/dev/null | grep -q "mod_deepgram_transcribe"; then
+        if LD_LIBRARY_PATH=/usr/local/lib ${FS_PREFIX}/bin/fs_cli -x "show modules" 2>/dev/null | grep -q "mod_deepgram_transcribe"; then
             echo -e "  ${GREEN}✓${NC} mod_deepgram_transcribe loaded successfully"
         else
             echo -e "  ${RED}✗${NC} mod_deepgram_transcribe failed to load"
@@ -1218,6 +1281,20 @@ echo "  - Check FreeSWITCH logs: ${FS_PREFIX}/log/freeswitch.log"
 echo "  - Check module logs: grep 'mod_audio_fork\|mod_aws\|mod_deepgram' ${FS_PREFIX}/log/freeswitch.log"
 echo "  - Review manifest: cat ${MANIFEST_FILE}"
 echo "  - To clean up and reinstall: sudo ${SCRIPT_DIR}/cleanup-all.sh"
+echo ""
+echo -e "${BOLD}${CYAN}Build Logs Available:${NC}"
+echo "  📋 Dependency builds:"
+echo "     • spandsp: /tmp/spandsp_{clone,checkout,bootstrap,configure,make,install}.log"
+echo "     • sofia-sip: /tmp/sofia_{clone,bootstrap,configure,make,install}.log"
+echo "  📋 FreeSWITCH build:"
+echo "     • Configure: /tmp/freeswitch_configure.log"
+echo "     • Compilation: /tmp/freeswitch_make.log"
+echo "     • Installation: /tmp/freeswitch_install.log" 
+echo "     • Sounds: /tmp/freeswitch_sounds.log"
+echo "  📋 Module builds:"
+echo "     • mod_audio_fork: /tmp/mod_audio_fork_{gcc,g++,link}.log"
+echo "     • mod_deepgram: /tmp/mod_deepgram_{gcc,g++,link}.log"
+echo "     • mod_aws: /tmp/mod_aws_{gcc,g++,link}.log"
 echo ""
 echo -e "${BOLD}${GREEN}Installation completed at: $(date)${NC}"
 echo ""

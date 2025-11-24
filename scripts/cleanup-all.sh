@@ -155,6 +155,8 @@ if [ "$KEEP_FREESWITCH" = false ]; then
     if [ -f "/etc/systemd/system/freeswitch.service" ]; then
         systemctl disable freeswitch 2>/dev/null || true
         rm -f /etc/systemd/system/freeswitch.service
+        # Remove environment drop-in directory
+        rm -rf /etc/systemd/system/freeswitch.service.d
         systemctl daemon-reload
     fi
     

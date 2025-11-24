@@ -55,7 +55,7 @@ echo "Modules:"
 for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
     if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
         # Check if module is loaded
-        if ${FS_PREFIX}/bin/fs_cli -x "module_exists ${module}" 2>/dev/null | grep -q "true"; then
+        if LD_LIBRARY_PATH=/usr/local/lib ${FS_PREFIX}/bin/fs_cli -x "module_exists ${module}" 2>/dev/null | grep -q "true"; then
             echo -e "  ${GREEN}✓${NC} ${module}: Installed and loaded"
         else
             echo -e "  ${YELLOW}⚠${NC}  ${module}: Installed but not loaded"

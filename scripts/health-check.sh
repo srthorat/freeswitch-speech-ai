@@ -51,7 +51,7 @@ fi
 
 # Check 2: FreeSWITCH responsive
 echo -n "Checking FreeSWITCH CLI connectivity... "
-if ${FS_PREFIX}/bin/fs_cli -x "status" > /dev/null 2>&1; then
+if LD_LIBRARY_PATH=/usr/local/lib ${FS_PREFIX}/bin/fs_cli -x "status" > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Responsive${NC}"
 else
     echo -e "${RED}✗ Not responsive${NC}"
@@ -63,7 +63,7 @@ echo ""
 echo "Checking modules loaded:"
 for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
     echo -n "  $module... "
-    if ${FS_PREFIX}/bin/fs_cli -x "module_exists ${module}" 2>/dev/null | grep -q "true"; then
+    if LD_LIBRARY_PATH=/usr/local/lib ${FS_PREFIX}/bin/fs_cli -x "module_exists ${module}" 2>/dev/null | grep -q "true"; then
         echo -e "${GREEN}✓ Loaded${NC}"
     else
         echo -e "${RED}✗ Not loaded${NC}"
