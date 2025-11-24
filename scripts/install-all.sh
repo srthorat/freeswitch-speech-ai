@@ -544,7 +544,7 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     check_success "Failed to enter FreeSWITCH directory" "cd freeswitch"
 
     log_substep "Bootstrapping FreeSWITCH..."
-    ./bootstrap.sh -j > /dev/null 2>&1
+    ./bootstrap.sh -j
     check_success "Failed to bootstrap FreeSWITCH" "./bootstrap.sh"
 
     log_substep "Ensuring critical modules are enabled (mod_event_socket)..."
@@ -572,19 +572,19 @@ if [ "$SKIP_FREESWITCH" = false ]; then
         --without-python \
         --without-python3 \
         --without-java \
-        --without-perl > /dev/null 2>&1
+        --without-perl
     check_success "Failed to configure FreeSWITCH" "./configure"
 
     log_substep "Compiling FreeSWITCH (using ${BUILD_CPUS} CPU cores, 15-20 min)..."
-    make -j ${BUILD_CPUS} > /dev/null 2>&1
+    make -j ${BUILD_CPUS}
     check_success "Failed to compile FreeSWITCH" "make -j ${BUILD_CPUS}"
 
     log_substep "Installing FreeSWITCH..."
-    make install > /dev/null 2>&1
+    make install
     check_success "Failed to install FreeSWITCH" "make install"
 
     log_substep "Installing FreeSWITCH sounds and music on hold..."
-    make cd-sounds-install cd-moh-install > /dev/null 2>&1
+    make cd-sounds-install cd-moh-install
     check_success "Failed to install FreeSWITCH sounds" "make cd-sounds-install"
 
     log_substep "Installing sample configuration (vanilla)..."
