@@ -449,12 +449,21 @@ show_progress $CURRENT_STEP "Build spandsp 3.x from source"
 cd /usr/local/src
 check_success "Failed to change directory to /usr/local/src" "cd /usr/local/src"
 
-if [ ! -d "spandsp" ]; then
-    log_substep "Cloning spandsp from FreeSWITCH GitHub..."
-    git clone https://github.com/freeswitch/spandsp.git > /dev/null 2>&1
-    check_success "Failed to clone spandsp repository" "git clone spandsp"
+# Check if spandsp is actually installed (headers in place)
+if [ -f /usr/local/include/spandsp.h ] && ldconfig -p | grep -q libspandsp; then
+    log_substep "spandsp already installed - using existing version"
+    echo "libspandsp=existing" >> "$MANIFEST_FILE"
+    complete_step "spandsp (existing)"
+else
+    if [ ! -d "spandsp" ]; then
+        log_substep "Cloning spandsp from FreeSWITCH GitHub..."
+        git clone https://github.com/freeswitch/spandsp.git > /dev/null 2>&1
+        check_success "Failed to clone spandsp repository" "git clone spandsp"
+    fi
 
     cd spandsp
+
+    # Always ensure we're on the right version
     log_substep "Checking out spandsp commit 0d2e6ac..."
     git checkout 0d2e6ac > /dev/null 2>&1
     check_success "Failed to checkout spandsp version" "git checkout 0d2e6ac"
@@ -478,9 +487,6 @@ if [ ! -d "spandsp" ]; then
     ldconfig
     echo "libspandsp=installed" >> "$MANIFEST_FILE"
     complete_step "spandsp 3.x built and installed"
-else
-    log_substep "spandsp source directory already exists - skipping build"
-    complete_step "spandsp (already built)"
 fi
 
 # ============================================================================
@@ -492,12 +498,20 @@ show_progress $CURRENT_STEP "Build sofia-sip 1.13.17 from source"
 cd /usr/local/src
 check_success "Failed to change directory to /usr/local/src" "cd /usr/local/src"
 
-if [ ! -d "sofia-sip" ]; then
-    log_substep "Cloning sofia-sip v1.13.17 from FreeSWITCH GitHub..."
-    git clone --depth 1 -b v1.13.17 https://github.com/freeswitch/sofia-sip.git > /dev/null 2>&1
-    check_success "Failed to clone sofia-sip repository" "git clone sofia-sip"
+# Check if sofia-sip is actually installed (libraries in place)
+if ldconfig -p | grep -q libsofia-sip && [ -d /usr/local/include/sofia-sip-1.13 ]; then
+    log_substep "sofia-sip already installed - using existing version"
+    echo "libsofia-sip=existing" >> "$MANIFEST_FILE"
+    complete_step "sofia-sip (existing)"
+else
+    if [ ! -d "sofia-sip" ]; then
+        log_substep "Cloning sofia-sip v1.13.17 from FreeSWITCH GitHub..."
+        git clone --depth 1 -b v1.13.17 https://github.com/freeswitch/sofia-sip.git > /dev/null 2>&1
+        check_success "Failed to clone sofia-sip repository" "git clone sofia-sip"
+    fi
 
     cd sofia-sip
+
     log_substep "Bootstrapping sofia-sip..."
     ./bootstrap.sh > /dev/null 2>&1
     check_success "Failed to bootstrap sofia-sip" "./bootstrap.sh"
@@ -517,9 +531,6 @@ if [ ! -d "sofia-sip" ]; then
     ldconfig
     echo "libsofia-sip=installed" >> "$MANIFEST_FILE"
     complete_step "sofia-sip 1.13.17 built and installed"
-else
-    log_substep "sofia-sip source directory already exists - skipping build"
-    complete_step "sofia-sip (already built)"
 fi
 
 # ============================================================================
