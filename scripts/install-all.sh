@@ -813,16 +813,6 @@ Wants=network-online.target
 [Service]
 Type=forking
 PIDFile=${FS_PREFIX}/run/freeswitch.pid
-Environment="LD_LIBRARY_PATH=/usr/local/lib"
-Environment="DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}"
-Environment="AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}"
-Environment="AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}"
-Environment="AWS_REGION=${AWS_REGION:-us-east-1}"
-Environment="AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}"
-Environment="PUSHER_APP_ID=${PUSHER_APP_ID:-}"
-Environment="PUSHER_KEY=${PUSHER_KEY:-}"
-Environment="PUSHER_SECRET=${PUSHER_SECRET:-}"
-Environment="PUSHER_CLUSTER=${PUSHER_CLUSTER:-}"
 
 ExecStart=${FS_PREFIX}/bin/freeswitch -ncwait -nonat -conf ${FS_PREFIX}/conf -log ${FS_PREFIX}/log -db ${FS_PREFIX}/db
 ExecReload=/usr/bin/kill -HUP \$MAINPID
@@ -839,6 +829,25 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 EOF
+echo -e "  ${GREEN}✓${NC} FreeSWITCH systemd service created"
+
+# Create environment configuration in drop-in directory
+log_substep "Creating FreeSWITCH environment configuration..."
+mkdir -p /etc/systemd/system/freeswitch.service.d
+cat > /etc/systemd/system/freeswitch.service.d/environment.conf <<EOF
+[Service]
+Environment="LD_LIBRARY_PATH=/usr/local/lib"
+Environment="DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}"
+Environment="AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}"
+Environment="AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}"
+Environment="AWS_REGION=${AWS_REGION:-us-east-1}"
+Environment="AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}"
+Environment="PUSHER_APP_ID=${PUSHER_APP_ID:-}"
+Environment="PUSHER_KEY=${PUSHER_KEY:-}"
+Environment="PUSHER_SECRET=${PUSHER_SECRET:-}"
+Environment="PUSHER_CLUSTER=${PUSHER_CLUSTER:-}"
+EOF
+echo -e "  ${GREEN}✓${NC} Environment configuration created at /etc/systemd/system/freeswitch.service.d/environment.conf"
 
 # Create run directory for PID file
 mkdir -p ${FS_PREFIX}/run
@@ -846,7 +855,7 @@ chown freeswitch:freeswitch ${FS_PREFIX}/run
 
 systemctl daemon-reload
 systemctl enable freeswitch.service
-echo -e "  ${GREEN}✓${NC} FreeSWITCH systemd service created and enabled"
+echo -e "  ${GREEN}✓${NC} FreeSWITCH systemd service enabled"
 
 complete_step "FreeSWITCH and modules configured"
 
