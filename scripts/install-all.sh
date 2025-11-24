@@ -573,13 +573,13 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     check_success "Failed to install FreeSWITCH sounds" "make cd-sounds-install"
 
     log_substep "Installing sample configuration (vanilla)..."
-    mkdir -p ${FS_PREFIX}/conf
-    cp -r /usr/local/src/freeswitch/conf/vanilla/* ${FS_PREFIX}/conf/
+    mkdir -p ${FS_PREFIX}/etc/freeswitch
+    cp -r /usr/local/src/freeswitch/conf/vanilla/* ${FS_PREFIX}/etc/freeswitch/
     check_success "Failed to copy vanilla configuration" "cp vanilla config"
     echo -e "  ${GREEN}✓${NC} Sample configuration installed"
 
     log_substep "Configuring Event Socket for IPv4 binding..."
-    cat > ${FS_PREFIX}/conf/autoload_configs/event_socket.conf.xml <<'EOF'
+    cat > ${FS_PREFIX}/etc/freeswitch/autoload_configs/event_socket.conf.xml <<'EOF'
 <configuration name="event_socket.conf" description="Socket Client">
   <settings>
     <param name="nat-map" value="false"/>
@@ -770,7 +770,7 @@ CURRENT_STEP=10
 show_progress $CURRENT_STEP "Configure FreeSWITCH and Modules"
 
 # Add modules to modules.conf.xml
-MODULES_CONF="${FS_PREFIX}/conf/autoload_configs/modules.conf.xml"
+MODULES_CONF="${FS_PREFIX}/etc/freeswitch/autoload_configs/modules.conf.xml"
 if [ -f "$MODULES_CONF" ]; then
     log_substep "Adding modules to modules.conf.xml..."
     if ! grep -q "mod_audio_fork" "$MODULES_CONF"; then
@@ -790,13 +790,13 @@ fi
 log_substep "Copying example dialplan and directory configuration..."
 if [ -d "${SCRIPT_DIR}/../examples/freeswitch-config/dialplan" ]; then
     cp ${SCRIPT_DIR}/../examples/freeswitch-config/dialplan/default.xml \
-       ${FS_PREFIX}/conf/dialplan/default.xml
+       ${FS_PREFIX}/etc/freeswitch/dialplan/default.xml
     check_success "Failed to copy dialplan configuration" "cp dialplan"
 
     cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/100*.xml \
-       ${FS_PREFIX}/conf/directory/default/ 2>/dev/null || true
+       ${FS_PREFIX}/etc/freeswitch/directory/default/ 2>/dev/null || true
 
-    chown -R freeswitch:freeswitch ${FS_PREFIX}/conf 2>/dev/null || true
+    chown -R freeswitch:freeswitch ${FS_PREFIX}/etc/freeswitch 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} Example dialplan and directory configuration copied"
 else
     echo -e "  ${YELLOW}⚠${NC}  WARNING: Example configuration not found"
