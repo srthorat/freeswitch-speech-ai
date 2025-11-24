@@ -339,7 +339,7 @@ fi
 echo "Cleaning build artifacts..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-for module_dir in modules/mod_audio_fork modules/mod_aws_transcribe modules/mod_deepgram_transcribe; do
+for module_dir in ../modules/mod_audio_fork ../modules/mod_aws_transcribe ../modules/mod_deepgram_transcribe; do
     if [ -d "$module_dir" ]; then
         rm -f ${module_dir}/*.o ${module_dir}/*.so
     fi

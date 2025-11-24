@@ -101,7 +101,7 @@ echo -e "${YELLOW}Starting update...${NC}"
 # Step 1: Pull latest code
 echo ""
 echo -e "${GREEN}[1/3] Pulling latest code...${NC}"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR/.."
 
 if [ -d ".git" ]; then
     CURRENT_BRANCH=$(git branch --show-current)
@@ -136,7 +136,7 @@ done
 # Build mod_audio_fork
 echo ""
 echo "Building mod_audio_fork..."
-cd ${SCRIPT_DIR}/modules/mod_audio_fork
+cd ${SCRIPT_DIR}/../modules/mod_audio_fork
 
 # Clean previous build
 rm -f *.o *.so
@@ -148,7 +148,7 @@ echo -e "${GREEN}✓ mod_audio_fork${NC}"
 
 # Build mod_aws_transcribe
 echo "Building mod_aws_transcribe..."
-cd ${SCRIPT_DIR}/modules/mod_aws_transcribe
+cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe
 
 # Clean previous build
 rm -f *.o *.so
@@ -164,7 +164,7 @@ echo -e "${GREEN}✓ mod_aws_transcribe${NC}"
 
 # Build mod_deepgram_transcribe
 echo "Building mod_deepgram_transcribe..."
-cd ${SCRIPT_DIR}/modules/mod_deepgram_transcribe
+cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe
 
 # Clean previous build
 rm -f *.o *.so

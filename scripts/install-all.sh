@@ -711,7 +711,7 @@ CURRENT_STEP=7
 show_progress $CURRENT_STEP "Build mod_audio_fork"
 
 cd ${SCRIPT_DIR}/../modules/mod_audio_fork
-check_success "Failed to change directory to mod_audio_fork" "cd modules/mod_audio_fork"
+check_success "Failed to change directory to mod_audio_fork" "cd ${SCRIPT_DIR}/../modules/mod_audio_fork"
 
 log_substep "Compiling mod_audio_fork.c..."
 echo -e "  ${CYAN}[$(date +%T)] Running: gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c${NC}"
@@ -761,7 +761,7 @@ CURRENT_STEP=8
 show_progress $CURRENT_STEP "Build mod_deepgram_transcribe"
 
 cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe
-check_success "Failed to change directory to mod_deepgram_transcribe" "cd modules/mod_deepgram_transcribe"
+check_success "Failed to change directory to mod_deepgram_transcribe" "cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe"
 
 log_substep "Compiling mod_deepgram_transcribe.c..."
 echo -e "  ${CYAN}[$(date +%T)] Running: gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c${NC}"
@@ -813,7 +813,7 @@ CURRENT_STEP=9
 show_progress $CURRENT_STEP "Build mod_aws_transcribe"
 
 cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe
-check_success "Failed to change directory to mod_aws_transcribe" "cd modules/mod_aws_transcribe"
+check_success "Failed to change directory to mod_aws_transcribe" "cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe"
 
 log_substep "Compiling mod_aws_transcribe.c..."
 echo -e "  ${CYAN}[$(date +%T)] Running: gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c${NC}"

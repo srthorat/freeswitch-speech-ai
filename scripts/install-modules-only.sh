@@ -283,7 +283,7 @@ fi
 
 # mod_audio_fork
 echo "Building mod_audio_fork..."
-cd ${SCRIPT_DIR}/modules/mod_audio_fork || exit 1
+cd ${SCRIPT_DIR}/../modules/mod_audio_fork || exit 1
 
 if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c; then
     echo -e "${RED}✗ Failed to compile mod_audio_fork.c${NC}"
@@ -305,7 +305,7 @@ echo -e "${GREEN}✓ mod_audio_fork${NC}"
 
 # mod_aws_transcribe
 echo "Building mod_aws_transcribe..."
-cd ${SCRIPT_DIR}/modules/mod_aws_transcribe || exit 1
+cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe || exit 1
 
 if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c; then
     echo -e "${RED}✗ Failed to compile mod_aws_transcribe.c${NC}"
@@ -329,7 +329,7 @@ echo -e "${GREEN}✓ mod_aws_transcribe${NC}"
 
 # mod_deepgram_transcribe
 echo "Building mod_deepgram_transcribe..."
-cd ${SCRIPT_DIR}/modules/mod_deepgram_transcribe || exit 1
+cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe || exit 1
 
 if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c; then
     echo -e "${RED}✗ Failed to compile mod_deepgram_transcribe.c${NC}"
