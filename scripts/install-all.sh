@@ -573,13 +573,13 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     check_success "Failed to install FreeSWITCH sounds" "make cd-sounds-install"
 
     log_substep "Installing sample configuration (vanilla)..."
-    mkdir -p ${FS_PREFIX}/etc/freeswitch
-    cp -r /usr/local/src/freeswitch/conf/vanilla/* ${FS_PREFIX}/etc/freeswitch/
+    mkdir -p ${FS_PREFIX}/conf
+    cp -r /usr/local/src/freeswitch/conf/vanilla/* ${FS_PREFIX}/conf/
     check_success "Failed to copy vanilla configuration" "cp vanilla config"
     echo -e "  ${GREEN}✓${NC} Sample configuration installed"
 
     log_substep "Configuring Event Socket for IPv4 binding..."
-    cat > ${FS_PREFIX}/etc/freeswitch/autoload_configs/event_socket.conf.xml <<'EOF'
+    cat > ${FS_PREFIX}/conf/autoload_configs/event_socket.conf.xml <<'EOF'
 <configuration name="event_socket.conf" description="Socket Client">
   <settings>
     <param name="nat-map" value="false"/>
@@ -770,7 +770,7 @@ CURRENT_STEP=10
 show_progress $CURRENT_STEP "Configure FreeSWITCH and Modules"
 
 # Add modules to modules.conf.xml
-MODULES_CONF="${FS_PREFIX}/etc/freeswitch/autoload_configs/modules.conf.xml"
+MODULES_CONF="${FS_PREFIX}/conf/autoload_configs/modules.conf.xml"
 if [ -f "$MODULES_CONF" ]; then
     log_substep "Adding modules to modules.conf.xml..."
     if ! grep -q "mod_audio_fork" "$MODULES_CONF"; then
@@ -790,13 +790,13 @@ fi
 log_substep "Copying example dialplan and directory configuration..."
 if [ -d "${SCRIPT_DIR}/../examples/freeswitch-config/dialplan" ]; then
     cp ${SCRIPT_DIR}/../examples/freeswitch-config/dialplan/default.xml \
-       ${FS_PREFIX}/etc/freeswitch/dialplan/default.xml
+       ${FS_PREFIX}/conf/dialplan/default.xml
     check_success "Failed to copy dialplan configuration" "cp dialplan"
 
     cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/100*.xml \
-       ${FS_PREFIX}/etc/freeswitch/directory/default/ 2>/dev/null || true
+       ${FS_PREFIX}/conf/directory/default/ 2>/dev/null || true
 
-    chown -R freeswitch:freeswitch ${FS_PREFIX}/etc/freeswitch 2>/dev/null || true
+    chown -R freeswitch:freeswitch ${FS_PREFIX}/conf 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} Example dialplan and directory configuration copied"
 else
     echo -e "  ${YELLOW}⚠${NC}  WARNING: Example configuration not found"
@@ -864,8 +864,11 @@ if [ "$NO_VALIDATION" = false ]; then
         log_substep "Testing module loading (starting FreeSWITCH)..."
         export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 
-        # Start FreeSWITCH in background
-        ${FS_PREFIX}/bin/freeswitch -nc -nonat > /dev/null 2>&1 &
+        # Start FreeSWITCH in background with explicit conf directory
+        ${FS_PREFIX}/bin/freeswitch -nc -nonat \
+            -conf ${FS_PREFIX}/conf \
+            -log ${FS_PREFIX}/log \
+            -db ${FS_PREFIX}/db > /dev/null 2>&1 &
         FS_PID=$!
 
         # Wait for startup (modules need time to load)
@@ -958,7 +961,7 @@ echo "   export AWS_SECRET_ACCESS_KEY=your_secret"
 echo "   export AWS_REGION=us-east-1"
 echo ""
 echo -e "${BOLD}2. Start FreeSWITCH:${NC}"
-echo "   ${FS_PREFIX}/bin/freeswitch -nc"
+echo "   ${FS_PREFIX}/bin/freeswitch -nc -nonat -conf ${FS_PREFIX}/conf -log ${FS_PREFIX}/log -db ${FS_PREFIX}/db"
 echo ""
 echo -e "${BOLD}3. Verify modules are loaded:${NC}"
 echo "   ${FS_PREFIX}/bin/fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram'"
