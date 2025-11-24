@@ -300,8 +300,23 @@ apt-get install -y \
     libxml2-dev \
     liblua5.2-dev \
     libgoogle-perftools-dev \
-    libjpeg-dev > /dev/null 2>&1
+    libjpeg-dev 2>&1 | grep -E "(error|E:|unable to locate)" || true
 check_success "Failed to install system dependencies" "apt-get install"
+
+# Verify critical packages are installed
+log_substep "Verifying critical packages are installed..."
+MISSING_PACKAGES=()
+for pkg in build-essential git cmake libssl-dev libcurl4-openssl-dev unixodbc-dev libsqlite3-dev; do
+    if ! dpkg -l | grep -q "^ii.*${pkg}"; then
+        MISSING_PACKAGES+=("${pkg}")
+    fi
+done
+
+if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
+    echo -e "${RED}✗ Missing critical packages: ${MISSING_PACKAGES[*]}${NC}"
+    handle_error 1 "Critical packages not installed: ${MISSING_PACKAGES[*]}" "package verification"
+fi
+echo -e "  ${GREEN}✓${NC} All critical packages verified"
 
 complete_step "System dependencies"
 
