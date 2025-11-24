@@ -802,16 +802,18 @@ else
     echo -e "  ${YELLOW}⚠${NC}  WARNING: Example configuration not found"
 fi
 
-# Set environment variables in systemd service (if exists)
-if [ -f "/etc/systemd/system/freeswitch.service" ]; then
-    log_substep "Adding environment variables to systemd service..."
+# Create systemd service
+log_substep "Creating FreeSWITCH systemd service..."
+cat > /etc/systemd/system/freeswitch.service <<EOF
+[Unit]
+Description=FreeSWITCH
+After=syslog.target network.target local-fs.target
+Wants=network-online.target
 
-    # Backup original
-    cp /etc/systemd/system/freeswitch.service /etc/systemd/system/freeswitch.service.bak
-
-    # Add environment variables
-    cat > /tmp/freeswitch-env.conf << EOF
 [Service]
+Type=forking
+PIDFile=${FS_PREFIX}/run/freeswitch.pid
+Environment="LD_LIBRARY_PATH=/usr/local/lib"
 Environment="DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}"
 Environment="AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}"
 Environment="AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}"
@@ -821,11 +823,30 @@ Environment="PUSHER_APP_ID=${PUSHER_APP_ID:-}"
 Environment="PUSHER_KEY=${PUSHER_KEY:-}"
 Environment="PUSHER_SECRET=${PUSHER_SECRET:-}"
 Environment="PUSHER_CLUSTER=${PUSHER_CLUSTER:-}"
+
+ExecStart=${FS_PREFIX}/bin/freeswitch -ncwait -nonat -conf ${FS_PREFIX}/conf -log ${FS_PREFIX}/log -db ${FS_PREFIX}/db
+ExecReload=/usr/bin/kill -HUP \$MAINPID
+ExecStop=${FS_PREFIX}/bin/freeswitch -stop
+
+User=freeswitch
+Group=freeswitch
+
+TimeoutStartSec=45s
+TimeoutStopSec=45s
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    echo -e "  ${GREEN}✓${NC} Environment variables configured in systemd"
-fi
+# Create run directory for PID file
+mkdir -p ${FS_PREFIX}/run
+chown freeswitch:freeswitch ${FS_PREFIX}/run
+
+systemctl daemon-reload
+systemctl enable freeswitch.service
+echo -e "  ${GREEN}✓${NC} FreeSWITCH systemd service created and enabled"
 
 complete_step "FreeSWITCH and modules configured"
 
@@ -961,12 +982,16 @@ echo "   export AWS_SECRET_ACCESS_KEY=your_secret"
 echo "   export AWS_REGION=us-east-1"
 echo ""
 echo -e "${BOLD}2. Start FreeSWITCH:${NC}"
-echo "   ${FS_PREFIX}/bin/freeswitch -nc -nonat -conf ${FS_PREFIX}/conf -log ${FS_PREFIX}/log -db ${FS_PREFIX}/db"
+echo "   sudo systemctl start freeswitch"
+echo "   # Or manually: ${FS_PREFIX}/bin/freeswitch -nc -nonat -conf ${FS_PREFIX}/conf -log ${FS_PREFIX}/log -db ${FS_PREFIX}/db"
 echo ""
-echo -e "${BOLD}3. Verify modules are loaded:${NC}"
+echo -e "${BOLD}3. Check FreeSWITCH status:${NC}"
+echo "   sudo systemctl status freeswitch"
+echo ""
+echo -e "${BOLD}4. Verify modules are loaded:${NC}"
 echo "   ${FS_PREFIX}/bin/fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram'"
 echo ""
-echo -e "${BOLD}4. Test a call:${NC}"
+echo -e "${BOLD}5. Test a call:${NC}"
 echo "   - Register SIP extension 1000 (password: 1234)"
 echo "   - Call extension 1002 to test Deepgram transcription"
 echo "   - Call extension 1003 to test AWS Transcribe"
