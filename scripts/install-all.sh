@@ -578,6 +578,27 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     check_success "Failed to copy vanilla configuration" "cp vanilla config"
     echo -e "  ${GREEN}✓${NC} Sample configuration installed"
 
+    log_substep "Configuring Event Socket for IPv4 binding..."
+    cat > ${FS_PREFIX}/conf/autoload_configs/event_socket.conf.xml <<'EOF'
+<configuration name="event_socket.conf" description="Socket Client">
+  <settings>
+    <param name="nat-map" value="false"/>
+    <!-- Bind to all IPv4 interfaces for fs_cli access -->
+    <param name="listen-ip" value="0.0.0.0"/>
+    <param name="listen-port" value="8021"/>
+    <param name="password" value="ClueCon"/>
+    <!-- Uncomment to restrict access to loopback only -->
+    <!--<param name="apply-inbound-acl" value="loopback.auto"/>-->
+    <!--<param name="stop-on-bind-error" value="true"/>-->
+  </settings>
+</configuration>
+EOF
+    echo -e "  ${GREEN}✓${NC} Event Socket configured for IPv4 (0.0.0.0:8021)"
+
+    log_substep "Creating log and db directories..."
+    mkdir -p ${FS_PREFIX}/log ${FS_PREFIX}/db
+    echo -e "  ${GREEN}✓${NC} Log and db directories created"
+
     log_substep "Creating FreeSWITCH group and user..."
     # Create freeswitch group if it doesn't exist
     getent group freeswitch > /dev/null 2>&1 || groupadd -r freeswitch
