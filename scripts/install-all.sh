@@ -595,6 +595,11 @@ if [ "$SKIP_FREESWITCH" = false ]; then
 EOF
     echo -e "  ${GREEN}✓${NC} Event Socket configured for IPv4 (0.0.0.0:8021)"
 
+    log_substep "Applying NAT fix to internal SIP profile (use local_ip_v4)..."
+    sed -i 's|value="\$\${external_rtp_ip}"|value="\$\${local_ip_v4}"|' ${FS_PREFIX}/conf/sip_profiles/internal.xml
+    sed -i 's|value="\$\${external_sip_ip}"|value="\$\${local_ip_v4}"|' ${FS_PREFIX}/conf/sip_profiles/internal.xml
+    echo -e "  ${GREEN}✓${NC} NAT fix applied (using local_ip_v4 instead of external IPs)"
+
     log_substep "Creating log and db directories..."
     mkdir -p ${FS_PREFIX}/log ${FS_PREFIX}/db
     echo -e "  ${GREEN}✓${NC} Log and db directories created"
