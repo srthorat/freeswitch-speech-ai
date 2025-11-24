@@ -232,6 +232,11 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 		"https://api-%s.pusher.com/apps/%s/events?%s&auth_signature=%s",
 		cluster, app_id, query, signature);
 
+	// Log the URL for debugging (without signature for security)
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+		"Pusher transcription URL: https://api-%s.pusher.com/apps/%s/events\n",
+		cluster, app_id);
+
 	// Send HTTP POST
 	CURL* curl = curl_easy_init();
 	if (!curl) return;
@@ -365,6 +370,11 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
 	snprintf(url, sizeof(url),
 		"https://api-%s.pusher.com/apps/%s/events?%s&auth_signature=%s",
 		cluster, app_id, query, signature);
+
+	// Log the URL for debugging (without signature for security)
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+		"Pusher transcription URL: https://api-%s.pusher.com/apps/%s/events\n",
+		cluster, app_id);
 
 	// Send HTTP POST
 	CURL* curl = curl_easy_init();
