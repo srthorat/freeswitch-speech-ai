@@ -247,7 +247,9 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
 	const char* cluster = getenv("PUSHER_CLUSTER");
 
 	if (!app_id || !app_key || !app_secret) {
-		return; // Pusher not configured, skip silently
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+			"Pusher not configured (missing PUSHER_APP_ID, PUSHER_KEY, or PUSHER_SECRET) - skipping session_start event\n");
+		return;
 	}
 	if (!cluster) cluster = "ap2";
 
@@ -361,13 +363,27 @@ static void responseHandler(switch_core_session_t* session,
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 
 	// Send session start to Pusher on successful connection
-	const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
-	if (sip_call_id && 0 == strcmp(eventName, TRANSCRIBE_EVENT_CONNECT_SUCCESS)) {
-		send_session_start_to_pusher(session, sip_call_id);
+	if (0 == strcmp(eventName, TRANSCRIBE_EVENT_CONNECT_SUCCESS)) {
+		// Try multiple call ID sources (fallback order: sip_call_id, uuid, call_uuid)
+		const char* call_id = switch_channel_get_variable(channel, "sip_call_id");
+		if (!call_id) call_id = switch_core_session_get_uuid(session);
+		if (!call_id) call_id = switch_channel_get_variable(channel, "call_uuid");
+
+		if (call_id) {
+			send_session_start_to_pusher(session, call_id);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+				"Cannot send session_start to Pusher: no call ID found (sip_call_id, uuid, call_uuid all missing)\n");
+		}
 	}
 
 	// Send transcription results to Pusher (if configured)
-	if (sip_call_id && json) {
+	// Try multiple call ID sources for transcription events
+	const char* call_id = switch_channel_get_variable(channel, "sip_call_id");
+	if (!call_id) call_id = switch_core_session_get_uuid(session);
+	if (!call_id) call_id = switch_channel_get_variable(channel, "call_uuid");
+
+	if (call_id && json) {
 		// Determine if this is final or interim based on JSON content
 		switch_bool_t is_final = SWITCH_FALSE;
 		cJSON* root = cJSON_Parse(json);
@@ -382,7 +398,7 @@ static void responseHandler(switch_core_session_t* session,
 			}
 			cJSON_Delete(root);
 		}
-		send_to_pusher(session, json, sip_call_id, is_final);
+		send_to_pusher(session, json, call_id, is_final);
 	}
 
 	switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, eventName);

@@ -249,7 +249,9 @@ void send_session_start_to_pusher(switch_core_session_t* session, const char* ca
 	const char* cluster = getenv("PUSHER_CLUSTER");
 
 	if (!app_id || !app_key || !app_secret) {
-		return; // Pusher not configured, skip silently
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+			"Pusher not configured (missing PUSHER_APP_ID, PUSHER_KEY, or PUSHER_SECRET) - skipping session_start event\n");
+		return;
 	}
 	if (!cluster) cluster = "ap2";
 

@@ -191,9 +191,16 @@ public:
 				emit_metadata_event(psession, m_metadata.c_str(), TRANSCRIBE_EVENT_SESSION_START, m_bugname.c_str());
 
 				// Send session start to Pusher (if configured)
-				const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
-				if (sip_call_id) {
-					send_session_start_to_pusher(psession, sip_call_id);
+				// Try multiple call ID sources (fallback order: sip_call_id, uuid, call_uuid)
+				const char* call_id = switch_channel_get_variable(channel, "sip_call_id");
+				if (!call_id) call_id = switch_core_session_get_uuid(psession);
+				if (!call_id) call_id = switch_channel_get_variable(channel, "call_uuid");
+
+				if (call_id) {
+					send_session_start_to_pusher(psession, call_id);
+				} else {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_WARNING,
+						"Cannot send session_start to Pusher: no call ID found (sip_call_id, uuid, call_uuid all missing)\n");
 				}
 
 				// Send any pre-connection buffered audio (simple deque approach like Deepgram)
