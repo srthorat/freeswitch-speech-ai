@@ -857,6 +857,163 @@ systemctl daemon-reload
 systemctl enable freeswitch.service
 echo -e "  ${GREEN}✓${NC} FreeSWITCH systemd service enabled"
 
+# Configure system resource limits (ulimit)
+log_substep "Configuring system resource limits..."
+cat > /etc/security/limits.d/freeswitch.conf <<EOF
+freeswitch soft nofile 999999
+freeswitch hard nofile 999999
+freeswitch soft core unlimited
+freeswitch hard core unlimited
+freeswitch soft memlock unlimited
+freeswitch hard memlock unlimited
+freeswitch soft stack 240
+freeswitch hard stack 240
+EOF
+echo -e "  ${GREEN}✓${NC} Resource limits configured (file descriptors: 999999, core dumps: unlimited)"
+
+# Configure log rotation
+log_substep "Configuring log rotation..."
+cat > /etc/logrotate.d/freeswitch <<'EOF'
+${FS_PREFIX}/log/freeswitch.log {
+    daily
+    rotate 30
+    missingok
+    notifempty
+    compress
+    delaycompress
+    postrotate
+        ${FS_PREFIX}/bin/fs_cli -x "fsctl send_sighup" > /dev/null 2>&1 || true
+    endscript
+}
+
+${FS_PREFIX}/log/*.log {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+}
+EOF
+# Expand variables in logrotate config
+sed -i "s|\${FS_PREFIX}|${FS_PREFIX}|g" /etc/logrotate.d/freeswitch
+echo -e "  ${GREEN}✓${NC} Log rotation configured (main log: 30 days, other logs: 7 days)"
+
+# Secure environment file permissions
+log_substep "Securing environment file permissions..."
+chmod 600 /etc/systemd/system/freeswitch.service.d/environment.conf
+echo -e "  ${GREEN}✓${NC} Environment file permissions set to 600 (root only)"
+
+# Configure sysctl kernel parameters
+log_substep "Configuring kernel parameters for optimal performance..."
+cat > /etc/sysctl.d/99-freeswitch.conf <<'EOF'
+# Network Performance
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+
+# Connection Limits
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 8192
+
+# Port Range
+net.ipv4.ip_local_port_range = 16384 65535
+
+# Time-wait sockets
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 30
+
+# Enable timestamps
+net.ipv4.tcp_timestamps = 1
+
+# Disable ICMP redirects
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+
+# Enable TCP window scaling
+net.ipv4.tcp_window_scaling = 1
+EOF
+sysctl -p /etc/sysctl.d/99-freeswitch.conf > /dev/null 2>&1
+echo -e "  ${GREEN}✓${NC} Kernel parameters optimized for high-performance networking"
+
+# Create additional directories
+log_substep "Creating additional working directories..."
+mkdir -p ${FS_PREFIX}/temp ${FS_PREFIX}/cache ${FS_PREFIX}/recordings ${FS_PREFIX}/storage
+chown -R freeswitch:freeswitch ${FS_PREFIX}/temp ${FS_PREFIX}/cache ${FS_PREFIX}/recordings ${FS_PREFIX}/storage
+echo -e "  ${GREEN}✓${NC} Working directories created (temp, cache, recordings, storage)"
+
+# Configure core dumps
+log_substep "Configuring core dump collection..."
+mkdir -p /var/crash/freeswitch
+chown freeswitch:freeswitch /var/crash/freeswitch
+# Add core dump configuration to systemd service
+sed -i '/\[Service\]/a LimitCORE=infinity\nWorkingDirectory=/var/crash/freeswitch' /etc/systemd/system/freeswitch.service
+systemctl daemon-reload
+echo -e "  ${GREEN}✓${NC} Core dump collection enabled at /var/crash/freeswitch"
+
+# Configure ACL and Event Socket security
+log_substep "Configuring Access Control Lists..."
+cat > ${FS_PREFIX}/conf/autoload_configs/acl.conf.xml <<'EOF'
+<configuration name="acl.conf" description="Network Lists">
+  <network-lists>
+    <!-- Local network access -->
+    <list name="lan" default="allow">
+      <node type="allow" cidr="192.168.0.0/16"/>
+      <node type="allow" cidr="10.0.0.0/8"/>
+      <node type="allow" cidr="172.16.0.0/12"/>
+      <node type="allow" cidr="127.0.0.0/8"/>
+    </list>
+
+    <!-- Event Socket restricted to localhost for security -->
+    <list name="event-socket" default="deny">
+      <node type="allow" cidr="127.0.0.1/32"/>
+    </list>
+  </network-lists>
+</configuration>
+EOF
+# Apply ACL to Event Socket
+sed -i 's|<!--<param name="apply-inbound-acl" value="loopback.auto"/>-->|<param name="apply-inbound-acl" value="event-socket"/>|' \
+    ${FS_PREFIX}/conf/autoload_configs/event_socket.conf.xml
+chown freeswitch:freeswitch ${FS_PREFIX}/conf/autoload_configs/acl.conf.xml
+echo -e "  ${GREEN}✓${NC} ACL configured (Event Socket restricted to localhost)"
+
+# Integrate health check
+if [ -f "${SCRIPT_DIR}/health-check.sh" ]; then
+    log_substep "Integrating health check monitoring..."
+
+    cat > /etc/systemd/system/freeswitch-healthcheck.service <<EOF
+[Unit]
+Description=FreeSWITCH Health Check
+After=freeswitch.service
+
+[Service]
+Type=oneshot
+ExecStart=${SCRIPT_DIR}/health-check.sh
+StandardOutput=journal
+StandardError=journal
+EOF
+
+    cat > /etc/systemd/system/freeswitch-healthcheck.timer <<'EOF'
+[Unit]
+Description=FreeSWITCH Health Check Timer
+After=freeswitch.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable freeswitch-healthcheck.timer
+    echo -e "  ${GREEN}✓${NC} Health check monitoring enabled (runs every 5 minutes)"
+else
+    echo -e "  ${YELLOW}⚠${NC}  Health check script not found at ${SCRIPT_DIR}/health-check.sh"
+fi
+
 complete_step "FreeSWITCH and modules configured"
 
 # ============================================================================
