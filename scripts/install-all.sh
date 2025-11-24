@@ -578,6 +578,14 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     check_success "Failed to copy vanilla configuration" "cp vanilla config"
     echo -e "  ${GREEN}✓${NC} Sample configuration installed"
 
+    log_substep "Configuring log directory in switch.conf.xml..."
+    # Ensure FreeSWITCH logs ONLY to ${FS_PREFIX}/log
+    sed -i "s|<param name=\"log-directory\" value=\".*\"/>|<param name=\"log-directory\" value=\"${FS_PREFIX}/log\"/>|" \
+        ${FS_PREFIX}/conf/autoload_configs/switch.conf.xml
+    sed -i "s|<param name=\"log-file\" value=\".*\"/>|<param name=\"log-file\" value=\"freeswitch.log\"/>|" \
+        ${FS_PREFIX}/conf/autoload_configs/switch.conf.xml
+    echo -e "  ${GREEN}✓${NC} Log directory configured: ${FS_PREFIX}/log/freeswitch.log"
+
     log_substep "Configuring Event Socket for IPv4 binding..."
     cat > ${FS_PREFIX}/conf/autoload_configs/event_socket.conf.xml <<'EOF'
 <configuration name="event_socket.conf" description="Socket Client">
