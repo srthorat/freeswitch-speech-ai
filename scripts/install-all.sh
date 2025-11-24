@@ -544,8 +544,10 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     check_success "Failed to enter FreeSWITCH directory" "cd freeswitch"
 
     log_substep "Bootstrapping FreeSWITCH..."
+    echo -e "  ${CYAN}[$(date +%T)] Running: ./bootstrap.sh -j${NC}"
     ./bootstrap.sh -j
     check_success "Failed to bootstrap FreeSWITCH" "./bootstrap.sh"
+    echo -e "  ${GREEN}[$(date +%T)] ✓ Bootstrap completed${NC}"
 
     log_substep "Ensuring critical modules are enabled (mod_event_socket)..."
     grep -q "^event_handlers/mod_event_socket$" modules.conf || echo "event_handlers/mod_event_socket" >> modules.conf
@@ -565,6 +567,7 @@ if [ "$SKIP_FREESWITCH" = false ]; then
     echo -e "  ${GREEN}✓${NC} Disabled optional modules (verto, rtc, skinny, signalwire, av, python, java, perl, php)"
 
     log_substep "Configuring FreeSWITCH (prefix: ${FS_PREFIX})..."
+    echo -e "  ${CYAN}[$(date +%T)] Running: ./configure --prefix=${FS_PREFIX} --enable-core-pgsql-support --enable-core-odbc-support --enable-tcmalloc --without-python --without-python3 --without-java --without-perl${NC}"
     ./configure --prefix=${FS_PREFIX} \
         --enable-core-pgsql-support \
         --enable-core-odbc-support \
@@ -574,18 +577,26 @@ if [ "$SKIP_FREESWITCH" = false ]; then
         --without-java \
         --without-perl
     check_success "Failed to configure FreeSWITCH" "./configure"
+    echo -e "  ${GREEN}[$(date +%T)] ✓ Configure completed${NC}"
 
     log_substep "Compiling FreeSWITCH (using ${BUILD_CPUS} CPU cores, 15-20 min)..."
+    echo -e "  ${CYAN}[$(date +%T)] Running: make -j ${BUILD_CPUS}${NC}"
+    echo -e "  ${YELLOW}This will take 15-20 minutes. All compilation output will be shown below...${NC}"
     make -j ${BUILD_CPUS}
     check_success "Failed to compile FreeSWITCH" "make -j ${BUILD_CPUS}"
+    echo -e "  ${GREEN}[$(date +%T)] ✓ Compilation completed${NC}"
 
     log_substep "Installing FreeSWITCH..."
+    echo -e "  ${CYAN}[$(date +%T)] Running: make install${NC}"
     make install
     check_success "Failed to install FreeSWITCH" "make install"
+    echo -e "  ${GREEN}[$(date +%T)] ✓ Installation completed${NC}"
 
     log_substep "Installing FreeSWITCH sounds and music on hold..."
+    echo -e "  ${CYAN}[$(date +%T)] Running: make cd-sounds-install cd-moh-install${NC}"
     make cd-sounds-install cd-moh-install
     check_success "Failed to install FreeSWITCH sounds" "make cd-sounds-install"
+    echo -e "  ${GREEN}[$(date +%T)] ✓ Sounds installation completed${NC}"
 
     log_substep "Installing sample configuration (vanilla)..."
     mkdir -p ${FS_PREFIX}/conf
@@ -649,20 +660,25 @@ cd ${SCRIPT_DIR}/../modules/mod_audio_fork
 check_success "Failed to change directory to mod_audio_fork" "cd modules/mod_audio_fork"
 
 log_substep "Compiling mod_audio_fork.c..."
+echo -e "  ${CYAN}[$(date +%T)] Running: gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c${NC}"
 gcc -fPIC -c \
     -I${FS_PREFIX}/include/freeswitch \
     -I/usr/local/include \
-    mod_audio_fork.c 2>&1 | tee /tmp/mod_audio_fork_gcc.log > /dev/null
-check_success "Failed to compile mod_audio_fork.c (check /tmp/mod_audio_fork_gcc.log)" "gcc mod_audio_fork.c"
+    mod_audio_fork.c
+check_success "Failed to compile mod_audio_fork.c" "gcc mod_audio_fork.c"
+echo -e "  ${GREEN}[$(date +%T)] ✓ mod_audio_fork.c compiled${NC}"
 
 log_substep "Compiling C++ files (lws_glue.cpp, audio_pipe.cpp, parser.cpp)..."
+echo -e "  ${CYAN}[$(date +%T)] Running: g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp${NC}"
 g++ -fPIC -c -std=c++11 \
     -I${FS_PREFIX}/include/freeswitch \
     -I/usr/local/include \
-    lws_glue.cpp audio_pipe.cpp parser.cpp 2>&1 | tee /tmp/mod_audio_fork_g++.log > /dev/null
-check_success "Failed to compile C++ files (check /tmp/mod_audio_fork_g++.log)" "g++ C++ files"
+    lws_glue.cpp audio_pipe.cpp parser.cpp
+check_success "Failed to compile C++ files" "g++ C++ files"
+echo -e "  ${GREEN}[$(date +%T)] ✓ C++ files compiled${NC}"
 
 log_substep "Linking mod_audio_fork.so..."
+echo -e "  ${CYAN}[$(date +%T)] Running: g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto${NC}"
 mkdir -p ${FS_PREFIX}/lib/freeswitch/mod
 g++ -shared \
     -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so \
@@ -670,8 +686,9 @@ g++ -shared \
     -lwebsockets \
     -lpthread \
     -lssl \
-    -lcrypto 2>&1 | tee /tmp/mod_audio_fork_link.log > /dev/null
-check_success "Failed to link mod_audio_fork.so (check /tmp/mod_audio_fork_link.log)" "g++ linking"
+    -lcrypto
+check_success "Failed to link mod_audio_fork.so" "g++ linking"
+echo -e "  ${GREEN}[$(date +%T)] ✓ mod_audio_fork.so linked${NC}"
 
 log_substep "Validating mod_audio_fork.so with ldd..."
 if ldd ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so | grep -q "not found"; then
