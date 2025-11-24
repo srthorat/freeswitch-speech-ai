@@ -191,11 +191,11 @@ public:
 				emit_metadata_event(psession, m_metadata.c_str(), TRANSCRIBE_EVENT_SESSION_START, m_bugname.c_str());
 
 				// Send session start to Pusher (if configured)
-				// Wait for sip_call_id to become available (retry up to 10 times with 50ms delay)
+				// Wait for sip_call_id to become available (retry up to 10 times with 5ms delay)
 				const char* sip_call_id = NULL;
 				int retry_count = 0;
 				const int max_retries = 10;
-				const int retry_delay_ms = 50;
+				const int retry_delay_ms = 5;
 
 				while (retry_count < max_retries) {
 					sip_call_id = switch_channel_get_variable(channel, "sip_call_id");

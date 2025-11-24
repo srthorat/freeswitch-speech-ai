@@ -411,11 +411,11 @@ static void responseHandler(switch_core_session_t* session,
 
 	// Send session start to Pusher on successful connection
 	if (0 == strcmp(eventName, TRANSCRIBE_EVENT_CONNECT_SUCCESS)) {
-		// Wait for sip_call_id to become available (retry up to 10 times with 50ms delay)
+		// Wait for sip_call_id to become available (retry up to 10 times with 5ms delay)
 		const char* sip_call_id = NULL;
 		int retry_count = 0;
 		const int max_retries = 10;
-		const int retry_delay_ms = 50;
+		const int retry_delay_ms = 5;
 
 		while (retry_count < max_retries) {
 			sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
