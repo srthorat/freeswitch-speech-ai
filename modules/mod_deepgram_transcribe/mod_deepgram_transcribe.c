@@ -24,8 +24,25 @@ static switch_status_t do_stop(switch_core_session_t *session, char* bugname);
  * ============================================================================ */
 
 // Curl write callback (discard response)
+// Structure to capture Pusher response
+struct pusher_response {
+	char* data;
+	size_t size;
+};
+
 static size_t pusher_curl_write_cb(void *contents, size_t size, size_t nmemb, void *userp) {
-	return size * nmemb;
+	size_t realsize = size * nmemb;
+	struct pusher_response* resp = (struct pusher_response*)userp;
+
+	char* ptr = realloc(resp->data, resp->size + realsize + 1);
+	if (!ptr) return 0;
+
+	resp->data = ptr;
+	memcpy(&(resp->data[resp->size]), contents, realsize);
+	resp->size += realsize;
+	resp->data[resp->size] = 0;
+
+	return realsize;
 }
 
 // Convert binary data to hex string
@@ -63,7 +80,9 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	const char* cluster = getenv("PUSHER_CLUSTER");
 
 	if (!app_id || !app_key || !app_secret) {
-		return; // Pusher not configured, skip silently
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+			"Pusher not configured (missing PUSHER_APP_ID, PUSHER_KEY, or PUSHER_SECRET) - skipping transcription event\n");
+		return;
 	}
 	if (!cluster) cluster = "ap2";
 
@@ -217,6 +236,9 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	CURL* curl = curl_easy_init();
 	if (!curl) return;
 
+	// Capture response
+	struct pusher_response response = {0};
+
 	struct curl_slist* headers = NULL;
 	headers = curl_slist_append(headers, "Content-Type: application/json");
 
@@ -225,14 +247,25 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, pusher_curl_write_cb);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
 	CURLcode res = curl_easy_perform(curl);
 
 	if (res != CURLE_OK) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
 			"Pusher API call failed: %s\n", curl_easy_strerror(res));
+	} else {
+		// Check HTTP status code
+		long http_code = 0;
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+		if (http_code != 200) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+				"Pusher returned HTTP %ld: %s\n", http_code,
+				response.data ? response.data : "(no response)");
+		}
 	}
 
+	if (response.data) free(response.data);
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 }
@@ -337,6 +370,9 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
 	CURL* curl = curl_easy_init();
 	if (!curl) return;
 
+	// Capture response
+	struct pusher_response response = {0};
+
 	struct curl_slist* headers = NULL;
 	headers = curl_slist_append(headers, "Content-Type: application/json");
 
@@ -345,14 +381,25 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, pusher_curl_write_cb);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
 	CURLcode res = curl_easy_perform(curl);
 
 	if (res != CURLE_OK) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
 			"Pusher session_start call failed: %s\n", curl_easy_strerror(res));
+	} else {
+		// Check HTTP status code
+		long http_code = 0;
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+		if (http_code != 200) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+				"Pusher session_start returned HTTP %ld: %s\n", http_code,
+				response.data ? response.data : "(no response)");
+		}
 	}
 
+	if (response.data) free(response.data);
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 }
