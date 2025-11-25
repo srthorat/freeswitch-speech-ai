@@ -3,10 +3,11 @@
 This directory contains all installation, maintenance, and utility scripts for **Plain Linux deployments** of FreeSWITCH Speech AI modules.
 
 > **⚠️ Plain Linux vs Docker:**
-> - **Plain Linux (these scripts):** 3 core modules (audio_fork, aws, deepgram) + Pusher integration
+> - **Plain Linux (these scripts):** 4 core modules (audio_fork, aws, deepgram, google) + Pusher integration
 > - **Docker (root scripts):** All 5 modules (audio_fork, aws, azure, deepgram, google) + all service integrations
 >
-> If you need Azure or Google Cloud modules, use Docker deployment instead.
+> **New:** Google Cloud Speech-to-Text V2 module is now supported in plain Linux with fast installation!
+> If you need Azure modules, use Docker deployment instead.
 
 ## 📁 Script Categories
 
@@ -171,7 +172,7 @@ sudo ./scripts/cleanup-all.sh --yes
 
 ### install-all.sh
 
-**Purpose:** Full installation of FreeSWITCH + 3 core modules + dependencies (Plain Linux)
+**Purpose:** Full installation of FreeSWITCH + core modules + dependencies (Plain Linux)
 
 **What it installs:**
 - FreeSWITCH 1.10.11
@@ -184,7 +185,8 @@ sudo ./scripts/cleanup-all.sh --yes
 - Example dialplan
 - Systemd service
 
-> **Note:** Azure and Google Cloud modules are NOT installed. Use Docker deployment if you need all 5 modules.
+> **Note:** Google Cloud module support is available via `install-modules-only.sh` with fast gRPC installation.
+> Azure module requires Docker deployment.
 
 **Options:**
 - `--freeswitch-prefix PATH` - Installation directory (default: /usr/local/freeswitch)
@@ -203,25 +205,29 @@ sudo ./scripts/install-all.sh --build-cpus 8 --freeswitch-prefix /opt/freeswitch
 
 ### install-modules-only.sh
 
-**Purpose:** Install only 3 core modules (FreeSWITCH must already exist)
+**Purpose:** Install 4 core modules with FAST gRPC installation (FreeSWITCH must already exist)
 
 **What it does:**
 - Checks for existing dependencies
-- Installs missing dependencies only (libwebsockets, AWS SDK)
-- Builds 3 core transcription modules:
+- Installs missing dependencies from system packages (libwebsockets, AWS SDK, gRPC)
+- Uses system package manager for gRPC (seconds instead of 20-40 minutes of compilation!)
+- Builds 4 core transcription modules:
   - mod_audio_fork
   - mod_aws_transcribe
   - mod_deepgram_transcribe
+  - mod_google_transcribe (Google Speech-to-Text V2 API)
+- Generates Google proto files locally from speech.proto
 - Does NOT copy dialplan (preserves your configuration)
 
-> **Note:** Azure and Google Cloud modules are NOT installed. Use Docker deployment if you need all 5 modules.
+> **⚡ Fast Installation:** gRPC installed via `apt-get` (system packages) instead of building from source!
+> **New:** Google Cloud Speech V2 module support with single binary, single API registration.
 
 **Options:**
 - `--freeswitch-prefix PATH` - FreeSWITCH directory
 - `--build-cpus N` - CPU cores for compilation
 - `--yes` - Skip confirmation prompts
 
-**Installation time:** 15-20 minutes (faster if dependencies exist)
+**Installation time:** 5-10 minutes (dramatically faster with system gRPC packages!)
 
 **Example:**
 ```bash
@@ -482,6 +488,80 @@ tail -f /usr/local/freeswitch/log/freeswitch.log
 
 # 4. Verify module dependencies
 ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_*.so
+```
+
+---
+
+## 🎤 Google Cloud Speech V2 Module
+
+### API Command Syntax
+
+```bash
+uuid_google_transcribe <call-uuid> start <lang> [interim] [mix-type] [sample-rate]
+uuid_google_transcribe <call-uuid> stop
+```
+
+### Parameters
+
+| Parameter | Required | Options | Default | Description |
+|-----------|----------|---------|---------|-------------|
+| `call-uuid` | Yes | UUID string | - | FreeSWITCH call UUID |
+| `start/stop` | Yes | start \| stop | - | Start or stop transcription |
+| `lang` | Yes* | en-US, es-ES, etc. | - | BCP-47 language code |
+| `interim` | No | true \| false | false | Return interim (partial) results |
+| `mix-type` | No | mono \| mix \| stereo | stereo | Audio channel handling |
+| `sample-rate` | No | 8k \| 16k | 16k | Sample rate (informational) |
+
+*Required for `start` command only
+
+### Examples
+
+```bash
+# Basic usage - English, final results only, stereo
+fs_cli -x "uuid_google_transcribe <uuid> start en-US"
+
+# With interim results
+fs_cli -x "uuid_google_transcribe <uuid> start en-US true"
+
+# Spanish with interim results and mono audio
+fs_cli -x "uuid_google_transcribe <uuid> start es-ES true mono"
+
+# Full command with all parameters
+fs_cli -x "uuid_google_transcribe <uuid> start en-US true stereo 16k"
+
+# Stop transcription
+fs_cli -x "uuid_google_transcribe <uuid> stop"
+```
+
+### Module Features
+
+- **Single v2-only binary:** One `mod_google_transcribe.so` with single API registration
+- **Google Speech-to-Text V2 API:** Latest API with improved accuracy
+- **Pusher integration:** Real-time transcript delivery via Pusher channels
+- **Channel variables:** Advanced configuration via FreeSWITCH channel variables
+- **Local proto generation:** No dependency on external googleapis repository
+
+### Build System
+
+The module uses a self-contained build system:
+- **Makefile-based build** in `modules/mod_google_transcribe/`
+- **Local speech.proto** (Google Speech V2 API definitions)
+- **Generated protobuf files** created during build
+- **System gRPC libraries** (installed via apt-get)
+
+### Verification
+
+After installation, verify the module:
+
+```bash
+# Check module file exists
+ls -l /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so
+
+# Verify single API registration (not uuid_google_transcribe2)
+/usr/local/freeswitch/bin/fs_cli -x "show api" | grep google
+
+# Expected output:
+# uuid_google_transcribe,mod_google_transcribe,Google Speech-to-Text V2 API
 ```
 
 ---
