@@ -1,6 +1,6 @@
-/* 
+/*
  *
- * mod_google_transcribe.c -- Freeswitch module for real-time transcription using google's gRPC interface
+ * mod_google_transcribe.c -- Freeswitch module for real-time transcription using Google Speech-to-Text V2 API
  *
  */
 #include "mod_google_transcribe.h"
@@ -8,7 +8,10 @@
 #include <stdlib.h>
 #include <switch.h>
 
-static const uint32_t DEFAULT_SAMPLE_RATE = 8000;
+// V2 API: Default sample rate 16kHz (optimal for speech recognition)
+static const uint32_t DEFAULT_SAMPLE_RATE = 16000;
+static const char* DEFAULT_LANGUAGE = "en-US";
+static const uint32_t DEFAULT_CHANNELS = 2; // Stereo by default
 
 /* Prototypes */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_transcribe_shutdown);
@@ -292,9 +295,10 @@ SWITCH_STANDARD_API(transcribe2_function)
 	const char* hints = NULL;
 	const char* model = NULL;
 	char* play_file = NULL;
-	
+
 	switch_status_t status = SWITCH_STATUS_FALSE;
-	switch_media_bug_flag_t flags = SMBF_READ_STREAM /* | SMBF_WRITE_STREAM | SMBF_READ_PING */;
+	// V2 API: Default to stereo (read + write streams)
+	switch_media_bug_flag_t flags = SMBF_READ_STREAM | SMBF_WRITE_STREAM | SMBF_STEREO;
 
 	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
 		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
@@ -362,7 +366,8 @@ SWITCH_STANDARD_API(transcribe_function)
 	char *mycmd = NULL, *argv[6] = { 0 };
 	int argc = 0;
 	switch_status_t status = SWITCH_STATUS_FALSE;
-	switch_media_bug_flag_t flags = SMBF_READ_STREAM /* | SMBF_WRITE_STREAM | SMBF_READ_PING */;
+	// V2 API: Default to stereo (read + write streams)
+	switch_media_bug_flag_t flags = SMBF_READ_STREAM | SMBF_WRITE_STREAM | SMBF_STEREO;
 
 	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
 		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
