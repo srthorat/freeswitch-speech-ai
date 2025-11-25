@@ -268,100 +268,39 @@ else
     echo -e "${YELLOW}⚠${NC}  WARNING: AWS SDK cJSON header not found at expected location"
 fi
 
-# Build gRPC and googleapis if not present
-# Build gRPC and googleapis if not present (FAST VERSION - no compilation)
-if ! ldconfig -p | grep -q libgrpc++; then
-    echo "Installing gRPC v1.64.2 (prebuilt binaries)..."
-    echo "This will take 1-2 seconds instead of 20-40 minutes."
+# Install gRPC from system packages (FAST VERSION - no compilation)
+if ! command -v protoc &> /dev/null || ! command -v grpc_cpp_plugin &> /dev/null; then
+    echo "Installing gRPC from system packages..."
+    echo "This takes seconds instead of 20-40 minutes compiling from source."
 
     # Remove old entry if exists
     sed -i '/^grpc=/d' "$MANIFEST_FILE" 2>/dev/null || true
-    sed -i '/^googleapis=/d' "$MANIFEST_FILE" 2>/dev/null || true
 
-    cd /usr/local/src || exit 1
-
-    # --------------------------
-    # Install Prebuilt gRPC Bundle
-    # --------------------------
-    GRPC_DIR="/opt/grpc-1.64.2"
-
-    # Remove old extract if exists
-    rm -rf "$GRPC_DIR"
-
-    echo "Downloading prebuilt gRPC runtime..."
-    if ! curl -fLo /tmp/grpc_cxx.tar.gz \
-        https://packages.grpc.io/archive/2024/05/04/425b34d9/linux/x86_64/grpc_cxx.tar.gz; then
-        echo -e "${RED}✗ Failed to download prebuilt gRPC bundle${NC}"
+    # Install gRPC development packages from system repos
+    if ! apt-get install -y \
+        libgrpc++-dev \
+        libgrpc-dev \
+        protobuf-compiler \
+        protobuf-compiler-grpc \
+        libprotobuf-dev; then
+        echo -e "${RED}✗ Failed to install gRPC packages${NC}"
         exit 1
     fi
-
-    echo "Extracting gRPC..."
-    mkdir -p "$GRPC_DIR"
-    if ! tar -xzf /tmp/grpc_cxx.tar.gz -C "$GRPC_DIR"; then
-        echo -e "${RED}✗ Failed to extract gRPC bundle${NC}"
-        exit 1
-    fi
-
-    # Register libraries
-    echo "$GRFC_DIR/lib" > /etc/ld.so.conf.d/grpc.conf
-    ldconfig
 
     # Validate installation
-    if ! ldconfig -p | grep -q libgrpc++; then
-        echo -e "${RED}✗ gRPC libs not detected after install${NC}"
+    if ! command -v protoc &> /dev/null; then
+        echo -e "${RED}✗ protoc not found after installation${NC}"
         exit 1
     fi
 
-    if ! "$GRPC_DIR/bin/protoc" --version > /dev/null 2>&1; then
-        echo -e "${RED}✗ protoc in gRPC bundle not working${NC}"
+    if ! command -v grpc_cpp_plugin &> /dev/null; then
+        echo -e "${RED}✗ grpc_cpp_plugin not found after installation${NC}"
         exit 1
     fi
-
-    # ------------------------------
-    # Build googleapis (same as before)
-    # ------------------------------
-    echo "Cloning googleapis repository..."
-    cd /usr/local/src || exit 1
-    rm -rf googleapis
-
-    if ! git clone --depth 1 https://github.com/googleapis/googleapis.git; then
-        echo -e "${RED}✗ Failed to clone googleapis repository${NC}"
-        exit 1
-    fi
-
-    cd googleapis || exit 1
-
-    echo "Generating protobuf files for Speech V2 API..."
-    mkdir -p gens
-
-    if ! "$GRPC_DIR/bin/protoc" \
-        --proto_path=. \
-        --cpp_out=gens \
-        --grpc_out=gens \
-        --plugin=protoc-gen-grpc="$GRPC_DIR/bin/grpc_cpp_plugin" \
-        google/cloud/speech/v2/*.proto \
-        google/api/*.proto \
-        google/rpc/*.proto \
-        google/longrunning/*.proto \
-        google/type/*.proto 2>&1 | grep -v "warning:"; then
-        
-        echo -e "${RED}✗ Failed to generate protobuf files${NC}"
-        exit 1
-    fi
-
-    # Validate output
-    if [ ! -f "gens/google/cloud/speech/v2/cloud_speech.pb.cc" ]; then
-        echo -e "${RED}✗ Failed to generate Speech V2 API files${NC}"
-        exit 1
-    fi
-
-    GENERATED_FILES=$(find gens -type f -name "*.pb.cc" | wc -l)
-    echo "Generated ${GENERATED_FILES} protobuf source files"
 
     # Mark as installed
     echo "grpc=installed" >> "$MANIFEST_FILE"
-    echo "googleapis=installed" >> "$MANIFEST_FILE"
-    echo -e "${GREEN}✓ gRPC (prebuilt) and googleapis prepared${NC}"
+    echo -e "${GREEN}✓ gRPC installed from system packages${NC}"
 
 else
     echo -e "${YELLOW}ℹ${NC} gRPC already installed"
