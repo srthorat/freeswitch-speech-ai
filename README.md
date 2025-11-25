@@ -1,6 +1,6 @@
 # FreeSWITCH Transcription Modules
 
-A collection of production-ready FreeSWITCH modules for real-time speech-to-text transcription and audio streaming, supporting multiple cloud providers.
+A collection of production-ready FreeSWITCH modules for real-time speech-to-text transcription and audio streaming.
 
 ## Modules
 
@@ -12,138 +12,660 @@ A collection of production-ready FreeSWITCH modules for real-time speech-to-text
 | [mod_deepgram_transcribe](modules/mod_deepgram_transcribe/) | Deepgram | WebSocket | Fast transcription, keyword boosting |
 | [mod_google_transcribe](modules/mod_google_transcribe/) | Google Cloud | gRPC | High accuracy, punctuation, interim results |
 
+> **Deployment Options:**
+> - **Docker (root):** All 5 modules + all dependencies
+> - **Plain Linux (scripts/):** 3 core modules (audio_fork, aws, deepgram) + Pusher integration
+
 ---
 
 ## Quick Start
 
-Choose your build method:
+### Build All 5 Modules (Docker)
 
-| Script | Best For | Time | Location |
-|--------|----------|------|----------|
-| `./build-locally.sh` | Production/CI/CD | 60-90 min | Docker container |
-| `sudo ./build-batch.sh all` | Production standalone | 75-130 min | /usr/local/src |
-| `sudo ./test-batch-simple.sh all` | Testing/Validation | 75-130 min | /tmp/freeswitch-build |
+```bash
+./build-all-modules.sh
+```
+
+**Build time:** 45-60 minutes (includes all SDKs)
+**Final size:** ~1.5 GB
+**Modules:** All 5 transcription modules
+
+### Run with Docker Compose
+
+```bash
+docker-compose up -d
+```
+
+### Or Run with Script
+
+```bash
+# Basic run (no credentials)
+./run-all-modules.sh freeswitch-speech-ai:all-modules
+
+# With API keys
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  DEEPGRAM_KEY \
+  AWS_KEY AWS_SECRET us-east-1
+```
+
+---
+
+## Plain Linux Installation
+
+For installing directly on Ubuntu/Debian Linux (without Docker), use the installation scripts in the `scripts/` directory.
+
+> **⚠️ Important:** Plain Linux installation includes **only 3 core modules** (audio_fork, aws, deepgram) + **Pusher integration**, unlike Docker which includes all 5 modules.
+
+> **📁 All scripts are in the `scripts/` folder.** See [scripts/README.md](scripts/README.md) for comprehensive documentation.
+
+**What's Included (Plain Linux):**
+- ✅ 3 core modules: mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe
+- ✅ Dependencies: libwebsockets 4.3.3, AWS SDK C++ 1.11.345
+- ✅ Pusher integration for real-time event delivery
+- ✅ Environment configuration for: Deepgram, AWS, Pusher
+- ❌ Azure and Google Cloud modules NOT included (Docker only)
+
+### Pre-Flight Check (Recommended)
+
+Before installation, verify your system meets all requirements:
+
+```bash
+./scripts/preflight-check.sh
+```
+
+### Full Installation (FreeSWITCH + All Modules)
+
+Installs FreeSWITCH, all dependencies, modules, and example dialplan:
+
+```bash
+./scripts/install-all.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - Installation directory (default: /usr/local/freeswitch)
+- `--build-cpus N` - Number of CPU cores for compilation (default: 4)
+- `--yes` - Skip confirmation prompts
+
+**Example:**
+```bash
+# Default installation
+./scripts/install-all.sh
+
+# Custom installation path with 8 cores
+./scripts/install-all.sh --freeswitch-prefix /opt/freeswitch --build-cpus 8
+
+# Automated installation (CI/CD)
+./scripts/install-all.sh --yes
+```
+
+**What gets installed:**
+- ✅ FreeSWITCH 1.10.11
+- ✅ 3 core transcription modules (audio_fork, aws, deepgram)
+- ✅ Required dependencies (libwebsockets, AWS SDK C++)
+- ✅ Example dialplan configuration
+- ✅ Systemd service (if available)
+
+**Installation time:** 25-30 minutes
+
+### Modules-Only Installation
+
+If FreeSWITCH is already installed, install only the modules:
+
+```bash
+./scripts/install-modules-only.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - FreeSWITCH installation directory
+- `--build-cpus N` - CPU cores for compilation
+- `--yes` - Skip confirmation prompts
+
+**Example:**
+```bash
+./scripts/install-modules-only.sh --freeswitch-prefix /usr/local/freeswitch
+```
+
+**What gets installed:**
+- ✅ 3 core transcription modules (audio_fork, aws, deepgram)
+- ✅ Missing dependencies only (checks before installing)
+- ❌ Dialplan NOT copied (preserves your existing configuration)
+
+**Installation time:** 15-20 minutes (faster if dependencies exist)
+
+### Installation Manifest System
+
+Both installation scripts create a **manifest file** that tracks what was installed:
+
+**Location:** `.freeswitch-install-manifest.txt`
+
+**Format:**
+```
+# FreeSWITCH Speech AI Installation Manifest
+# Created: 2025-11-23 10:30:00
+# Format: component=status (installed|existing)
+
+freeswitch=installed
+libwebsockets=installed
+aws-sdk-cpp=installed
+grpc=existing
+protobuf=existing
+```
+
+**Component Status:**
+- `component=installed` - We installed it (will be removed during cleanup)
+- `component=existing` - Already existed (preserved during cleanup)
+
+**Why it matters:**
+- ✅ Smart cleanup - only removes what we installed
+- ✅ Preserves existing dependencies used by other applications
+- ✅ Prevents breaking other software on your system
+
+### Cleanup Scripts
+
+#### Complete Cleanup
+
+Removes FreeSWITCH, modules, and dependencies we installed:
+
+```bash
+./scripts/cleanup-all.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - Installation directory to remove
+- `--yes` - Skip confirmation prompts (requires TWO confirmations by default)
+
+**Safety features:**
+- 🔒 Requires double confirmation before starting
+- 🔒 Uses manifest to only remove what we installed
+- 🔒 Preserves pre-existing dependencies
+- ⚠️ Extra warning if manifest is missing
+
+**Example:**
+```bash
+# Interactive cleanup (recommended)
+./scripts/cleanup-all.sh
+
+# Automated cleanup (use with caution!)
+./scripts/cleanup-all.sh --yes
+```
+
+**What happens when manifest exists:**
+```bash
+# Will only remove components marked as "installed"
+libwebsockets=installed → ✓ Removed
+grpc=existing → ✗ Preserved (was already installed)
+```
+
+**What happens without manifest:**
+```bash
+# Extra warnings shown
+⚠️ Installation manifest not found
+⚠️ Without a manifest, we cannot determine what was installed by our scripts
+⚠️ We will remove ALL selected components (this may affect other applications)
+Continue with full cleanup anyway? (type 'yes' to confirm):
+```
+
+#### Modules-Only Cleanup
+
+Removes only the transcription modules (keeps FreeSWITCH and dependencies):
+
+```bash
+./scripts/cleanup-modules.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - FreeSWITCH installation directory
+- `--yes` - Skip confirmation prompts
+
+**Safety features:**
+- 🔒 Requires double confirmation
+- ✅ Preserves FreeSWITCH installation
+- ✅ Preserves all dependencies
+- ✅ Removes module configuration files
+
+**What gets removed:**
+- mod_audio_fork.so
+- mod_aws_transcribe.so
+- mod_deepgram_transcribe.so
+
+### Utility Scripts
+
+#### Installation Status
+
+Quickly check what's installed and running:
+
+```bash
+./scripts/status.sh [--freeswitch-prefix PATH]
+```
+
+**Output example:**
+```
+FreeSWITCH Installation Status:
+✓ FreeSWITCH: Running
+  ✓ mod_audio_fork: Installed and loaded
+  ✓ mod_aws_transcribe: Installed and loaded
+  ⚠  mod_deepgram_transcribe: Installed but not loaded
+
+Installation Manifest:
+  ✓ freeswitch (installed by us)
+  ✓ libwebsockets (installed by us)
+  ℹ  grpc (was already installed)
+  ℹ  aws-sdk-cpp (was already installed)
+```
+
+**Use cases:**
+- Quick health check
+- Troubleshooting module loading issues
+- Verifying installation before running tests
+
+#### Health Check & Validation
+
+Comprehensive validation of all components:
+
+```bash
+./scripts/health-check.sh [--freeswitch-prefix PATH]
+```
+
+**Checks performed (Plain Linux - 3 modules):**
+- ✓ FreeSWITCH responsive (via fs_cli)
+- ✓ All 3 core modules loaded (audio_fork, aws, deepgram)
+- ✓ Module dependencies satisfied (ldd check)
+- ✓ Systemd service status
+- ✓ Configuration files present
+- ✓ Log file permissions
+
+**Exit codes:**
+- `0` - All checks passed (CI/CD friendly)
+- `1` - One or more checks failed
+
+**Output example:**
+```
+Health Check Results:
+
+FreeSWITCH Core:
+✓ Installed at /usr/local/freeswitch
+✓ Running (PID: 12345)
+✓ Responsive to API commands
+
+Modules:
+✓ mod_audio_fork: Loaded, no missing dependencies
+✓ mod_aws_transcribe: Loaded, no missing dependencies
+✗ mod_deepgram_transcribe: Not loaded
+
+Configuration:
+✓ All .conf.xml files present
+✓ Dialplan configuration valid
+
+Summary: 1 check(s) failed
+Exit code: 1
+```
+
+**Use in CI/CD:**
+```bash
+./scripts/health-check.sh || exit 1  # Fail pipeline if health check fails
+```
+
+#### Fast Module Updates
+
+Update modules without rebuilding all dependencies:
+
+```bash
+./scripts/update-modules.sh [OPTIONS]
+```
+
+**Options:**
+- `--freeswitch-prefix PATH` - FreeSWITCH directory
+- `--build-cpus N` - CPU cores for compilation
+- `--no-restart` - Don't restart FreeSWITCH after update
+- `--yes` - Skip confirmation prompts
+
+**What it does:**
+1. 🔄 Pulls latest code from git repository
+2. 💾 Backs up existing modules
+3. 🔨 Rebuilds only the modules (fast!)
+4. 🔃 Restarts FreeSWITCH (optional)
+
+**Example:**
+```bash
+# Standard update (pulls, builds, restarts)
+./scripts/update-modules.sh
+
+# Update without restarting (for manual reload)
+./scripts/update-modules.sh --no-restart
+
+# Fast update with 8 cores
+./scripts/update-modules.sh --build-cpus 8
+```
+
+**Update time:** 3-5 minutes (vs 25-30 minutes for full reinstall)
+
+**Backup location:**
+```
+/usr/local/freeswitch/lib/freeswitch/mod/.backup.20251123_103000/
+```
+
+**Rollback if needed:**
+```bash
+# If update breaks something, restore from backup
+BACKUP_DIR="/usr/local/freeswitch/lib/freeswitch/mod/.backup.20251123_103000"
+cp $BACKUP_DIR/*.so /usr/local/freeswitch/lib/freeswitch/mod/
+systemctl restart freeswitch
+```
+
+### Additional Utility Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| **preflight-check.sh** | Validate system requirements before installation | `./scripts/preflight-check.sh` |
+| **backup.sh** | Create backup before upgrades | `./scripts/backup.sh` |
+| **rollback.sh** | Restore from backup | `./scripts/rollback.sh` |
+| **configure-services.sh** | Interactive API credentials setup | `./scripts/configure-services.sh` |
+
+> **Note:** For Plain Linux, configure only **Deepgram**, **AWS**, and **Pusher** credentials. Azure and Google Cloud prompts can be skipped (those modules are Docker-only).
+
+**Example workflow with backups:**
+```bash
+# Before upgrading
+./scripts/backup.sh
+
+# Perform upgrade
+./scripts/update-modules.sh
+
+# If something breaks, rollback
+./scripts/rollback.sh
+```
+
+### Script Options Reference
+
+All scripts support common options:
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--freeswitch-prefix PATH` | FreeSWITCH installation directory | `/usr/local/freeswitch` |
+| `--build-cpus N` | CPU cores for compilation | `4` |
+| `--yes` | Skip all confirmation prompts | Interactive mode |
+| `--help` | Show help message | - |
+
+**Environment detection:**
+- ✅ Automatically detects systemd availability
+- ✅ Checks for existing installations before building
+- ✅ Validates dependencies before proceeding
+
+> **📖 For complete script documentation, see [scripts/README.md](scripts/README.md)**
 
 ---
 
 ## Building
 
-### Option 1: Docker Build (Production)
+### Docker Build (All 5 Modules)
 
-**Best for:** Production deployment, CI/CD pipelines
+**Build options:**
 
 ```bash
-./build-locally.sh
+# Default build (4 CPUs)
+./build-all-modules.sh
+
+# Custom build
+./build-all-modules.sh --cpus 8 --tag my-custom-tag
+
+# Without cache
+./build-all-modules.sh --no-cache
 ```
 
 **Features:**
-- Isolated, reproducible builds
-- Optimized container (~500MB)
-- All 5 modules included
-- **Automated validation** - Build fails if modules missing or have dependency issues
-- Production-ready
+- ✅ All 5 modules in one image
+- ✅ Automated validation (build fails if issues detected)
+- ✅ Multi-stage build (optimized size)
+- ✅ Based on freeswitch-base:latest
 
 **Build validation:**
 During the Docker build, all modules are automatically validated:
 - ✓ Verifies all 5 module .so files exist
 - ✓ Checks dependencies with `ldd` (no missing libraries)
+- ✓ Runtime validation (modules load successfully)
 - ✓ Build fails immediately if any module has issues
 
-**Run the container:**
+**Modules included:**
+- mod_audio_fork (WebSocket streaming)
+- mod_aws_transcribe (AWS Transcribe)
+- mod_azure_transcribe (Azure Cognitive Services)
+- mod_deepgram_transcribe (Deepgram)
+- mod_google_transcribe (Google Cloud Speech-to-Text)
+
+**Dependencies:**
+- libwebsockets 4.3.3
+- AWS SDK C++ 1.11.345
+- gRPC 1.64.2 + protobuf
+- Azure Speech SDK 1.37.0
+
+---
+
+## Running
+
+### Option 1: Docker Compose (Recommended)
+
+Edit `docker-compose.yml` and uncomment API keys for the services you want to use:
+
+```yaml
+environment:
+  # Deepgram
+  - DEEPGRAM_API_KEY=your_key_here
+
+  # AWS (permanent credentials)
+  - AWS_ACCESS_KEY_ID=AKIA***
+  - AWS_SECRET_ACCESS_KEY=***
+  - AWS_REGION=us-east-1
+
+  # AWS (temporary STS credentials)
+  - AWS_ACCESS_KEY_ID=ASIA***
+  - AWS_SECRET_ACCESS_KEY=***
+  - AWS_SESSION_TOKEN=IQoJ***  # Required for ASIA* keys
+  - AWS_REGION=us-east-1
+
+  # Azure Cognitive Services
+  - AZURE_SUBSCRIPTION_KEY=your_key_here
+  - AZURE_REGION=eastus
+
+  # Google Cloud Speech-to-Text
+  - GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+```
+
+Then run:
 ```bash
-docker run -d \
-  --name freeswitch \
-  -p 5060:5060/udp \
-  -p 5060:5060/tcp \
-  -p 8021:8021/tcp \
-  -v $(pwd)/logs:/usr/local/freeswitch/log \
-  freeswitch-transcribe:latest
+docker-compose up -d
+```
+
+### Option 2: Run Script
+
+```bash
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  [DEEPGRAM_KEY] \
+  [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] \
+  [AWS_SESSION_TOKEN]
+```
+
+**Examples:**
+
+```bash
+# Deepgram only
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  sk_***
+
+# AWS permanent credentials (AKIA*)
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  "" \
+  AKIA*** secret us-east-1
+
+# AWS temporary STS credentials (ASIA*)
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  "" \
+  ASIA*** secret us-east-1 IQoJ***
+
+# Both Deepgram and AWS
+./run-all-modules.sh freeswitch-speech-ai:all-modules \
+  sk_deepgram \
+  AKIA*** aws_secret us-east-1
+```
+
+> **Note:** For Azure and Google Cloud, configure credentials in docker-compose.yml or pass as environment variables to docker run.
+
+---
+
+## AWS Credentials (Including STS Tokens)
+
+### Permanent Credentials (AKIA*)
+
+```bash
+docker run -e AWS_ACCESS_KEY_ID=AKIA*** \
+           -e AWS_SECRET_ACCESS_KEY=*** \
+           -e AWS_REGION=us-east-1 \
+           freeswitch-speech-ai:all-modules
+```
+
+### Temporary STS Credentials (ASIA*)
+
+**Important:** ASIA* keys require `AWS_SESSION_TOKEN`
+
+```bash
+docker run -e AWS_ACCESS_KEY_ID=ASIA*** \
+           -e AWS_SECRET_ACCESS_KEY=*** \
+           -e AWS_SESSION_TOKEN=IQoJ*** \
+           -e AWS_REGION=us-east-1 \
+           freeswitch-speech-ai:all-modules
+```
+
+### IAM Roles (EC2/ECS)
+
+No credentials needed - automatically uses instance role:
+
+```bash
+docker run freeswitch-speech-ai:all-modules
 ```
 
 ---
 
-### Option 2: Batch Build (Production Standalone)
+## Configuration
 
-**Best for:** Production standalone builds, learning dependencies, debugging
+### Extension Setup
 
-**Prerequisites:**
-- Ubuntu 20.04/22.04/24.04 or Debian 11
-- Root access (sudo)
-- 20GB+ free disk space
-- 8GB+ RAM
-- 4+ CPU cores
+Each extension can have different transcription services enabled:
 
-**Build all batches:**
-```bash
-sudo ./build-batch.sh all
+```xml
+<!-- User Directory: /usr/local/freeswitch/conf/directory/default/1000.xml -->
+<user id="1000">
+  <params>
+    <param name="password" value="1234"/>
+  </params>
+  <variables>
+    <variable name="effective_caller_id_name" value="Alice Johnson"/>
+    <variable name="effective_caller_id_number" value="1000"/>
+
+    <!-- Enable service for this extension -->
+    <variable name="enable_audio_fork" value="true"/>
+    <!-- or -->
+    <variable name="enable_deepgram" value="true"/>
+    <!-- or -->
+    <variable name="enable_aws_transcribe" value="true"/>
+    <!-- or -->
+    <variable name="enable_azure" value="true"/>
+    <!-- or -->
+    <variable name="enable_google_transcribe" value="true"/>
+  </variables>
+</user>
 ```
 
-**Or build individually:**
-```bash
-sudo ./build-batch.sh 1  # CMake (1 min)
-sudo ./build-batch.sh 2  # gRPC + Protobuf (15-30 min)
-sudo ./build-batch.sh 3  # googleapis + libwebsockets (5-10 min)
-sudo ./build-batch.sh 4  # Azure Speech SDK (1 min)
-sudo ./build-batch.sh 5  # spandsp + sofia-sip + libfvad (10-15 min)
-sudo ./build-batch.sh 6  # AWS SDK C++ + AWS C Common (20-40 min)
-sudo ./build-batch.sh 7  # FreeSWITCH + Modules (20-30 min)
-```
+### Dialplan Configuration
 
-**Features:**
-- Catch errors early (fail fast)
-- Resume from last successful batch
-- Understand dependencies step-by-step
-- Production-ready standalone builds
-
-**What it does:**
-1. Installs system dependencies
-2. Builds CMake 3.28.3
-3. Builds gRPC 1.64.2 + Protocol Buffers
-4. Builds googleapis for Google Cloud
-5. Builds libwebsockets 4.3.3
-6. Installs Azure Speech SDK 1.37.0
-7. Builds spandsp, sofia-sip 1.13.17, libfvad
-8. Builds AWS SDK C++ 1.11.345
-9. Builds FreeSWITCH 1.10.11
-10. Copies and builds all 5 modules
-11. Verifies all modules load correctly
-
-**Duration:** 75-130 minutes
-
-**Output:** FreeSWITCH installed at `/usr/local/freeswitch/`
+See `examples/freeswitch-config/dialplan/default.xml` for complete examples with:
+- Speaker information setup
+- Conditional transcription based on user flags
+- External inbound/outbound call handling
+- Pusher integration with enhanced metadata
 
 ---
 
-### Option 3: Simplified Test Build
+## API Commands
 
-**Best for:** Testing without apt-get, validation
+### mod_audio_fork
 
 ```bash
-# Run all batches
-sudo ./test-batch-simple.sh all
+# Start streaming
+uuid_audio_fork <uuid> start ws://server:port/path [mono|mixed|stereo] [8k|16k|48k]
 
-# Or specific batch
-sudo ./test-batch-simple.sh 6
+# Stop streaming
+uuid_audio_fork <uuid> stop
 ```
 
-**Features:**
-- Builds in `/tmp/freeswitch-build/`
-- No system package installation
-- Requires root only for `make install` and `ldconfig`
-- Good for restricted environments
+### mod_deepgram_transcribe
+
+```bash
+# Start transcription
+uuid_deepgram_transcribe <uuid> start <lang> [interim] [stereo]
+
+# Stop transcription
+uuid_deepgram_transcribe <uuid> stop
+```
+
+### mod_aws_transcribe
+
+```bash
+# Start transcription
+uuid_aws_transcribe <uuid> start <lang> [interim] [stereo]
+
+# Stop transcription
+uuid_aws_transcribe <uuid> stop
+```
+
+### mod_azure_transcribe
+
+```bash
+# Start transcription
+uuid_azure_transcribe <uuid> start <lang> [interim]
+
+# Stop transcription
+uuid_azure_transcribe <uuid> stop
+```
+
+### mod_google_transcribe
+
+```bash
+# Start transcription
+uuid_google_transcribe <uuid> start <lang> [interim]
+
+# Stop transcription
+uuid_google_transcribe <uuid> stop
+```
 
 ---
 
-## Build Scripts Comparison
+## Testing
 
-| Feature | Docker | Batch | Test |
-|---------|--------|-------|------|
-| Install system packages | ✓ | ✓ | ✗ |
-| Requires root | ✓ | ✓ | ✓* |
-| Build location | Container | /usr/local/src | /tmp |
-| Resume capability | ✗ | ✓ | ✓ |
-| Module verification | ✓ | ✓ | ✓ |
-| Production ready | ✓ | ✓ | ✗ |
+### Extension Credentials
+
+| Extension | Username | Password | Service Enabled |
+|-----------|----------|----------|-----------------|
+| 1000 | 1000 | 1234 | Audio Fork |
+| 1001 | 1001 | 1234 | Deepgram |
+| 1002 | 1002 | 1234 | Azure |
+| 1003 | 1003 | 1234 | AWS |
+| 1004 | 1004 | 1234 | Google |
+
+### Verify Modules
+
+```bash
+# Access FreeSWITCH CLI
+docker exec -it freeswitch fs_cli
+
+# Check loaded modules
+freeswitch@internal> show modules | grep -E 'audio_fork|deepgram|aws|azure|google'
+
+# Expected output (all 5 modules):
+api,uuid_audio_fork,mod_audio_fork,/usr/local/freeswitch/lib/freeswitch/mod/mod_audio_fork.so
+api,uuid_aws_transcribe,mod_aws_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so
+api,uuid_azure_transcribe,mod_azure_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_azure_transcribe.so
+api,uuid_deepgram_transcribe,mod_deepgram_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so
+api,uuid_google_transcribe,mod_google_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so
+```
 
 *Only for `make install` and `ldconfig`
 
@@ -490,7 +1012,7 @@ tail -f /usr/local/freeswitch/log/freeswitch.log
 - **[Real-Time Transcription Delivery](docs/REALTIME_TRANSCRIPTION_DELIVERY.md)** - Guide for delivering transcription events to frontend applications
 - **[XML Dialplan vs Lua](docs/DIALPLAN_VS_LUA.md)** - Comparison of FreeSWITCH call control approaches
 - **[Docker Deployment Guide](dockerfiles/README.md)** - Complete Docker build and deployment instructions
-- **[Per-User Multi-Service Setup](examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)** - Enable different transcription services per user
+- **[Per-User Multi-Service Setup](docs/PER_USER_MULTI_SERVICE.md)** - Enable different transcription services per user
 
 ### 🔧 Module Documentation
 

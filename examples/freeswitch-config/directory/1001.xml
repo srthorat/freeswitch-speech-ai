@@ -21,7 +21,8 @@
       <variable name="toll_allow" value="domestic,international,local"/>
       <variable name="accountcode" value="1001"/>
       <variable name="user_context" value="default"/>
-      <variable name="effective_caller_id_name" value="Extension 1001"/>
+      <!-- ✅ SPEAKER INFORMATION (Required for Pusher) -->
+      <variable name="effective_caller_id_name" value="Bob Smith"/>
       <variable name="effective_caller_id_number" value="1001"/>
 
       <!-- ⚙️ SERVICE FLAG: Deepgram Transcription Enabled -->

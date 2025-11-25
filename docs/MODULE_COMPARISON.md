@@ -1213,7 +1213,7 @@ await ep.api('uuid_aws_transcribe', `${ep.uuid} start en-US interim stereo`);
 - [Stereo Channel Assignment Guide](STEREO_CHANNEL_ASSIGNMENT.md)
 - [Real-time Transcription Delivery](REALTIME_TRANSCRIPTION_DELIVERY.md)
 - [XML Dialplan vs Lua Comparison](DIALPLAN_VS_LUA.md)
-- [Per-User Multi-Service Setup](../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+- [Per-User Multi-Service Setup](./PER_USER_MULTI_SERVICE.md)
 
 ### Examples
 - [examples/aws_transcribe.js](../examples/aws_transcribe.js)

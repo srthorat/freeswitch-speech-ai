@@ -396,7 +396,7 @@ Fired when an error occurs during transcription. Contains error details in the e
 
 **Recommended Approach for Production:** Use per-user flag-based configuration with centralized settings in dialplan.
 
-📖 **See:** [Per-User Multi-Service Configuration Guide](../../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md)
+📖 **See:** [Per-User Multi-Service Configuration Guide](../../docs/PER_USER_MULTI_SERVICE.md)
 
 This approach provides:
 - Clean user files (flags only)

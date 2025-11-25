@@ -6,44 +6,27 @@
 #include <switch_json.h>
 #include <grpc++/grpc++.h>
 
-#include "google/cloud/speech/v1p1beta1/cloud_speech.grpc.pb.h"
+#include "speech.grpc.pb.h"
+#include "speech.pb.h"
 
 #include <switch_json.h>
 
 #include "mod_google_transcribe.h"
 #include "simple_buffer.h"
 
-using google::cloud::speech::v1p1beta1::RecognitionConfig;
-using google::cloud::speech::v1p1beta1::Speech;
-using google::cloud::speech::v1p1beta1::SpeechContext;
-using google::cloud::speech::v1p1beta1::StreamingRecognizeRequest;
-using google::cloud::speech::v1p1beta1::StreamingRecognizeResponse;
-using google::cloud::speech::v1p1beta1::SpeakerDiarizationConfig;
-using google::cloud::speech::v1p1beta1::SpeechAdaptation;
-using google::cloud::speech::v1p1beta1::PhraseSet;
-using google::cloud::speech::v1p1beta1::PhraseSet_Phrase;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_InteractionType_DISCUSSION;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_InteractionType_PRESENTATION;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_InteractionType_PHONE_CALL;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_InteractionType_VOICEMAIL;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_InteractionType_PROFESSIONALLY_PRODUCED;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_InteractionType_VOICE_SEARCH;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_InteractionType_VOICE_COMMAND;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_InteractionType_DICTATION;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_MicrophoneDistance_NEARFIELD;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_MicrophoneDistance_MIDFIELD;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_MicrophoneDistance_FARFIELD;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_OriginalMediaType_AUDIO;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_OriginalMediaType_VIDEO;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_RecordingDeviceType_SMARTPHONE;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_RecordingDeviceType_PC;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_RecordingDeviceType_PHONE_LINE;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_RecordingDeviceType_VEHICLE;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_RecordingDeviceType_OTHER_OUTDOOR_DEVICE;
-using google::cloud::speech::v1p1beta1::RecognitionMetadata_RecordingDeviceType_OTHER_INDOOR_DEVICE;
-using google::cloud::speech::v1p1beta1::StreamingRecognizeResponse_SpeechEventType_END_OF_SINGLE_UTTERANCE;
-using google::rpc::Status;
+using google::cloud::speech::v2::RecognitionConfig;
+using google::cloud::speech::v2::Speech;
+using google::cloud::speech::v2::StreamingRecognizeRequest;
+using google::cloud::speech::v2::StreamingRecognizeResponse;
+using google::cloud::speech::v2::StreamingRecognitionConfig;
+using google::cloud::speech::v2::StreamingRecognitionFeatures;
+using google::cloud::speech::v2::RecognitionFeatures;
+using google::cloud::speech::v2::SpeakerDiarizationConfig;
+using google::cloud::speech::v2::SpeechAdaptation;
+using google::cloud::speech::v2::PhraseSet;
+using google::cloud::speech::v2::AutoDetectDecodingConfig;
+using google::cloud::speech::v2::ExplicitDecodingConfig;
+using google::cloud::speech::v2::Phrase;
 
 #define CHUNKSIZE (320)
 
@@ -97,97 +80,119 @@ public:
 		}
 
   	m_stub = Speech::NewStub(m_channel);
-  		
+
+		// V2 API: Build recognizer path (using default recognizer "_")
+		const char* project_id = std::getenv("GOOGLE_CLOUD_PROJECT");
+		if (!project_id) {
+			project_id = ""; // Will use default if not set
+		}
+		const char* location = "us"; // Default to US multi-region
+		if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_LOCATION")) {
+			location = var;
+		}
+
+		std::string recognizer_path;
+		if (strlen(project_id) > 0) {
+			recognizer_path = "projects/" + std::string(project_id) + "/locations/" + std::string(location) + "/recognizers/_";
+		} else {
+			recognizer_path = "projects/_/locations/us/recognizers/_"; // Default path
+		}
+
+		m_request.set_recognizer(recognizer_path);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "Using recognizer path: %s\n", recognizer_path.c_str());
+
+		// V2 API: Configure streaming recognition
 		auto* streaming_config = m_request.mutable_streaming_config();
 		RecognitionConfig* config = streaming_config->mutable_config();
 
-    streaming_config->set_interim_results(interim);
-    if (single_utterance == 1) {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "enable_single_utterance\n");
-      streaming_config->set_single_utterance(true);
-    }
-    else {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "enable_single_utterance is FALSE\n");
-      streaming_config->set_single_utterance(false);
-    }
+		// V2 API: Streaming features (interim results, voice activity)
+		auto* streaming_features = streaming_config->mutable_streaming_features();
+		streaming_features->set_interim_results(true); // Default: always enable interim results
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: interim results enabled by default\n");
 
-		config->set_language_code(lang);
-    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "transcribe language %s \n", lang);
-    
-  	config->set_sample_rate_hertz(config_sample_rate);
+		// V2 API: Language codes (now an array)
+		config->add_language_codes(lang);
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: primary language %s\n", lang);
 
-		config->set_encoding(RecognitionConfig::LINEAR16);
+  	// V2 API: Use auto-detection for audio format (default)
+  	auto* auto_decoding = config->mutable_auto_decoding_config();
+  	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: auto-detection enabled for audio format\n");
 
-    // the rest of config comes from channel vars
+  	// V2 API: Default model - chirp_3 (latest generation)
+  	const char* v2_model = "chirp_3";
+  	if (model != NULL) {
+  		v2_model = model;
+  	}
+  	config->set_model(v2_model);
+  	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: using model %s\n", v2_model);
 
-    // number of channels in the audio stream (default: 1)
+  	// V2 API: Recognition features
+  	auto* features = config->mutable_features();
+
+  	// V2 DEFAULT: Enable denoiser (built-in noise reduction)
+  	features->set_enable_automatic_denoising(true);
+  	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: denoiser enabled by default\n");
+
+  	// Optional: Disable denoiser if explicitly set
+  	if (switch_false(switch_channel_get_variable(channel, "GOOGLE_SPEECH_ENABLE_DENOISER"))) {
+  		features->set_enable_automatic_denoising(false);
+  		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: denoiser disabled\n");
+  	}
+
+    // V2 API: Channel configuration (default stereo = 2 channels)
     if (channels > 1) {
-      config->set_audio_channel_count(channels);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "audio_channel_count %d\n", channels);
+      auto* explicit_decoding = config->mutable_explicit_decoding_config();
+      explicit_decoding->set_audio_channel_count(channels);
+      explicit_decoding->set_sample_rate_hertz(config_sample_rate);
+      explicit_decoding->set_encoding(google::cloud::speech::v2::ExplicitDecodingConfig::LINEAR16);
 
-      // transcribe each separately?
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: explicit decoding - channels=%d, sample_rate=%d, encoding=LINEAR16\n", channels, config_sample_rate);
+
+      // V2 API: Multi-channel mode - separate recognition per channel
       if (separate_recognition == 1) {
-        config->set_enable_separate_recognition_per_channel(true);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "enable_separate_recognition_per_channel on\n");
+        features->set_multi_channel_mode(google::cloud::speech::v2::RecognitionFeatures::SEPARATE_RECOGNITION_PER_CHANNEL);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: separate recognition per channel enabled\n");
       }
     }
 
-    // max alternatives
-    if (max_alternatives > 1) {
-      config->set_max_alternatives(max_alternatives);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "max_alternatives %d\n", max_alternatives);
-    }
-
-    // profanity filter
-    if (profanity_filter == 1) {
-      config->set_profanity_filter(true);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "profanity_filter\n");
-    }
-
-    // enable word offsets
+    // V2 API: Word-level timestamps (optional, disabled by default)
     if (word_time_offset == 1) {
-      config->set_enable_word_time_offsets(true);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "enable_word_time_offsets\n");
+      features->set_enable_word_time_offsets(true);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: word time offsets enabled\n");
     }
 
-    // enable automatic punctuation
+    // V2 API: Word-level confidence (optional, disabled by default)
+    if (switch_true(switch_channel_get_variable(channel, "GOOGLE_SPEECH_ENABLE_WORD_CONFIDENCE"))) {
+      features->set_enable_word_confidence(true);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: word confidence enabled\n");
+    }
+
+    // V2 API: Automatic punctuation (optional, disabled by default)
     if (punctuation == 1) {
-      config->set_enable_automatic_punctuation(true);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "enable_automatic_punctuation\n");
-    }
-    else {
-      config->set_enable_automatic_punctuation(false);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "disable_automatic_punctuation\n");
+      features->set_enable_automatic_punctuation(true);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: automatic punctuation enabled\n");
     }
 
-    // speech model
-    if (model != NULL) {
-      config->set_model(model);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "speech model %s\n", model);
+    // V2 API: Profanity filter (optional, disabled by default)
+    if (profanity_filter == 1) {
+      features->set_profanity_filter(true);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: profanity filter enabled\n");
     }
 
-    // use enhanced model
-    if (enhanced == 1) {
-      config->set_use_enhanced(true);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "use_enhanced\n");
-    }
-
-    // hints  
+    // V2 API: Speech adaptation - phrase hints (optional)
     if (hints != NULL) {
       auto* adaptation = config->mutable_adaptation();
       auto* phrase_set = adaptation->add_phrase_sets();
-      auto *context = config->add_speech_contexts();
       float boost = -1;
 
-      // get boost setting for the phrase set in its entirety
+      // Get boost setting for the phrase set
       if (switch_true(switch_channel_get_variable(channel, "GOOGLE_SPEECH_HINTS_BOOST"))) {
      	  boost = (float) atof(switch_channel_get_variable(channel, "GOOGLE_SPEECH_HINTS_BOOST"));
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "boost value: %f\n", boost);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: phrase set boost value: %f\n", boost);
         phrase_set->set_boost(boost);
       }
 
-      // hints are either a simple comma-separated list of phrases, or a json array of objects
-      // containing a phrase and a boost value
+      // Parse hints (JSON array or comma-separated)
       auto *jHint = cJSON_Parse((char *) hints);
       if (jHint) {
         int i = 0;
@@ -197,16 +202,16 @@ public:
           cJSON *jItem = cJSON_GetObjectItem(jPhrase, "phrase");
           if (jItem) {
             phrase->set_value(cJSON_GetStringValue(jItem));
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "phrase: %s\n", phrase->value().c_str());
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: phrase hint: %s\n", phrase->value().c_str());
             if (cJSON_GetObjectItem(jPhrase, "boost")) {
               phrase->set_boost((float) cJSON_GetObjectItem(jPhrase, "boost")->valuedouble);
-              switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "boost value: %f\n", phrase->boost());
+              switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: phrase boost: %f\n", phrase->boost());
             }
             i++;
           }
         }
         cJSON_Delete(jHint);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "added %d hints\n", i);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: added %d phrase hints\n", i);
       }
       else {
         char *phrases[500] = { 0 };
@@ -215,69 +220,49 @@ public:
           auto* phrase = phrase_set->add_phrases();
           phrase->set_value(phrases[i]);
         }
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "added %d hints\n", argc);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: added %d phrase hints\n", argc);
       }
     }
 
-    // alternative language
+    // V2 API: Alternative languages for multi-language detection (optional)
     if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_ALTERNATIVE_LANGUAGE_CODES")) {
-      char *alt_langs[3] = { 0 };
-      int argc = switch_separate_string((char *) var, ',', alt_langs, 3);
+      char *alt_langs[10] = { 0 };
+      int argc = switch_separate_string((char *) var, ',', alt_langs, 10);
       for (int i = 0; i < argc; i++) {
-        config->add_alternative_language_codes(alt_langs[i]);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "added alternative lang %s\n", alt_langs[i]);
+        config->add_language_codes(alt_langs[i]);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: added alternative language: %s\n", alt_langs[i]);
       }
     }
 
-    // speaker diarization
+    // V2 API: Speaker diarization (optional, Chirp 3 supports 14 languages)
     if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_SPEAKER_DIARIZATION")) {
-      auto* diarization_config = config->mutable_diarization_config();
-      diarization_config->set_enable_speaker_diarization(true);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "enabling speaker diarization\n", var);
+      auto* diarization_config = config->mutable_speaker_diarization_config();
+      diarization_config->set_min_speaker_count(1);
+      diarization_config->set_max_speaker_count(6); // Default max speakers
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: speaker diarization enabled\n");
+
       if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_SPEAKER_DIARIZATION_MIN_SPEAKER_COUNT")) {
         int count = std::max(atoi(var), 1);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "setting min speaker count to %d\n", count);
         diarization_config->set_min_speaker_count(count);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: min speaker count: %d\n", count);
       }
       if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_SPEAKER_DIARIZATION_MAX_SPEAKER_COUNT")) {
         int count = std::max(atoi(var), 2);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "setting max speaker count to %d\n", count);
         diarization_config->set_max_speaker_count(count);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: max speaker count: %d\n", count);
       }
     }
 
-    // recognition metadata
-    auto* metadata = config->mutable_metadata();
-    if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_METADATA_INTERACTION_TYPE")) {
-      if (case_insensitive_match("discussion", var)) metadata->set_interaction_type(RecognitionMetadata_InteractionType_DISCUSSION);
-      if (case_insensitive_match("presentation", var)) metadata->set_interaction_type(RecognitionMetadata_InteractionType_PRESENTATION);
-      if (case_insensitive_match("phone_call", var)) metadata->set_interaction_type(RecognitionMetadata_InteractionType_PHONE_CALL);
-      if (case_insensitive_match("voicemail", var)) metadata->set_interaction_type(RecognitionMetadata_InteractionType_VOICEMAIL);
-      if (case_insensitive_match("professionally_produced", var)) metadata->set_interaction_type(RecognitionMetadata_InteractionType_PROFESSIONALLY_PRODUCED);
-      if (case_insensitive_match("voice_search", var)) metadata->set_interaction_type(RecognitionMetadata_InteractionType_VOICE_SEARCH);
-      if (case_insensitive_match("voice_command", var)) metadata->set_interaction_type(RecognitionMetadata_InteractionType_VOICE_COMMAND);
-      if (case_insensitive_match("dictation", var)) metadata->set_interaction_type(RecognitionMetadata_InteractionType_DICTATION);
+    // V2 API: Language detection config (optional)
+    if (switch_true(switch_channel_get_variable(channel, "GOOGLE_SPEECH_ENABLE_LANGUAGE_DETECTION"))) {
+      auto* lang_detection = features->mutable_language_detection_config();
+      lang_detection->set_enable_language_detection(true);
+      // Language codes already added above
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: language detection enabled\n");
     }
-    if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_METADATA_INDUSTRY_NAICS_CODE")) {
-      metadata->set_industry_naics_code_of_audio(atoi(var));
-    }
-    if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_METADATA_MICROPHONE_DISTANCE")) {
-      if (case_insensitive_match("nearfield", var)) metadata->set_microphone_distance(RecognitionMetadata_MicrophoneDistance_NEARFIELD);
-      if (case_insensitive_match("midfield", var)) metadata->set_microphone_distance(RecognitionMetadata_MicrophoneDistance_MIDFIELD);
-      if (case_insensitive_match("farfield", var)) metadata->set_microphone_distance(RecognitionMetadata_MicrophoneDistance_FARFIELD);
-    }
-    if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_METADATA_ORIGINAL_MEDIA_TYPE")) {
-      if (case_insensitive_match("audio", var)) metadata->set_original_media_type(RecognitionMetadata_OriginalMediaType_AUDIO);
-      if (case_insensitive_match("video", var)) metadata->set_original_media_type(RecognitionMetadata_OriginalMediaType_VIDEO);
-    }
-    if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_METADATA_RECORDING_DEVICE_TYPE")) {
-      if (case_insensitive_match("smartphone", var)) metadata->set_recording_device_type(RecognitionMetadata_RecordingDeviceType_SMARTPHONE);
-      if (case_insensitive_match("pc", var)) metadata->set_recording_device_type(RecognitionMetadata_RecordingDeviceType_PC);
-      if (case_insensitive_match("phone_line", var)) metadata->set_recording_device_type(RecognitionMetadata_RecordingDeviceType_PHONE_LINE);
-      if (case_insensitive_match("vehicle", var)) metadata->set_recording_device_type(RecognitionMetadata_RecordingDeviceType_VEHICLE);
-      if (case_insensitive_match("other_outdoor_device", var)) metadata->set_recording_device_type(RecognitionMetadata_RecordingDeviceType_OTHER_OUTDOOR_DEVICE);
-      if (case_insensitive_match("other_indoor_device", var)) metadata->set_recording_device_type(RecognitionMetadata_RecordingDeviceType_OTHER_INDOOR_DEVICE);
-    }
+
+    // V2 REMOVED: Recognition metadata not available in v2 API
+    // If you need metadata, use custom labels or external tracking
 	}
 
 	~GStreamer() {
@@ -317,7 +302,7 @@ public:
       }
       return true;
     }
-    m_request.set_audio_content(data, datalen);
+    m_request.set_audio_content(std::string((char*)data, datalen));
     bool ok = m_streamer->Write(m_request);
     return ok;
   }
@@ -397,11 +382,11 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
     count++;
     auto speech_event_type = response.speech_event_type();
     if (response.has_error()) {
-      Status status = response.error();
-      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "grpc_read_thread: error %s (%d)\n", status.message().c_str(), status.code()) ;
+      auto error = response.error();
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "grpc_read_thread: error %s (%d)\n", error.message().c_str(), error.code()) ;
       cJSON* json = cJSON_CreateObject();
       cJSON_AddStringToObject(json, "type", "error");
-      cJSON_AddStringToObject(json, "error", status.message().c_str());
+      cJSON_AddStringToObject(json, "error", error.message().c_str());
       char* jsonString = cJSON_PrintUnformatted(json);
       cb->responseHandler(session, jsonString, cb->bugname);
       free(jsonString);
@@ -421,10 +406,8 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
       cJSON * jLanguageCode = cJSON_CreateString(result.language_code().c_str());
       cJSON * jChannelTag = cJSON_CreateNumber(result.channel_tag());
 
-      auto duration = result.result_end_time();
-      int32_t seconds = duration.seconds();
-      int64_t nanos = duration.nanos();
-      int span = (int) trunc(seconds * 1000. + ((float) nanos / 1000000.));
+      int64_t end_time_seconds = result.result_end_time_seconds();
+      int span = (int)(end_time_seconds * 1000); // Convert to milliseconds
       cJSON * jResultEndTime = cJSON_CreateNumber(span);
 
       cJSON_AddItemToObject(jResult, "stability", jStability);
@@ -449,15 +432,17 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
             auto words = alternative.words(b);
             cJSON* jWord = cJSON_CreateObject();
             cJSON_AddItemToObject(jWord, "word", cJSON_CreateString(words.word().c_str()));
-            if (words.has_start_time()) {
-              cJSON_AddItemToObject(jWord, "start_time", cJSON_CreateNumber(words.start_time().seconds()));
+            int64_t start_time = words.start_time_seconds();
+            if (start_time > 0) {
+              cJSON_AddItemToObject(jWord, "start_time", cJSON_CreateNumber(start_time));
             }
-            if (words.has_end_time()) {
-              cJSON_AddItemToObject(jWord, "end_time", cJSON_CreateNumber(words.end_time().seconds()));
+            int64_t end_time = words.end_time_seconds();
+            if (end_time > 0) {
+              cJSON_AddItemToObject(jWord, "end_time", cJSON_CreateNumber(end_time));
             }
-            int speaker_tag = words.speaker_tag();
-            if (speaker_tag > 0) {
-              cJSON_AddItemToObject(jWord, "speaker_tag", cJSON_CreateNumber(speaker_tag));
+            int speaker_label = words.speaker_label();
+            if (speaker_label > 0) {
+              cJSON_AddItemToObject(jWord, "speaker_tag", cJSON_CreateNumber(speaker_label));
             }
             float confidence = words.confidence();
             if (confidence > 0.0) {
@@ -478,7 +463,7 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
       cJSON_Delete(jResult);
     }
 
-    if (speech_event_type == StreamingRecognizeResponse_SpeechEventType_END_OF_SINGLE_UTTERANCE) {
+    if (speech_event_type == google::cloud::speech::v2::END_OF_SINGLE_UTTERANCE) {
       // we only get this when we have requested it, and recognition stops after we get this
       switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "grpc_read_thread: got end_of_utterance\n") ;
       cb->got_end_of_utterance = 1;

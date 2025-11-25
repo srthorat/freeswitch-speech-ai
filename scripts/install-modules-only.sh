@@ -1,0 +1,553 @@
+#!/bin/bash
+# ============================================================================
+# FreeSWITCH Speech AI - Modules Only Installation Script
+# ============================================================================
+# Installs only the 4 modules on existing FreeSWITCH installation:
+#   - mod_audio_fork
+#   - mod_aws_transcribe
+#   - mod_deepgram_transcribe
+#   - mod_google_transcribe
+#
+# Usage:
+#   sudo ./install-modules-only.sh [OPTIONS]
+#
+# Options:
+#   --freeswitch-prefix PATH    FreeSWITCH installation path (default: /usr/local/freeswitch)
+#   --build-cpus N              Number of CPUs for build (default: 4)
+#
+# Note: This script does NOT copy dialplan files.
+#       Use install-all.sh for full installation with dialplan.
+# ============================================================================
+
+set -e
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# Default values
+FS_PREFIX="/usr/local/freeswitch"
+BUILD_CPUS=4
+AUTO_YES=false
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Installation manifest file
+# Placed in repository root (parent of scripts/)
+MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --freeswitch-prefix)
+            FS_PREFIX="$2"
+            shift 2
+            ;;
+        --build-cpus)
+            BUILD_CPUS="$2"
+            shift 2
+            ;;
+        --yes)
+            AUTO_YES=true
+            shift
+            ;;
+        --help)
+            echo "FreeSWITCH Speech AI - Modules-Only Installation Script"
+            echo ""
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --freeswitch-prefix PATH  FreeSWITCH installation directory (default: /usr/local/freeswitch)"
+            echo "  --build-cpus N            Number of CPU cores for compilation (default: 4)"
+            echo "  --yes                     Skip confirmation prompts (auto-accept)"
+            echo "  --help                    Show this help message"
+            echo ""
+            echo "Example:"
+            echo "  sudo $0 --build-cpus 8 --freeswitch-prefix /usr/local/freeswitch"
+            echo ""
+            echo "Note: This script assumes FreeSWITCH is already installed."
+            echo "      Use install-all.sh for a complete installation."
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            echo "Usage: $0 [OPTIONS]"
+            echo "Try '$0 --help' for more information."
+            exit 1
+            ;;
+    esac
+done
+
+# Check root
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}Error: This script must be run as root${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}=============================================${NC}"
+echo -e "${GREEN}Installing Modules Only${NC}"
+echo -e "${GREEN}=============================================${NC}"
+echo "FreeSWITCH Prefix: $FS_PREFIX"
+echo "Build CPUs: $BUILD_CPUS"
+echo ""
+
+# Check if FreeSWITCH exists
+if [ ! -d "$FS_PREFIX" ]; then
+    echo -e "${RED}Error: FreeSWITCH not found at $FS_PREFIX${NC}"
+    echo "Please install FreeSWITCH first or specify correct path with --freeswitch-prefix"
+    exit 1
+fi
+
+# Initialize or update manifest
+if [ ! -f "$MANIFEST_FILE" ]; then
+    echo "# FreeSWITCH Speech AI Installation Manifest" > "$MANIFEST_FILE"
+    echo "# Created: $(date)" >> "$MANIFEST_FILE"
+    echo "# This file tracks what was installed by installation scripts" >> "$MANIFEST_FILE"
+    echo "# Format: component=status (installed|existing)" >> "$MANIFEST_FILE"
+    echo "" >> "$MANIFEST_FILE"
+    echo "freeswitch=existing" >> "$MANIFEST_FILE"
+fi
+
+# ============================================================================
+# Install Dependencies
+# ============================================================================
+echo -e "${GREEN}[1/4] Installing dependencies...${NC}"
+
+# Install system dependencies
+if ! apt-get update; then
+    echo -e "${RED}✗ Failed to update package lists${NC}"
+    echo "Check your internet connection and try again"
+    exit 1
+fi
+
+if ! apt-get install -y \
+    build-essential \
+    git \
+    cmake \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    zlib1g-dev; then
+    echo -e "${RED}✗ Failed to install system dependencies${NC}"
+    exit 1
+fi
+
+# Build libwebsockets if not present
+if ! ldconfig -p | grep -q libwebsockets; then
+    echo "Building libwebsockets 4.3.3..."
+
+    # Remove old entry if exists
+    sed -i '/^libwebsockets=/d' "$MANIFEST_FILE" 2>/dev/null || true
+
+    cd /usr/local/src || exit 1
+
+    if [ ! -d "libwebsockets" ]; then
+        echo "Cloning libwebsockets repository..."
+        if ! git clone --depth 1 -b v4.3.3 https://github.com/warmcat/libwebsockets.git; then
+            echo -e "${RED}✗ Failed to clone libwebsockets repository${NC}"
+            echo "Check your internet connection and try again"
+            exit 1
+        fi
+    fi
+
+    cd libwebsockets || exit 1
+    mkdir -p build && cd build || exit 1
+
+    echo "Configuring libwebsockets..."
+    if ! cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo; then
+        echo -e "${RED}✗ Failed to configure libwebsockets${NC}"
+        exit 1
+    fi
+
+    echo "Compiling libwebsockets (this may take a few minutes)..."
+    if ! make -j ${BUILD_CPUS}; then
+        echo -e "${RED}✗ Failed to compile libwebsockets${NC}"
+        exit 1
+    fi
+
+    echo "Installing libwebsockets..."
+    if ! make install; then
+        echo -e "${RED}✗ Failed to install libwebsockets${NC}"
+        exit 1
+    fi
+
+    ldconfig
+
+    # Mark as installed by us
+    echo "libwebsockets=installed" >> "$MANIFEST_FILE"
+    echo -e "${GREEN}✓ libwebsockets built and installed${NC}"
+else
+    echo -e "${YELLOW}ℹ${NC} libwebsockets already installed"
+    # Mark as existing (not installed by us)
+    if ! grep -q "^libwebsockets=" "$MANIFEST_FILE"; then
+        echo "libwebsockets=existing" >> "$MANIFEST_FILE"
+    fi
+fi
+
+# Build AWS SDK if not present
+if ! ldconfig -p | grep -q aws-cpp-sdk-transcribestreaming; then
+    echo "Building AWS SDK C++ 1.11.345..."
+    echo "This will take 20-30 minutes..."
+
+    # Remove old entry if exists
+    sed -i '/^aws-sdk-cpp=/d' "$MANIFEST_FILE" 2>/dev/null || true
+
+    cd /usr/local/src || exit 1
+
+    if [ ! -d "aws-sdk-cpp" ]; then
+        echo "Cloning AWS SDK repository..."
+        if ! git clone --depth 1 -b 1.11.345 https://github.com/aws/aws-sdk-cpp.git; then
+            echo -e "${RED}✗ Failed to clone AWS SDK repository${NC}"
+            echo "Check your internet connection and try again"
+            exit 1
+        fi
+        cd aws-sdk-cpp || exit 1
+
+        echo "Initializing submodules..."
+        if ! git submodule update --init --recursive; then
+            echo -e "${RED}✗ Failed to initialize AWS SDK submodules${NC}"
+            exit 1
+        fi
+    else
+        cd aws-sdk-cpp || exit 1
+    fi
+
+    mkdir -p build && cd build || exit 1
+
+    echo "Configuring AWS SDK..."
+    if ! cmake .. \
+        -DBUILD_ONLY="transcribestreaming" \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DBUILD_SHARED_LIBS=ON \
+        -DENABLE_TESTING=OFF \
+        -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull"; then
+        echo -e "${RED}✗ Failed to configure AWS SDK${NC}"
+        exit 1
+    fi
+
+    echo "Compiling AWS SDK (this will take 20-30 minutes)..."
+    if ! make -j ${BUILD_CPUS}; then
+        echo -e "${RED}✗ Failed to compile AWS SDK${NC}"
+        echo "Try reducing build parallelism: --build-cpus 2"
+        exit 1
+    fi
+
+    echo "Installing AWS SDK..."
+    if ! make install; then
+        echo -e "${RED}✗ Failed to install AWS SDK${NC}"
+        exit 1
+    fi
+
+    ldconfig
+
+    # Mark as installed by us
+    echo "aws-sdk-cpp=installed" >> "$MANIFEST_FILE"
+    echo -e "${GREEN}✓ AWS SDK built and installed${NC}"
+else
+    echo -e "${YELLOW}ℹ${NC} AWS SDK already installed"
+    # Mark as existing (not installed by us)
+    if ! grep -q "^aws-sdk-cpp=" "$MANIFEST_FILE"; then
+        echo "aws-sdk-cpp=existing" >> "$MANIFEST_FILE"
+    fi
+fi
+
+# Fix cJSON header conflict between AWS SDK and FreeSWITCH
+echo "Fixing cJSON header conflict..."
+if [ -f /usr/local/include/aws/core/external/cjson/cJSON.h ]; then
+    # Check if fix is already applied
+    if ! grep -q '#ifndef cJSON__h' /usr/local/include/aws/core/external/cjson/cJSON.h; then
+        echo "Found AWS SDK cJSON header, adding header guards..."
+        sed -i '/#ifndef cJSON_AS4CPP__h/i #ifndef cJSON__h\n#define cJSON__h' \
+            /usr/local/include/aws/core/external/cjson/cJSON.h
+        echo '#endif' >> /usr/local/include/aws/core/external/cjson/cJSON.h
+        echo -e "${GREEN}✓ cJSON header guards added successfully${NC}"
+    else
+        echo -e "${GREEN}✓ cJSON header guards already applied${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠${NC}  WARNING: AWS SDK cJSON header not found at expected location"
+fi
+
+# Build gRPC and googleapis if not present
+# Build gRPC and googleapis if not present (FAST VERSION - no compilation)
+if ! ldconfig -p | grep -q libgrpc++; then
+    echo "Installing gRPC v1.64.2 (prebuilt binaries)..."
+    echo "This will take 1-2 seconds instead of 20-40 minutes."
+
+    # Remove old entry if exists
+    sed -i '/^grpc=/d' "$MANIFEST_FILE" 2>/dev/null || true
+    sed -i '/^googleapis=/d' "$MANIFEST_FILE" 2>/dev/null || true
+
+    cd /usr/local/src || exit 1
+
+    # --------------------------
+    # Install Prebuilt gRPC Bundle
+    # --------------------------
+    GRPC_DIR="/opt/grpc-1.64.2"
+
+    # Remove old extract if exists
+    rm -rf "$GRPC_DIR"
+
+    echo "Downloading prebuilt gRPC runtime..."
+    if ! curl -fLo /tmp/grpc_cxx.tar.gz \
+        https://packages.grpc.io/archive/2024/05/04/425b34d9/linux/x86_64/grpc_cxx.tar.gz; then
+        echo -e "${RED}✗ Failed to download prebuilt gRPC bundle${NC}"
+        exit 1
+    fi
+
+    echo "Extracting gRPC..."
+    mkdir -p "$GRPC_DIR"
+    if ! tar -xzf /tmp/grpc_cxx.tar.gz -C "$GRPC_DIR"; then
+        echo -e "${RED}✗ Failed to extract gRPC bundle${NC}"
+        exit 1
+    fi
+
+    # Register libraries
+    echo "$GRFC_DIR/lib" > /etc/ld.so.conf.d/grpc.conf
+    ldconfig
+
+    # Validate installation
+    if ! ldconfig -p | grep -q libgrpc++; then
+        echo -e "${RED}✗ gRPC libs not detected after install${NC}"
+        exit 1
+    fi
+
+    if ! "$GRPC_DIR/bin/protoc" --version > /dev/null 2>&1; then
+        echo -e "${RED}✗ protoc in gRPC bundle not working${NC}"
+        exit 1
+    fi
+
+    # ------------------------------
+    # Build googleapis (same as before)
+    # ------------------------------
+    echo "Cloning googleapis repository..."
+    cd /usr/local/src || exit 1
+    rm -rf googleapis
+
+    if ! git clone --depth 1 https://github.com/googleapis/googleapis.git; then
+        echo -e "${RED}✗ Failed to clone googleapis repository${NC}"
+        exit 1
+    fi
+
+    cd googleapis || exit 1
+
+    echo "Generating protobuf files for Speech V2 API..."
+    mkdir -p gens
+
+    if ! "$GRPC_DIR/bin/protoc" \
+        --proto_path=. \
+        --cpp_out=gens \
+        --grpc_out=gens \
+        --plugin=protoc-gen-grpc="$GRPC_DIR/bin/grpc_cpp_plugin" \
+        google/cloud/speech/v2/*.proto \
+        google/api/*.proto \
+        google/rpc/*.proto \
+        google/longrunning/*.proto \
+        google/type/*.proto 2>&1 | grep -v "warning:"; then
+        
+        echo -e "${RED}✗ Failed to generate protobuf files${NC}"
+        exit 1
+    fi
+
+    # Validate output
+    if [ ! -f "gens/google/cloud/speech/v2/cloud_speech.pb.cc" ]; then
+        echo -e "${RED}✗ Failed to generate Speech V2 API files${NC}"
+        exit 1
+    fi
+
+    GENERATED_FILES=$(find gens -type f -name "*.pb.cc" | wc -l)
+    echo "Generated ${GENERATED_FILES} protobuf source files"
+
+    # Mark as installed
+    echo "grpc=installed" >> "$MANIFEST_FILE"
+    echo "googleapis=installed" >> "$MANIFEST_FILE"
+    echo -e "${GREEN}✓ gRPC (prebuilt) and googleapis prepared${NC}"
+
+else
+    echo -e "${YELLOW}ℹ${NC} gRPC already installed"
+
+    if ! grep -q "^grpc=" "$MANIFEST_FILE"; then
+        echo "grpc=existing" >> "$MANIFEST_FILE"
+    fi
+fi
+
+echo -e "${GREEN}✓ Dependencies installed${NC}"
+
+# ============================================================================
+# Build Modules
+# ============================================================================
+echo -e "${GREEN}[2/4] Building modules...${NC}"
+
+# Check if FreeSWITCH headers exist
+if [ ! -d "${FS_PREFIX}/include/freeswitch" ]; then
+    echo -e "${RED}✗ FreeSWITCH headers not found at ${FS_PREFIX}/include/freeswitch${NC}"
+    echo "FreeSWITCH may not be properly installed"
+    exit 1
+fi
+
+# mod_audio_fork
+echo "Building mod_audio_fork..."
+cd ${SCRIPT_DIR}/../modules/mod_audio_fork || exit 1
+
+if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c; then
+    echo -e "${RED}✗ Failed to compile mod_audio_fork.c${NC}"
+    exit 1
+fi
+
+if ! g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp; then
+    echo -e "${RED}✗ Failed to compile mod_audio_fork C++ sources${NC}"
+    exit 1
+fi
+
+mkdir -p ${FS_PREFIX}/lib/freeswitch/mod
+
+if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto; then
+    echo -e "${RED}✗ Failed to link mod_audio_fork${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ mod_audio_fork${NC}"
+
+# mod_aws_transcribe
+echo "Building mod_aws_transcribe..."
+cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe || exit 1
+
+if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c; then
+    echo -e "${RED}✗ Failed to compile mod_aws_transcribe.c${NC}"
+    exit 1
+fi
+
+if ! g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp; then
+    echo -e "${RED}✗ Failed to compile mod_aws_transcribe C++ sources${NC}"
+    exit 1
+fi
+
+if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
+    mod_aws_transcribe.o aws_transcribe_glue.o \
+    -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
+    -laws-c-event-stream -laws-checksums -laws-c-common \
+    -lpthread -lcurl -lssl -lcrypto -lz; then
+    echo -e "${RED}✗ Failed to link mod_aws_transcribe${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ mod_aws_transcribe${NC}"
+
+# mod_deepgram_transcribe
+echo "Building mod_deepgram_transcribe..."
+cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe || exit 1
+
+if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c; then
+    echo -e "${RED}✗ Failed to compile mod_deepgram_transcribe.c${NC}"
+    exit 1
+fi
+
+if ! g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp; then
+    echo -e "${RED}✗ Failed to compile mod_deepgram_transcribe C++ sources${NC}"
+    exit 1
+fi
+
+if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
+    mod_deepgram_transcribe.o dg_transcribe_glue.o audio_pipe.o parser.o \
+    -lwebsockets -lpthread -lssl -lcrypto; then
+    echo -e "${RED}✗ Failed to link mod_deepgram_transcribe${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
+
+# mod_google_transcribe
+echo "Building mod_google_transcribe..."
+
+cd ${SCRIPT_DIR}/../modules/mod_google_transcribe || exit 1
+
+# Check for required tools
+if ! command -v protoc &> /dev/null; then
+    echo -e "${RED}✗ protoc not found${NC}"
+    echo "Protocol Buffers compiler is required"
+    exit 1
+fi
+
+if ! command -v grpc_cpp_plugin &> /dev/null; then
+    echo -e "${RED}✗ grpc_cpp_plugin not found${NC}"
+    echo "gRPC C++ plugin is required"
+    exit 1
+fi
+
+# Generate protobuf files if they don't exist or are older than .proto file
+if [ ! -f "speech.pb.h" ] || [ "speech.proto" -nt "speech.pb.h" ]; then
+    echo "Generating protobuf files..."
+    if ! protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=`which grpc_cpp_plugin` speech.proto; then
+        echo -e "${RED}✗ Failed to generate protobuf files${NC}"
+        exit 1
+    fi
+fi
+
+# Build using Makefile
+if ! make clean && make; then
+    echo -e "${RED}✗ Failed to build mod_google_transcribe${NC}"
+    exit 1
+fi
+
+# Install the module
+if ! make install; then
+    echo -e "${RED}✗ Failed to install mod_google_transcribe${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ mod_google_transcribe${NC}"
+
+# Mark modules as installed
+sed -i '/^modules=/d' "$MANIFEST_FILE" 2>/dev/null || true
+echo "modules=installed" >> "$MANIFEST_FILE"
+
+# ============================================================================
+# Configure FreeSWITCH
+# ============================================================================
+echo -e "${GREEN}[3/4] Configuring FreeSWITCH...${NC}"
+
+MODULES_CONF="${FS_PREFIX}/conf/autoload_configs/modules.conf.xml"
+if [ -f "$MODULES_CONF" ]; then
+    if ! grep -q "mod_audio_fork" "$MODULES_CONF"; then
+        sed -i '/<\/modules>/i \    <!-- Speech Transcription Modules -->' "$MODULES_CONF"
+        sed -i '/<\/modules>/i \    <load module="mod_audio_fork"/>' "$MODULES_CONF"
+        sed -i '/<\/modules>/i \    <load module="mod_aws_transcribe"/>' "$MODULES_CONF"
+        sed -i '/<\/modules>/i \    <load module="mod_deepgram_transcribe"/>' "$MODULES_CONF"
+        sed -i '/<\/modules>/i \    <load module="mod_google_transcribe"/>' "$MODULES_CONF"
+        echo -e "${GREEN}✓ Modules added to configuration${NC}"
+    else
+        echo -e "${YELLOW}ℹ Modules already configured${NC}"
+    fi
+fi
+
+# Note: Dialplan is NOT copied by this script
+# If you need the example dialplan, manually copy from:
+#   examples/freeswitch-config/dialplan/default.xml -> ${FS_PREFIX}/conf/dialplan/
+#   examples/freeswitch-config/directory/100*.xml -> ${FS_PREFIX}/conf/directory/default/
+
+# ============================================================================
+# Validate
+# ============================================================================
+echo -e "${GREEN}[4/4] Validating modules...${NC}"
+
+for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe; do
+    if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
+        echo -e "${GREEN}✓${NC} ${module}.so exists"
+        if ldd "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" | grep -q "not found"; then
+            echo -e "${RED}✗${NC} ${module} has missing dependencies"
+            ldd "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" | grep "not found"
+        else
+            echo -e "${GREEN}✓${NC} ${module} dependencies OK"
+        fi
+    else
+        echo -e "${RED}✗${NC} ${module}.so NOT FOUND"
+    fi
+done
+
+echo ""
+echo -e "${GREEN}=============================================${NC}"
+echo -e "${GREEN}✓ Modules Installation Complete!${NC}"
+echo -e "${GREEN}=============================================${NC}"
+echo ""
+echo "Next steps:"
+echo "  1. Reload FreeSWITCH: ${FS_PREFIX}/bin/fs_cli -x 'reload mod_sofia'"
+echo "  2. Or restart: systemctl restart freeswitch"
+echo "  3. Verify: ${FS_PREFIX}/bin/fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram|google'"
+echo ""

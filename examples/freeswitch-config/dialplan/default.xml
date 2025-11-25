@@ -16,8 +16,14 @@
     <extension name="audio_fork_conditional" continue="true">
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_audio_fork)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [AUDIO_FORK] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Stream"/>
-          <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller':'${caller_id_number}','callee':'${destination_number}','service':'audio_fork'}"/>
+          <!-- Set speaker information for metadata -->
+          <action application="set" data="caller_id_name=${user_data(${caller_id_number}@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="caller_id_name=${caller_id_name:-(Unknown)}"/>
+          <action application="set" data="callee_id_name=${user_data($1@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="callee_id_name=${callee_id_name:-$1}"/>
+
+          <action application="log" data="INFO [AUDIO_FORK] ${caller_id_name}(${caller_id_number}) calling ${callee_id_name}($1) -> Starting Stream"/>
+          <action application="set" data="api_on_answer=uuid_audio_fork ${uuid} start ws://20.244.30.42:8077/stream stereo 16k {'caller_name':'${caller_id_name}','caller_number':'${caller_id_number}','callee_name':'${callee_id_name}','callee_number':'${destination_number}','call_id':'${sip_call_id}','service':'audio_fork'}"/>
           <action application="set" data="api_hangup_hook=uuid_audio_fork ${uuid} stop"/>
         </condition>
       </condition>
@@ -26,7 +32,13 @@
     <extension name="deepgram_conditional" continue="true">
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_deepgram)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [DEEPGRAM] Authorized User ${caller_id_number} calling ${destination_number} -> Starting Deepgram"/>
+          <!-- Set speaker information for Pusher integration -->
+          <action application="set" data="caller_id_name=${user_data(${caller_id_number}@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="caller_id_name=${caller_id_name:-(Unknown)}"/>
+          <action application="set" data="callee_id_name=${user_data($1@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="callee_id_name=${callee_id_name:-$1}"/>
+
+          <action application="log" data="INFO [DEEPGRAM] ${caller_id_name}(${caller_id_number}) → ${callee_id_name}($1) - Starting Deepgram"/>
           <!--<action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/> -->
           <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
           <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
@@ -53,17 +65,23 @@
     <extension name="aws_conditional" continue="true">
       <condition field="${user_data(${caller_id_number}@${domain_name} var enable_aws_transcribe)}" expression="^true$">
         <condition field="destination_number" expression="^(.+)$">
-          <action application="log" data="INFO [AWS] Authorized User ${caller_id_number} calling ${destination_number} -> Starting AWS Transcribe"/>
+          <!-- Set speaker information for Pusher integration -->
+          <action application="set" data="caller_id_name=${user_data(${caller_id_number}@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="caller_id_name=${caller_id_name:-(Unknown)}"/>
+          <action application="set" data="callee_id_name=${user_data($1@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="callee_id_name=${callee_id_name:-$1}"/>
+
+          <action application="log" data="INFO [AWS] ${caller_id_name}(${caller_id_number}) → ${callee_id_name}($1) - Starting AWS Transcribe"/>
           <!-- AWS Credentials: Set here OR pass as Docker environment variables -->
           <!-- Priority: Channel variables (here) > Environment variables > Default AWS credentials chain -->
           <!-- <action application="set" data="AWS_ACCESS_KEY_ID=your-aws-access-key-id"/> -->
           <!-- <action application="set" data="AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key"/> -->
           <!-- <action application="set" data="AWS_REGION=us-east-1"/> -->
-          <!-- Optional: Enable channel identification for agent/customer separation (100% accurate) -->
+          <!-- REQUIRED: Enable channel identification for channel-based speaker mapping -->
           <action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
           <action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
-          <!-- Optional: Enable speaker diarization (AI-based, up to 10 speakers) -->
-          <!-- <action application="set" data="AWS_SHOW_SPEAKER_LABEL=true"/> -->
+          <!-- DON'T enable speaker diarization - we use channel mapping for accuracy -->
+          <!-- <action application="set" data="AWS_SHOW_SPEAKER_LABEL=false"/> -->
           <!-- Optional: Enable VAD to delay connection until speech detected (reduces costs) -->
           <!-- <action application="set" data="START_RECOGNIZING_ON_VAD=true"/> -->
           <!-- Optional: Custom vocabulary -->
@@ -103,6 +121,112 @@
           <!-- <action application="set" data="GOOGLE_SPEECH_HINTS=hello,goodbye,thank you"/> -->
           <action application="set" data="api_on_answer=uuid_google_transcribe ${uuid} start en-US interim stereo"/>
           <action application="set" data="api_hangup_hook=uuid_google_transcribe ${uuid} stop"/>
+        </condition>
+      </condition>
+    </extension>
+
+    <!-- ================================================================ -->
+    <!-- EXTERNAL OUTBOUND CALLS (Extension → External Number)           -->
+    <!-- ================================================================ -->
+    <!--
+      For outbound calls to external numbers (PSTN, mobile, etc.):
+      Uses AWS Transcribe for outbound calls (you can use different service than inbound)
+
+      - Caller info: Pulled from user directory (who's calling)
+      - Callee info: Set manually based on destination number (who they're calling)
+
+      Example: Extension 1003 calls +15551234567
+      Result in Pusher:
+      {
+        "type": "final",
+        "speaker_id": "David Wilson(1003)",  // Channel 0 (caller)
+        "text": "Hello there",
+        "timestamp": "2025-11-22T20:00:00Z"
+      }
+      {
+        "type": "final",
+        "speaker_id": "External +15551234567",  // Channel 1 (callee)
+        "text": "Hi there",
+        "timestamp": "2025-11-22T20:00:05Z"
+      }
+    -->
+    <extension name="external_outbound_transcribe" continue="true">
+      <!-- Match external numbers: Country code + 10-15 digits -->
+      <condition field="${user_data(${caller_id_number}@${domain_name} var enable_deepgram)}" expression="^true$">
+        <condition field="destination_number" expression="^(\+?\d{10,15})$">
+
+          <!-- Caller info from user directory -->
+          <action application="set" data="caller_id_name=${user_data(${caller_id_number}@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="caller_id_name=${caller_id_name:-(Unknown User)}"/>
+
+          <!-- Callee info: External number (could lookup from CRM/database) -->
+          <action application="set" data="callee_id_name=External $1"/>
+
+          <!-- Optional: Lookup from CRM/database -->
+          <!-- <action application="set" data="callee_id_name=${odbc(SELECT name FROM contacts WHERE phone='$1')}"/> -->
+          <!-- <action application="set" data="callee_id_name=${callee_id_name:-External $1}"/> -->
+
+          <action application="log" data="INFO [EXTERNAL-OUT-DEEPGRAM] ${caller_id_name}(${caller_id_number}) calling external ${callee_id_name}"/>
+
+          <!-- Start Deepgram Transcribe for outbound calls -->
+          <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+          <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+          <action application="set" data="DEEPGRAM_SPEECH_DIARIZE=true"/>
+          <action application="set" data="DEEPGRAM_SPEECH_DIARIZE_VERSION=latest"/>
+          <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
+          <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
+
+        </condition>
+      </condition>
+    </extension>
+
+    <!-- ================================================================ -->
+    <!-- EXTERNAL INBOUND CALLS (External Number → Extension)            -->
+    <!-- ================================================================ -->
+    <!--
+      For inbound calls from external numbers to internal extensions:
+      - Caller info: Already set by SIP (from INVITE headers)
+      - Callee info: Pulled from user directory (which extension is receiving)
+
+      Example: +15551234567 calls Extension 1000
+      Result in Pusher:
+      {
+        "type": "final",
+        "speaker_id": "Customer Mobile(+15551234567)",  // Channel 0 (caller)
+        "text": "Hello I need support",
+        "timestamp": "2025-11-22T20:00:00Z"
+      }
+      {
+        "type": "final",
+        "speaker_id": "John Doe(1000)",  // Channel 1 (callee)
+        "text": "Sure, how can I help?",
+        "timestamp": "2025-11-22T20:00:05Z"
+      }
+    -->
+    <extension name="external_inbound_transcribe" continue="true">
+      <!-- Match calls from external numbers to local extensions -->
+      <condition field="destination_number" expression="^(10[01][0-9])$">
+        <!-- Check if destination user has transcription enabled -->
+        <condition field="${user_data($1@${domain_name} var enable_deepgram)}" expression="^true$">
+
+          <!-- Caller info: Already set from SIP INVITE (external caller) -->
+          <!-- Just ensure it's not empty -->
+          <action application="set" data="caller_id_name=${caller_id_name:-(Unknown External)}"/>
+
+          <!-- Callee info: Get from user directory (the extension receiving the call) -->
+          <action application="set" data="callee_id_name=${user_data($1@${domain_name} var effective_caller_id_name)}"/>
+          <action application="set" data="callee_id_name=${callee_id_name:-Extension $1}"/>
+
+          <action application="log" data="INFO [EXTERNAL-IN] External ${caller_id_name}(${caller_id_number}) → ${callee_id_name}($1)"/>
+
+          <!-- Set Deepgram config -->
+          <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+          <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+          <action application="set" data="DEEPGRAM_SPEECH_DIARIZE=true"/>
+          <action application="set" data="DEEPGRAM_SPEECH_DIARIZE_VERSION=latest"/>
+          <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
+          <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
+
         </condition>
       </condition>
     </extension>

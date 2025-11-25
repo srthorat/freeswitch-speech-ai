@@ -1,0 +1,190 @@
+<include>
+  <!--
+    TRANSCRIPTION WITH COMPLETE SPEAKER INFORMATION
+
+    This dialplan properly sets ALL channel variables needed for Pusher integration:
+    - caller_id_name (pulled from user directory)
+    - caller_id_number (automatically set by FreeSWITCH)
+    - callee_id_name (pulled from user directory OR set manually)
+    - destination_number (automatically set by FreeSWITCH)
+    - sip_call_id (automatically set by FreeSWITCH, used for Pusher channel naming)
+
+    PUSHER WILL RECEIVE:
+    {
+      "type": "final",
+      "speaker_id": "John Doe(1000)",
+      "text": "Hello, how are you?",
+      "timestamp": "2025-11-22T20:00:00Z"
+    }
+
+    Installation:
+    1. Copy to: /usr/local/freeswitch/conf/dialplan/default/00_transcribe_with_speaker_info.xml
+    2. Set Pusher environment variables (PUSHER_APP_ID, PUSHER_KEY, PUSHER_SECRET, PUSHER_CLUSTER)
+    3. Enable transcription in user directory: <variable name="enable_deepgram" value="true"/>
+    4. Reload: fs_cli -x 'reloadxml'
+  -->
+
+  <!-- ================================================================ -->
+  <!-- DEEPGRAM TRANSCRIPTION WITH SPEAKER INFORMATION                  -->
+  <!-- ================================================================ -->
+  <extension name="deepgram_with_speaker_info" continue="true">
+    <condition field="${user_data(${caller_id_number}@${domain_name} var enable_deepgram)}" expression="^true$">
+      <condition field="destination_number" expression="^(.+)$">
+
+        <!-- ============================================ -->
+        <!-- STEP 1: Set Speaker Information             -->
+        <!-- ============================================ -->
+
+        <!-- Get CALLER name from user directory (if calling from registered extension) -->
+        <action application="set" data="caller_id_name=${user_data(${caller_id_number}@${domain_name} var effective_caller_id_name)}"/>
+
+        <!-- Fallback: If caller_id_name is empty, use a default -->
+        <action application="set" data="caller_id_name=${caller_id_name:-(Unknown Caller)}"/>
+
+        <!-- Get CALLEE name from user directory (if calling TO a registered extension) -->
+        <action application="set" data="callee_id_name=${user_data($1@${domain_name} var effective_caller_id_name)}"/>
+
+        <!-- Fallback: If callee_id_name is empty, use destination number as name -->
+        <action application="set" data="callee_id_name=${callee_id_name:-$1}"/>
+
+        <!-- ============================================ -->
+        <!-- STEP 2: Set Deepgram Configuration          -->
+        <!-- ============================================ -->
+
+        <!-- Deepgram API Key (set via environment variable or here) -->
+        <!-- <action application="set" data="DEEPGRAM_API_KEY=your-deepgram-api-key"/> -->
+
+        <!-- Deepgram Model Settings -->
+        <action application="set" data="DEEPGRAM_SPEECH_MODEL=phonecall"/>
+        <action application="set" data="DEEPGRAM_SPEECH_TIER=nova"/>
+
+        <!-- Enable Diarization (but we use channel-based speaker mapping, not AI diarization) -->
+        <action application="set" data="DEEPGRAM_SPEECH_DIARIZE=true"/>
+        <action application="set" data="DEEPGRAM_SPEECH_DIARIZE_VERSION=latest"/>
+
+        <!-- ============================================ -->
+        <!-- STEP 3: Start Transcription on Answer       -->
+        <!-- ============================================ -->
+
+        <!-- Start Deepgram transcription AFTER call is answered -->
+        <action application="set" data="api_on_answer=uuid_deepgram_transcribe ${uuid} start en-US interim stereo"/>
+
+        <!-- Stop transcription on hangup -->
+        <action application="set" data="api_hangup_hook=uuid_deepgram_transcribe ${uuid} stop"/>
+
+        <!-- ============================================ -->
+        <!-- STEP 4: Log for Debugging                   -->
+        <!-- ============================================ -->
+
+        <action application="log" data="INFO [DEEPGRAM] Transcription enabled for call: ${caller_id_name}(${caller_id_number}) → ${callee_id_name}($1)"/>
+        <action application="log" data="INFO [DEEPGRAM] Pusher channel: call-${sip_call_id}"/>
+
+      </condition>
+    </condition>
+  </extension>
+
+  <!-- ================================================================ -->
+  <!-- AWS TRANSCRIBE WITH SPEAKER INFORMATION                          -->
+  <!-- ================================================================ -->
+  <extension name="aws_with_speaker_info" continue="true">
+    <condition field="${user_data(${caller_id_number}@${domain_name} var enable_aws_transcribe)}" expression="^true$">
+      <condition field="destination_number" expression="^(.+)$">
+
+        <!-- ============================================ -->
+        <!-- STEP 1: Set Speaker Information             -->
+        <!-- ============================================ -->
+
+        <!-- Get CALLER name from user directory -->
+        <action application="set" data="caller_id_name=${user_data(${caller_id_number}@${domain_name} var effective_caller_id_name)}"/>
+        <action application="set" data="caller_id_name=${caller_id_name:-(Unknown Caller)}"/>
+
+        <!-- Get CALLEE name from user directory -->
+        <action application="set" data="callee_id_name=${user_data($1@${domain_name} var effective_caller_id_name)}"/>
+        <action application="set" data="callee_id_name=${callee_id_name:-$1}"/>
+
+        <!-- ============================================ -->
+        <!-- STEP 2: Set AWS Configuration               -->
+        <!-- ============================================ -->
+
+        <!-- AWS Credentials (set via environment variables or here) -->
+        <!-- <action application="set" data="AWS_ACCESS_KEY_ID=your-aws-access-key-id"/> -->
+        <!-- <action application="set" data="AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key"/> -->
+        <!-- <action application="set" data="AWS_REGION=us-east-1"/> -->
+
+        <!-- Enable Channel Identification (REQUIRED for channel-based speaker mapping) -->
+        <action application="set" data="AWS_ENABLE_CHANNEL_IDENTIFICATION=true"/>
+        <action application="set" data="AWS_NUMBER_OF_CHANNELS=2"/>
+
+        <!-- DON'T enable speaker diarization - we use channel mapping instead -->
+        <!-- <action application="set" data="AWS_SHOW_SPEAKER_LABEL=false"/> -->
+
+        <!-- ============================================ -->
+        <!-- STEP 3: Start Transcription on Answer       -->
+        <!-- ============================================ -->
+
+        <!-- Start AWS transcription AFTER call is answered -->
+        <action application="set" data="api_on_answer=uuid_aws_transcribe ${uuid} start en-US interim stereo"/>
+
+        <!-- Stop transcription on hangup -->
+        <action application="set" data="api_hangup_hook=uuid_aws_transcribe ${uuid} stop"/>
+
+        <!-- ============================================ -->
+        <!-- STEP 4: Log for Debugging                   -->
+        <!-- ============================================ -->
+
+        <action application="log" data="INFO [AWS] Transcription enabled for call: ${caller_id_name}(${caller_id_number}) → ${callee_id_name}($1)"/>
+        <action application="log" data="INFO [AWS] Pusher channel: call-${sip_call_id}"/>
+
+      </condition>
+    </condition>
+  </extension>
+
+  <!-- ================================================================ -->
+  <!-- SPECIAL CASE: EXTERNAL INBOUND CALLS                             -->
+  <!-- ================================================================ -->
+  <!--
+    For inbound calls from external numbers (not registered extensions),
+    the caller_id_name and caller_id_number are already set by SIP.
+    You only need to set the callee_id_name for the receiving extension.
+
+    Example: External caller (555-1234) → Extension 1000
+    - caller_id_name: Already set from SIP INVITE (e.g., "John Mobile")
+    - caller_id_number: Already set from SIP INVITE (e.g., "555-1234")
+    - callee_id_name: Lookup from directory (e.g., "Support Agent")
+    - destination_number: Already set (e.g., "1000")
+  -->
+
+  <!-- ================================================================ -->
+  <!-- SPECIAL CASE: EXTERNAL OUTBOUND CALLS                            -->
+  <!-- ================================================================ -->
+  <!--
+    For outbound calls to external numbers (not registered extensions),
+    the caller info comes from directory, but callee info must be set manually.
+
+    Example: Extension 1000 → External number 555-5678
+    - caller_id_name: From directory (e.g., "Support Agent")
+    - caller_id_number: From directory (e.g., "1000")
+    - callee_id_name: Set manually (e.g., "Customer at 555-5678")
+    - destination_number: Already set (e.g., "555-5678")
+
+    You can enhance this by looking up names from a CRM database.
+  -->
+
+  <extension name="external_outbound_speaker_info" continue="true">
+    <condition field="${user_data(${caller_id_number}@${domain_name} var enable_deepgram)}" expression="^true$">
+      <condition field="destination_number" expression="^(\d{7,15})$">
+
+        <!-- Caller info from directory -->
+        <action application="set" data="caller_id_name=${user_data(${caller_id_number}@${domain_name} var effective_caller_id_name)}"/>
+
+        <!-- Callee info: External number, set descriptive name -->
+        <action application="set" data="callee_id_name=External: $1"/>
+
+        <!-- Optional: Lookup from CRM/database -->
+        <!-- <action application="set" data="callee_id_name=${odbc(select name from contacts where phone='$1')}"/> -->
+
+      </condition>
+    </condition>
+  </extension>
+
+</include>

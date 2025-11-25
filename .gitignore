@@ -1,0 +1,38 @@
+# Environment files with credentials
+.env
+.env.*
+.env.transcription
+
+# Installation manifest
+.freeswitch-install-manifest.txt
+
+# Backup files
+*.backup
+*.bak
+
+# Log files
+*.log
+
+# Compiled files
+*.o
+*.so
+*.a
+
+# Build directories
+build/
+.build/
+
+# Temporary files
+*.tmp
+.tmp/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

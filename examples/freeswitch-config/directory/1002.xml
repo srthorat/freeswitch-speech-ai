@@ -21,12 +21,13 @@
       <variable name="toll_allow" value="domestic,international,local"/>
       <variable name="accountcode" value="1002"/>
       <variable name="user_context" value="default"/>
-      <variable name="effective_caller_id_name" value="Extension 1002"/>
+      <!-- ✅ SPEAKER INFORMATION (Required for Pusher) -->
+      <variable name="effective_caller_id_name" value="Carol Davis"/>
       <variable name="effective_caller_id_number" value="1002"/>
 
       <!-- ⚙️ SERVICE FLAG: Azure Transcription Enabled -->
       <!-- All Azure settings (subscription key, region) are in dialplan -->
-      <variable name="enable_aws_transcribe" value="true"/>
+      <variable name="enable_azure" value="true"/>
     </variables>
   </user>
 </include>

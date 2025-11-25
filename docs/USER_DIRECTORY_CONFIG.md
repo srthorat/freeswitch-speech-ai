@@ -22,7 +22,7 @@ cp examples/freeswitch-config/directory/1002.xml.complete /usr/local/freeswitch/
 fs_cli -x 'reloadxml'
 ```
 
-See: [Per-User Multi-Service Configuration Guide](../PER_USER_MULTI_SERVICE.md)
+See: [Per-User Multi-Service Configuration Guide](./PER_USER_MULTI_SERVICE.md)
 
 ## Configuration Examples
 
@@ -86,5 +86,5 @@ fs_cli -x 'user_data 1002@default var enable_azure'
 
 ## Related Documentation
 
-- [Per-User Multi-Service Configuration Guide](../PER_USER_MULTI_SERVICE.md) - Complete guide with dialplan setup
+- [Per-User Multi-Service Configuration Guide](./PER_USER_MULTI_SERVICE.md) - Complete guide with dialplan setup
 - [Complete Dialplan Example](../dialplan/default.xml.complete-example) - Ready-to-use dialplan configuration

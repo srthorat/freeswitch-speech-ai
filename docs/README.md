@@ -65,13 +65,13 @@ Each transcription module has its own detailed README:
 
 ## Configuration Examples
 
-- [Per-User Multi-Service Configuration](../examples/freeswitch-config/PER_USER_MULTI_SERVICE.md) - Enable different services per user
-- [Directory Configuration](../examples/freeswitch-config/directory/README.md) - User directory setup
+- [Per-User Multi-Service Configuration](./PER_USER_MULTI_SERVICE.md) - Enable different services per user
+- [Directory Configuration](./USER_DIRECTORY_CONFIG.md) - User directory setup
 - [Docker Deployment](../dockerfiles/README.md) - Docker build and deployment guide
 
 ## Quick Start
 
-1. **Installation:** See [INSTALL.md](../INSTALL.md) for build instructions
+1. **Installation:** See [INSTALLATION.md](./INSTALLATION.md) for build instructions
 2. **Docker Setup:** See [dockerfiles/README.md](../dockerfiles/README.md) for Docker deployment
 3. **Stereo Setup:** Start with [Quick Reference](./QUICK_REFERENCE_STEREO_CHANNELS.md) for channel assignment
 
