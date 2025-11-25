@@ -79,11 +79,26 @@ static void md5_hex(const char* data, char* out) {
 static void send_to_pusher(switch_core_session_t* session, const char* json, const char* callId, switch_bool_t is_final) {
     if (!json || !callId) return;
 
-    // Get Pusher credentials
-    const char* app_id = getenv("PUSHER_APP_ID");
-    const char* app_key = getenv("PUSHER_KEY");
-    const char* app_secret = getenv("PUSHER_SECRET");
-    const char* cluster = getenv("PUSHER_CLUSTER");
+    // Get Pusher credentials from channel variables first, then environment
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    const char* app_id = switch_channel_get_variable(channel, "PUSHER_APP_ID");
+    const char* app_key = switch_channel_get_variable(channel, "PUSHER_KEY");
+    const char* app_secret = switch_channel_get_variable(channel, "PUSHER_SECRET");
+    const char* cluster = switch_channel_get_variable(channel, "PUSHER_CLUSTER");
+
+    // Fallback to environment variables if not set in channel
+    if (!app_id) app_id = getenv("PUSHER_APP_ID");
+    if (!app_key) app_key = getenv("PUSHER_KEY");
+    if (!app_secret) app_secret = getenv("PUSHER_SECRET");
+    if (!cluster) cluster = getenv("PUSHER_CLUSTER");
+
+    // Debug credential sources
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+        "Pusher credentials - APP_ID: %s, KEY: %s, SECRET: %s, CLUSTER: %s\n",
+        app_id ? app_id : "(null)", 
+        app_key ? app_key : "(null)", 
+        app_secret ? app_secret : "(null)", 
+        cluster ? cluster : "(null)");
 
     if (!app_id || !app_key || !app_secret) {
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
@@ -100,8 +115,8 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
     if (!event_interim) event_interim = "transcript-interim";
 
     // Build channel name
-    char channel[256];
-    snprintf(channel, sizeof(channel), "%s%s", channel_prefix, callId);
+    char pusher_channel[256];
+    snprintf(pusher_channel, sizeof(pusher_channel), "%s%s", channel_prefix, callId);
 
     // Get caller/callee metadata for speaker mapping
     switch_channel_t *chan = switch_core_session_get_channel(session);
@@ -212,7 +227,7 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
     char body[8192];
     snprintf(body, sizeof(body),
         "{\"name\":\"%s\",\"channels\":[\"%s\"],\"data\":\"%s\"}",
-        event_name, channel, escaped);
+        event_name, pusher_channel, escaped);
     free(escaped);
 
     // Calculate MD5 of body
@@ -299,8 +314,8 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
     if (!channel_prefix) channel_prefix = "call-";
     if (!event_session_start) event_session_start = "session-start";
 
-    char channel[256];
-    snprintf(channel, sizeof(channel), "%s%s", channel_prefix, callId);
+    char pusher_channel[256];
+    snprintf(pusher_channel, sizeof(pusher_channel), "%s%s", channel_prefix, callId);
 
     // Get metadata
     switch_channel_t *chan = switch_core_session_get_channel(session);
@@ -334,7 +349,7 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
     char body[2048];
     snprintf(body, sizeof(body),
         "{\"name\":\"%s\",\"channel\":\"%s\",\"data\":\"%s\"}",
-        event_session_start, channel, data);
+        event_session_start, pusher_channel, data);
 
     // Calculate MD5 of body
     char body_md5[33];
