@@ -118,16 +118,13 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 
     const char* transcript = NULL;
     const char* language_code = NULL;
-    int channel_tag = 0; // Default to channel 0 (caller)
+    const char* channel_id_str = NULL;
+    int channel_num = 1; // Default to channel 1 (caller)
 
-    // Extract from Google V2 format: alternatives[0].transcript
-    cJSON* alternatives = cJSON_GetObjectItem(root, "alternatives");
-    if (alternatives && cJSON_IsArray(alternatives) && cJSON_GetArraySize(alternatives) > 0) {
-        cJSON* first_alt = cJSON_GetArrayItem(alternatives, 0);
-        cJSON* transcript_field = cJSON_GetObjectItem(first_alt, "transcript");
-        if (transcript_field && cJSON_IsString(transcript_field)) {
-            transcript = cJSON_GetStringValue(transcript_field);
-        }
+    // Extract transcript (direct field in Google V2)
+    cJSON* transcript_field = cJSON_GetObjectItem(root, "transcript");
+    if (transcript_field && cJSON_IsString(transcript_field)) {
+        transcript = cJSON_GetStringValue(transcript_field);
     }
 
     // Extract language_code
@@ -136,10 +133,14 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
         language_code = cJSON_GetStringValue(lang_field);
     }
 
-    // Extract channel_tag (Google V2: 0 or 1)
-    cJSON* channel_tag_field = cJSON_GetObjectItem(root, "channel_tag");
-    if (channel_tag_field && cJSON_IsNumber(channel_tag_field)) {
-        channel_tag = (int)channel_tag_field->valuedouble;
+    // Extract channel_id (Google V2: string like "ch_1" or "ch_2")
+    cJSON* channel_id_field = cJSON_GetObjectItem(root, "channel_id");
+    if (channel_id_field && cJSON_IsString(channel_id_field)) {
+        channel_id_str = cJSON_GetStringValue(channel_id_field);
+        // Parse channel number from "ch_X" format
+        if (channel_id_str && strncmp(channel_id_str, "ch_", 3) == 0) {
+            channel_num = atoi(channel_id_str + 3);
+        }
     }
 
     // Don't send if transcript is empty
@@ -148,15 +149,15 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
         return;
     }
 
-    // Map channel_tag to speaker_id
+    // Map channel_id to speaker_id (ch_1 = caller, ch_2 = callee)
     char speaker_id[256];
-    if (channel_tag == 0) {
-        // Channel 0 = Caller
+    if (channel_num == 1) {
+        // Channel 1 = Caller
         snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
             caller_name ? caller_name : "Unknown",
             caller_number ? caller_number : "Unknown");
     } else {
-        // Channel 1 = Callee
+        // Channel 2 = Callee
         snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
             callee_name ? callee_name : "Unknown",
             callee_number ? callee_number : "Unknown");
@@ -178,7 +179,10 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
     if (language_code) {
         cJSON_AddStringToObject(pusher_data, "language_code", language_code);
     }
-    cJSON_AddNumberToObject(pusher_data, "channel_tag", channel_tag);
+    if (channel_id_str) {
+        cJSON_AddStringToObject(pusher_data, "channel_id", channel_id_str);
+    }
+    cJSON_AddNumberToObject(pusher_data, "channel_num", channel_num);
 
     char* pusher_json = cJSON_PrintUnformatted(pusher_data);
     cJSON_Delete(pusher_data);
@@ -402,16 +406,16 @@ static void responseHandler(switch_core_session_t* session, const char * json, c
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 
-	// Pusher integration: Send session start on first transcript event
-	static int session_started = 0;
-	if (!session_started) {
+	// Pusher integration: Send session start on first transcript event (per-session)
+	const char* pusher_session_started = switch_channel_get_variable(channel, "pusher_session_started");
+	if (!pusher_session_started) {
 		const char* call_id = switch_channel_get_variable(channel, "sip_call_id");
 		if (!call_id) call_id = switch_core_session_get_uuid(session);
 		if (!call_id) call_id = switch_channel_get_variable(channel, "call_uuid");
 
 		if (call_id) {
 			send_session_start_to_pusher(session, call_id);
-			session_started = 1;
+			switch_channel_set_variable(channel, "pusher_session_started", "1");
 		}
 	}
 
@@ -426,13 +430,14 @@ static void responseHandler(switch_core_session_t* session, const char * json, c
 		if (!call_id) call_id = switch_channel_get_variable(channel, "call_uuid");
 
 		if (call_id) {
-			// Determine if final based on JSON
+			// Google V2: Determine if final based on is_partial (inverse logic)
 			switch_bool_t is_final = SWITCH_FALSE;
 			cJSON* root = cJSON_Parse(json);
 			if (root) {
-				cJSON* is_final_field = cJSON_GetObjectItem(root, "is_final");
-				if (is_final_field && cJSON_IsBool(is_final_field)) {
-					is_final = cJSON_IsTrue(is_final_field) ? SWITCH_TRUE : SWITCH_FALSE;
+				cJSON* is_partial_field = cJSON_GetObjectItem(root, "is_partial");
+				if (is_partial_field && cJSON_IsBool(is_partial_field)) {
+					// is_partial = true means interim, is_partial = false means final
+					is_final = cJSON_IsTrue(is_partial_field) ? SWITCH_FALSE : SWITCH_TRUE;
 				}
 				cJSON_Delete(root);
 			}
