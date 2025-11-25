@@ -496,38 +496,51 @@ ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_*.so
 
 ### API Command Syntax
 
+**Unified API pattern (matches AWS/Deepgram):**
+
 ```bash
-uuid_google_transcribe <call-uuid> start <lang> [interim] [mix-type] [sample-rate]
-uuid_google_transcribe <call-uuid> stop
+uuid_google_transcribe <uuid> [start|stop] lang-code [interim] [mono|mixed|stereo] [8k|16k] [metadata]
 ```
 
 ### Parameters
 
 | Parameter | Required | Options | Default | Description |
 |-----------|----------|---------|---------|-------------|
-| `call-uuid` | Yes | UUID string | - | FreeSWITCH call UUID |
+| `uuid` | Yes | UUID string | - | FreeSWITCH call UUID |
 | `start/stop` | Yes | start \| stop | - | Start or stop transcription |
-| `lang` | Yes* | en-US, es-ES, etc. | - | BCP-47 language code |
-| `interim` | No | true \| false | false | Return interim (partial) results |
-| `mix-type` | No | mono \| mix \| stereo | stereo | Audio channel handling |
-| `sample-rate` | No | 8k \| 16k | 16k | Sample rate (informational) |
+| `lang-code` | Yes* | en-US, es-ES, etc. | - | BCP-47 language code |
+| `interim` | No | interim | (none) | Return interim results if specified |
+| `mix-type` | No | mono \| mixed \| stereo | mono | Audio channel mode |
+| `sample-rate` | No | 8k \| 16k \| numeric | 16k | Sample rate (8000-48000 Hz) |
+| `metadata` | No | JSON string | (none) | Optional metadata |
 
 *Required for `start` command only
+
+**Mix-type modes:**
+- `mono`: Read stream only (single channel) - **default**
+- `mixed`: Read + Write streams mixed (single channel)
+- `stereo`: Read + Write streams separate (dual channel, enables speaker separation)
+
+**Note:** Stereo mode automatically enables Google's separate recognition per channel,
+ensuring accurate `channel_tag` values for speaker identification (0=caller, 1=callee).
 
 ### Examples
 
 ```bash
-# Basic usage - English, final results only, stereo
+# Basic usage - English, final results only, mono (default)
 fs_cli -x "uuid_google_transcribe <uuid> start en-US"
 
 # With interim results
-fs_cli -x "uuid_google_transcribe <uuid> start en-US true"
+fs_cli -x "uuid_google_transcribe <uuid> start en-US interim"
 
-# Spanish with interim results and mono audio
-fs_cli -x "uuid_google_transcribe <uuid> start es-ES true mono"
+# Stereo mode with interim results (enables multi-channel speaker separation)
+fs_cli -x "uuid_google_transcribe <uuid> start en-US interim stereo"
 
-# Full command with all parameters
-fs_cli -x "uuid_google_transcribe <uuid> start en-US true stereo 16k"
+# Spanish with stereo and 8kHz sampling
+fs_cli -x "uuid_google_transcribe <uuid> start es-ES interim stereo 8k"
+
+# With custom sample rate (numeric)
+fs_cli -x "uuid_google_transcribe <uuid> start en-US interim stereo 16000"
 
 # Stop transcription
 fs_cli -x "uuid_google_transcribe <uuid> stop"
@@ -535,9 +548,12 @@ fs_cli -x "uuid_google_transcribe <uuid> stop"
 
 ### Module Features
 
+- **Unified API:** Matches AWS/Deepgram pattern for consistency across modules
 - **Single v2-only binary:** One `mod_google_transcribe.so` with single API registration
 - **Google Speech-to-Text V2 API:** Latest API with improved accuracy
-- **Pusher integration:** Real-time transcript delivery via Pusher channels
+- **Speaker identification:** Automatic channel-based speaker mapping (0=caller, 1=callee)
+- **Multichannel support:** Separate recognition per channel enabled by default in stereo mode
+- **Pusher integration:** Real-time transcript delivery via Pusher channels (same format as AWS/Deepgram)
 - **Channel variables:** Advanced configuration via FreeSWITCH channel variables
 - **Local proto generation:** No dependency on external googleapis repository
 
