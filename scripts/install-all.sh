@@ -7,6 +7,7 @@
 #   - mod_audio_fork (with libwebsockets)
 #   - mod_aws_transcribe (with AWS SDK C++)
 #   - mod_deepgram_transcribe (with libwebsockets)
+#   - mod_google_transcribe (with gRPC, googleapis, Pusher integration)
 #
 # Usage:
 #   sudo ./install-all.sh [OPTIONS]
@@ -19,15 +20,17 @@
 # Note: This script ALWAYS copies the example dialplan from examples/ directory.
 #
 # Environment Variables (set before running):
-#   DEEPGRAM_API_KEY        Deepgram API key
-#   AWS_ACCESS_KEY_ID       AWS access key
-#   AWS_SECRET_ACCESS_KEY   AWS secret key
-#   AWS_REGION              AWS region (default: us-east-1)
-#   AWS_SESSION_TOKEN       AWS session token (for STS)
-#   PUSHER_APP_ID           Pusher app ID
-#   PUSHER_KEY              Pusher key
-#   PUSHER_SECRET           Pusher secret
-#   PUSHER_CLUSTER          Pusher cluster
+#   DEEPGRAM_API_KEY                Deepgram API key
+#   AWS_ACCESS_KEY_ID               AWS access key
+#   AWS_SECRET_ACCESS_KEY           AWS secret key
+#   AWS_REGION                      AWS region (default: us-east-1)
+#   AWS_SESSION_TOKEN               AWS session token (for STS)
+#   GOOGLE_APPLICATION_CREDENTIALS  Google Cloud service account JSON path
+#   GOOGLE_CLOUD_PROJECT            Google Cloud project ID
+#   PUSHER_APP_ID                   Pusher app ID
+#   PUSHER_KEY                      Pusher key
+#   PUSHER_SECRET                   Pusher secret
+#   PUSHER_CLUSTER                  Pusher cluster
 # ============================================================================
 
 # Disable automatic exit on error - we'll handle errors manually for better tracking
@@ -62,12 +65,14 @@ declare -a ALL_STEPS=(
     "Install system dependencies"
     "Build libwebsockets 4.3.3"
     "Build AWS SDK C++ 1.11.345"
+    "Build gRPC and googleapis for Google Speech V2"
     "Build spandsp 3.x from source"
     "Build sofia-sip 1.13.17 from source"
     "Install FreeSWITCH 1.10.11"
     "Build mod_audio_fork"
     "Build mod_deepgram_transcribe"
     "Build mod_aws_transcribe"
+    "Build mod_google_transcribe"
     "Configure FreeSWITCH and modules"
     "Validate installation"
 )
@@ -454,9 +459,34 @@ else
 fi
 
 # ============================================================================
-# Step 4: Build spandsp 3.x from source
+# Step 4: Build gRPC and googleapis for Google Speech V2
 # ============================================================================
 CURRENT_STEP=4
+show_progress $CURRENT_STEP "Build gRPC and googleapis for Google Speech V2"
+echo -e "${YELLOW}  Note: This step will take 20-40 minutes for gRPC build...${NC}"
+
+# Check if gRPC is already installed
+if ldconfig -p | grep -q libgrpc++; then
+    log_substep "gRPC already installed - using existing version"
+    echo "grpc=existing" >> "$MANIFEST_FILE"
+    complete_step "gRPC and googleapis (existing)"
+else
+    log_substep "Installing gRPC v1.64.2 and googleapis..."
+    echo -e "${CYAN}  Running: ${SCRIPT_DIR}/install-google-module.sh 1.64.2 ${BUILD_CPUS}${NC}"
+
+    # Call the Google module installation script
+    bash "${SCRIPT_DIR}/install-google-module.sh" 1.64.2 ${BUILD_CPUS}
+    check_success "Failed to install Google module (gRPC + googleapis)" "install-google-module.sh"
+
+    echo "grpc=installed" >> "$MANIFEST_FILE"
+    echo "googleapis=installed" >> "$MANIFEST_FILE"
+    complete_step "gRPC and googleapis built and installed"
+fi
+
+# ============================================================================
+# Step 5: Build spandsp 3.x from source
+# ============================================================================
+CURRENT_STEP=5
 show_progress $CURRENT_STEP "Build spandsp 3.x from source"
 
 cd /usr/local/src
@@ -505,9 +535,9 @@ else
 fi
 
 # ============================================================================
-# Step 5: Build sofia-sip 1.13.17 from source
+# Step 6: Build sofia-sip 1.13.17 from source
 # ============================================================================
-CURRENT_STEP=5
+CURRENT_STEP=6
 show_progress $CURRENT_STEP "Build sofia-sip 1.13.17 from source"
 
 cd /usr/local/src
@@ -551,9 +581,9 @@ else
 fi
 
 # ============================================================================
-# Step 6: Install FreeSWITCH 1.10.11 (if not skipped)
+# Step 7: Install FreeSWITCH 1.10.11 (if not skipped)
 # ============================================================================
-CURRENT_STEP=6
+CURRENT_STEP=7
 if [ "$SKIP_FREESWITCH" = false ]; then
     show_progress $CURRENT_STEP "Install FreeSWITCH 1.10.11"
     echo -e "${YELLOW}  Note: This step will take 15-20 minutes...${NC}"
@@ -705,9 +735,9 @@ else
 fi
 
 # ============================================================================
-# Step 7: Build mod_audio_fork
+# Step 8: Build mod_audio_fork
 # ============================================================================
-CURRENT_STEP=7
+CURRENT_STEP=8
 show_progress $CURRENT_STEP "Build mod_audio_fork"
 
 cd ${SCRIPT_DIR}/../modules/mod_audio_fork
@@ -755,9 +785,9 @@ echo -e "  ${GREEN}✓${NC} All dependencies satisfied"
 complete_step "mod_audio_fork built and validated"
 
 # ============================================================================
-# Step 8: Build mod_deepgram_transcribe
+# Step 9: Build mod_deepgram_transcribe
 # ============================================================================
-CURRENT_STEP=8
+CURRENT_STEP=9
 show_progress $CURRENT_STEP "Build mod_deepgram_transcribe"
 
 cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe
@@ -807,9 +837,9 @@ echo -e "  ${GREEN}✓${NC} All dependencies satisfied"
 complete_step "mod_deepgram_transcribe built and validated"
 
 # ============================================================================
-# Step 9: Build mod_aws_transcribe
+# Step 10: Build mod_aws_transcribe
 # ============================================================================
-CURRENT_STEP=9
+CURRENT_STEP=10
 show_progress $CURRENT_STEP "Build mod_aws_transcribe"
 
 cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe
@@ -868,11 +898,12 @@ log_substep "Setting module permissions..."
 chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so 2>/dev/null || true
 chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so 2>/dev/null || true
 chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so 2>/dev/null || true
+chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so 2>/dev/null || true
 
 # ============================================================================
-# Step 10: Configure FreeSWITCH and Modules
+# Step 11: Configure FreeSWITCH and Modules
 # ============================================================================
-CURRENT_STEP=10
+CURRENT_STEP=11
 show_progress $CURRENT_STEP "Configure FreeSWITCH and Modules"
 
 # Add modules to modules.conf.xml
@@ -884,6 +915,7 @@ if [ -f "$MODULES_CONF" ]; then
         sed -i '/<\/modules>/i \    <load module="mod_audio_fork"/>' "$MODULES_CONF"
         sed -i '/<\/modules>/i \    <load module="mod_aws_transcribe"/>' "$MODULES_CONF"
         sed -i '/<\/modules>/i \    <load module="mod_deepgram_transcribe"/>' "$MODULES_CONF"
+        sed -i '/<\/modules>/i \    <load module="mod_google_transcribe"/>' "$MODULES_CONF"
         echo -e "  ${GREEN}✓${NC} Added modules to modules.conf.xml"
     else
         echo -e "  ${YELLOW}ℹ${NC}  Modules already configured in modules.conf.xml"
@@ -1131,9 +1163,9 @@ fi
 complete_step "FreeSWITCH and modules configured"
 
 # ============================================================================
-# Step 11: Validate Installation
+# Step 12: Validate Installation
 # ============================================================================
-CURRENT_STEP=11
+CURRENT_STEP=12
 if [ "$NO_VALIDATION" = false ]; then
     show_progress $CURRENT_STEP "Validate Installation"
 

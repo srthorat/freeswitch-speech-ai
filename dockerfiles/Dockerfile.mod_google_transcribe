@@ -271,10 +271,12 @@ FROM ${BASE_IMAGE} AS runtime
 ARG GRPC_VERSION=1.64.2
 
 # Install runtime dependencies for gRPC and mod_google_transcribe
+# libcurl4 required for Pusher HTTP requests
 RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
     libssl1.1 \
     zlib1g \
     libspeexdsp1 \
+    libcurl4 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV LD_LIBRARY_PATH=/usr/local/lib
