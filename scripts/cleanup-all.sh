@@ -4,9 +4,10 @@
 # ============================================================================
 # Removes EVERYTHING installed by install-all.sh:
 #   - FreeSWITCH
-#   - All 3 modules
+#   - All 4 modules (audio_fork, aws, deepgram, google)
 #   - libwebsockets
 #   - AWS SDK C++
+#   - gRPC and Protocol Buffers
 #   - Source directories
 #
 # Usage:
@@ -70,13 +71,14 @@ echo "This will remove:"
 if [ "$KEEP_FREESWITCH" = false ]; then
     echo "  ✗ FreeSWITCH ($FS_PREFIX)"
 fi
-echo "  ✗ mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe"
+echo "  ✗ mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe, mod_google_transcribe"
 echo "  ✗ libwebsockets (/usr/local/lib/libwebsockets*)"
 echo "  ✗ spandsp (/usr/local/lib/libspandsp*)"
 echo "  ✗ sofia-sip (/usr/local/lib/libsofia-sip*)"
 echo "  ✗ AWS SDK C++ (/usr/local/lib/libaws-*)"
+echo "  ✗ gRPC and Protocol Buffers (/usr/local/lib/libgrpc*, /usr/local/lib/libprotobuf*)"
 if [ "$KEEP_SOURCES" = false ]; then
-    echo "  ✗ Source directories (/usr/local/src/{freeswitch,libwebsockets,aws-sdk-cpp,spandsp,sofia-sip})"
+    echo "  ✗ Source directories (/usr/local/src/{freeswitch,libwebsockets,aws-sdk-cpp,spandsp,sofia-sip,grpc,googleapis})"
 fi
 echo ""
 
@@ -132,7 +134,7 @@ sleep 2
 echo "Removing modules..."
 MODULES_FOUND=false
 if [ -d "${FS_PREFIX}/lib/freeswitch/mod" ]; then
-    for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
+    for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe; do
         if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
             rm -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so"
             echo -e "${GREEN}✓${NC} Removed ${module}.so"
@@ -293,6 +295,53 @@ if [ "$SHOULD_REMOVE_AWS" = true ]; then
 fi
 
 # ============================================================================
+# Remove gRPC and Protocol Buffers (only if we installed it OR no manifest exists)
+# ============================================================================
+echo "Removing gRPC and Protocol Buffers..."
+
+# Check manifest to see if we installed it
+SHOULD_REMOVE_GRPC=true
+if [ -f "$MANIFEST_FILE" ]; then
+    if grep -q "grpc=existing" "$MANIFEST_FILE"; then
+        echo -e "${YELLOW}ℹ${NC} gRPC was already installed - keeping it (not installed by us)"
+        SHOULD_REMOVE_GRPC=false
+    elif grep -q "grpc=installed" "$MANIFEST_FILE"; then
+        echo "Removing gRPC and Protocol Buffers (installed by our script)..."
+    fi
+else
+    echo -e "${YELLOW}⚠${NC}  No manifest - will remove gRPC (may affect other apps)"
+fi
+
+if [ "$SHOULD_REMOVE_GRPC" = true ]; then
+    GRPC_FOUND=false
+    if ls /usr/local/lib/libgrpc* 1> /dev/null 2>&1; then
+        rm -f /usr/local/lib/libgrpc*.so*
+        rm -f /usr/local/lib/libprotobuf*.so*
+        rm -f /usr/local/lib/libabsl_*.so*
+        rm -f /usr/local/lib/libupb*.so*
+        rm -f /usr/local/lib/libre2.so*
+        rm -f /usr/local/lib/libaddress_sorting.so*
+        rm -f /usr/local/lib/libgpr.so*
+        rm -f /usr/local/lib/pkgconfig/grpc*.pc
+        rm -f /usr/local/lib/pkgconfig/protobuf*.pc
+        rm -f /usr/local/bin/protoc
+        rm -f /usr/local/bin/grpc_*
+        rm -rf /usr/local/include/grpc
+        rm -rf /usr/local/include/grpc++
+        rm -rf /usr/local/include/grpcpp
+        rm -rf /usr/local/include/google/protobuf
+        GRPC_FOUND=true
+    fi
+    ldconfig 2>/dev/null || true
+
+    if [ "$GRPC_FOUND" = true ]; then
+        echo -e "${GREEN}✓${NC} Removed gRPC and Protocol Buffers"
+    else
+        echo -e "${YELLOW}ℹ${NC} gRPC not found (already removed or never installed)"
+    fi
+fi
+
+# ============================================================================
 # Remove Source Directories
 # ============================================================================
 if [ "$KEEP_SOURCES" = false ]; then
@@ -324,6 +373,16 @@ if [ "$KEEP_SOURCES" = false ]; then
         SOURCES_FOUND=true
     fi
 
+    if [ -d "/usr/local/src/grpc" ]; then
+        rm -rf /usr/local/src/grpc
+        SOURCES_FOUND=true
+    fi
+
+    if [ -d "/usr/local/src/googleapis" ]; then
+        rm -rf /usr/local/src/googleapis
+        SOURCES_FOUND=true
+    fi
+
     if [ "$SOURCES_FOUND" = true ]; then
         echo -e "${GREEN}✓${NC} Removed source directories"
     else
@@ -339,7 +398,7 @@ fi
 echo "Cleaning build artifacts..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-for module_dir in ../modules/mod_audio_fork ../modules/mod_aws_transcribe ../modules/mod_deepgram_transcribe; do
+for module_dir in ../modules/mod_audio_fork ../modules/mod_aws_transcribe ../modules/mod_deepgram_transcribe ../modules/mod_google_transcribe; do
     if [ -d "$module_dir" ]; then
         rm -f ${module_dir}/*.o ${module_dir}/*.so
     fi
@@ -354,9 +413,10 @@ echo "Removed:"
 if [ "$KEEP_FREESWITCH" = false ]; then
     echo "  ✓ FreeSWITCH"
 fi
-echo "  ✓ Transcription modules"
+echo "  ✓ Transcription modules (audio_fork, aws, deepgram, google)"
 echo "  ✓ libwebsockets"
 echo "  ✓ AWS SDK C++"
+echo "  ✓ gRPC and Protocol Buffers"
 if [ "$KEEP_SOURCES" = false ]; then
     echo "  ✓ Source directories"
 fi
@@ -382,6 +442,8 @@ echo "Environment=\"AWS_ACCESS_KEY_ID=\${AWS_ACCESS_KEY_ID:-}\""
 echo "Environment=\"AWS_SECRET_ACCESS_KEY=\${AWS_SECRET_ACCESS_KEY:-}\""
 echo "Environment=\"AWS_REGION=\${AWS_REGION:-us-east-1}\""
 echo "Environment=\"AWS_SESSION_TOKEN=\${AWS_SESSION_TOKEN:-}\""
+echo "Environment=\"GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json\""
+echo "Environment=\"GOOGLE_CLOUD_PROJECT=\${GOOGLE_CLOUD_PROJECT:-}\""
 echo "Environment=\"PUSHER_APP_ID=\${PUSHER_APP_ID:-}\""
 echo "Environment=\"PUSHER_KEY=\${PUSHER_KEY:-}\""
 echo "Environment=\"PUSHER_SECRET=\${PUSHER_SECRET:-}\""
