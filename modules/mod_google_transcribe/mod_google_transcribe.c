@@ -118,86 +118,74 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
     char pusher_channel[256];
     snprintf(pusher_channel, sizeof(pusher_channel), "%s%s", channel_prefix, callId);
 
-    // Get caller/callee metadata for speaker mapping
-    switch_channel_t *chan = switch_core_session_get_channel(session);
-    const char* caller_name = switch_channel_get_variable(chan, "caller_id_name");
-    const char* caller_number = switch_channel_get_variable(chan, "caller_id_number");
-    const char* callee_name = switch_channel_get_variable(chan, "callee_id_name");
-    if (!callee_name) callee_name = switch_channel_get_variable(chan, "effective_callee_id_name");
-    const char* callee_number = switch_channel_get_variable(chan, "destination_number");
-    if (!callee_number) callee_number = switch_channel_get_variable(chan, "callee_id_number");
+    // Get caller/callee metadata from channel variables for speaker mapping
+    const char* caller_name = switch_channel_get_variable(channel, "caller_id_name");
+    const char* caller_number = switch_channel_get_variable(channel, "caller_id_number");
+    const char* callee_name = switch_channel_get_variable(channel, "callee_id_name");
+    if (!callee_name) callee_name = switch_channel_get_variable(channel, "effective_callee_id_name");
+    const char* callee_number = switch_channel_get_variable(channel, "destination_number");
+    if (!callee_number) callee_number = switch_channel_get_variable(channel, "callee_id_number");
 
-    // Parse Google V2 response JSON
+    // Parse Google V2 response JSON to extract text and channel
     cJSON* root = cJSON_Parse(json);
     if (!root) return;
 
     const char* transcript = NULL;
-    const char* language_code = NULL;
-    const char* channel_id_str = NULL;
-    int channel_num = 1; // Default to channel 1 (caller)
+    int speaker_channel = -1;
 
-    // Extract transcript (direct field in Google V2)
-    cJSON* transcript_field = cJSON_GetObjectItem(root, "transcript");
-    if (transcript_field && cJSON_IsString(transcript_field)) {
-        transcript = cJSON_GetStringValue(transcript_field);
-    }
-
-    // Extract language_code
-    cJSON* lang_field = cJSON_GetObjectItem(root, "language_code");
-    if (lang_field && cJSON_IsString(lang_field)) {
-        language_code = cJSON_GetStringValue(lang_field);
-    }
-
-    // Extract channel_id (Google V2: string like "ch_1" or "ch_2")
-    cJSON* channel_id_field = cJSON_GetObjectItem(root, "channel_id");
-    if (channel_id_field && cJSON_IsString(channel_id_field)) {
-        channel_id_str = cJSON_GetStringValue(channel_id_field);
-        // Parse channel number from "ch_X" format
-        if (channel_id_str && strncmp(channel_id_str, "ch_", 3) == 0) {
-            channel_num = atoi(channel_id_str + 3);
+    // Google V2 sends: {"is_final": bool, "channel_tag": 0/1, "alternatives": [...]}
+    // Extract transcript text from alternatives[0].transcript
+    cJSON* alternatives = cJSON_GetObjectItem(root, "alternatives");
+    if (alternatives && cJSON_IsArray(alternatives) && cJSON_GetArraySize(alternatives) > 0) {
+        cJSON* first_alt = cJSON_GetArrayItem(alternatives, 0);
+        cJSON* transcript_field = cJSON_GetObjectItem(first_alt, "transcript");
+        if (transcript_field && cJSON_IsString(transcript_field)) {
+            transcript = cJSON_GetStringValue(transcript_field);
         }
     }
 
-    // Don't send if transcript is empty
+    // Get channel from channel_tag (0, 1, 2, ...)
+    cJSON* channel_tag = cJSON_GetObjectItem(root, "channel_tag");
+    if (channel_tag && cJSON_IsNumber(channel_tag)) {
+        speaker_channel = (int)cJSON_GetNumberValue(channel_tag);
+    }
+
+    // Default to channel 0 if not found
+    if (speaker_channel == -1) speaker_channel = 0;
+
+    // Don't send to Pusher if transcript is empty
     if (!transcript || strlen(transcript) == 0) {
         cJSON_Delete(root);
         return;
     }
 
-    // Map channel_id to speaker_id (ch_1 = caller, ch_2 = callee)
+    // Map channel to speaker_id: channel 0 = caller, channel 1 = callee
     char speaker_id[256];
-    if (channel_num == 1) {
-        // Channel 1 = Caller
+    if (speaker_channel == 0) {
+        // Caller (Channel 0)
         snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
             caller_name ? caller_name : "Unknown",
             caller_number ? caller_number : "Unknown");
     } else {
-        // Channel 2 = Callee
+        // Callee (Channel 1)
         snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
             callee_name ? callee_name : "Unknown",
             callee_number ? callee_number : "Unknown");
     }
 
-    // Get timestamp
+    // Get current timestamp in ISO 8601 format
     time_t now = time(NULL);
     struct tm tm_info;
     gmtime_r(&now, &tm_info);
     char timestamp[32];
     strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
 
-    // Build Pusher data JSON
+    // Build transformed JSON in required format
     cJSON* pusher_data = cJSON_CreateObject();
     cJSON_AddStringToObject(pusher_data, "type", is_final ? "final" : "interim");
     cJSON_AddStringToObject(pusher_data, "speaker_id", speaker_id);
-    cJSON_AddStringToObject(pusher_data, "text", transcript);
+    cJSON_AddStringToObject(pusher_data, "text", transcript ? transcript : "");
     cJSON_AddStringToObject(pusher_data, "timestamp", timestamp);
-    if (language_code) {
-        cJSON_AddStringToObject(pusher_data, "language_code", language_code);
-    }
-    if (channel_id_str) {
-        cJSON_AddStringToObject(pusher_data, "channel_id", channel_id_str);
-    }
-    cJSON_AddNumberToObject(pusher_data, "channel_num", channel_num);
 
     char* pusher_json = cJSON_PrintUnformatted(pusher_data);
     cJSON_Delete(pusher_data);
@@ -588,8 +576,8 @@ static switch_status_t do_stop(switch_core_session_t *session, char *bugname)
 }
 
 
-static switch_status_t start_capture(switch_core_session_t *session, switch_media_bug_flag_t flags, 
-  char* lang, int interim, char* bugname)
+static switch_status_t start_capture(switch_core_session_t *session, switch_media_bug_flag_t flags,
+  char* lang, int interim, char* bugname, int sampling, char* metadata)
 {
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	switch_media_bug_t *bug;
@@ -611,9 +599,18 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
       single_utterance = 1;
     }
 
-	// transcribe each separately?
-	if (switch_true(switch_channel_get_variable(channel, "GOOGLE_SPEECH_SEPARATE_RECOGNITION_PER_CHANNEL"))) {
+	// Enable separate recognition per channel by default for stereo/multichannel mode
+	// This ensures channel_tag is populated correctly for speaker identification
+	if (flags & SMBF_STEREO) {
       separate_recognition = 1;
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Multichannel mode enabled (stereo): separate recognition per channel\n");
+    }
+
+	// Allow override via channel variable
+	if (switch_channel_var_true(channel, "GOOGLE_SPEECH_SEPARATE_RECOGNITION_PER_CHANNEL")) {
+      separate_recognition = 1;
+    } else if (switch_channel_var_false(channel, "GOOGLE_SPEECH_SEPARATE_RECOGNITION_PER_CHANNEL")) {
+      separate_recognition = 0;
     }
 
 	// max alternatives
@@ -637,8 +634,8 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
     }
 
     // speech model
-	if ((var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_MODEL"))) {	
-		model = var;    
+	if ((var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_MODEL"))) {
+		model = var;
 	}
 
 	// use enhanced model
@@ -659,7 +656,10 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 
 	samples_per_second = !strcasecmp(read_impl.iananame, "g722") ? read_impl.actual_samples_per_second : read_impl.samples_per_second;
 
-	if (SWITCH_STATUS_FALSE == google_speech_session_init(session, responseHandler, DEFAULT_SAMPLE_RATE, samples_per_second, flags & SMBF_STEREO ? 2 : 1, lang, interim, bugname, single_utterance,
+	// Use sampling parameter if provided, otherwise use DEFAULT_SAMPLE_RATE
+	uint32_t target_rate = sampling > 0 ? sampling : DEFAULT_SAMPLE_RATE;
+
+	if (SWITCH_STATUS_FALSE == google_speech_session_init(session, responseHandler, target_rate, samples_per_second, flags & SMBF_STEREO ? 2 : 1, lang, interim, bugname, single_utterance,
 	 separate_recognition, max_alternatives, profanity_filter, word_time_offset, punctuation, model, enhanced, hints, NULL, &pUserData)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error initializing google speech session.\n");
 		return SWITCH_STATUS_FALSE;
@@ -675,14 +675,13 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 }
 
 
-#define TRANSCRIBE_API_SYNTAX "<uuid> start <lang> [interim] [mix-type] [sample-rate] | <uuid> stop"
+#define TRANSCRIBE_API_SYNTAX "<uuid> [start|stop] lang-code [interim] [mono|mixed|stereo] [8k|16k] [metadata]"
 SWITCH_STANDARD_API(transcribe_function)
 {
-	char *mycmd = NULL, *argv[7] = { 0 };
+	char *mycmd = NULL, *argv[8] = { 0 };
 	int argc = 0;
 	switch_status_t status = SWITCH_STATUS_FALSE;
-	// V2 API: Default to stereo (read + write streams)
-	switch_media_bug_flag_t flags = SMBF_READ_STREAM | SMBF_WRITE_STREAM | SMBF_STEREO;
+	switch_media_bug_flag_t flags = SMBF_READ_STREAM;
 
 	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
 		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
@@ -700,43 +699,67 @@ SWITCH_STANDARD_API(transcribe_function)
 
 		if ((lsession = switch_core_session_locate(argv[0]))) {
 			if (!strcasecmp(argv[1], "stop")) {
-				char *bugname = MY_BUG_NAME;
+				char *bugname = argc > 2 ? argv[2] : MY_BUG_NAME;
     		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "stop transcribing\n");
 				status = do_stop(lsession, bugname);
 			} else if (!strcasecmp(argv[1], "start")) {
         char* lang = argv[2];
-        // Parse interim (default: false)
-        int interim = 0;
-        if (argc > 3) {
-          interim = !strcasecmp(argv[3], "true") || !strcasecmp(argv[3], "1");
-        }
+        int interim = argc > 3 && !strcmp(argv[3], "interim");
+				char *bugname = MY_BUG_NAME;
+				int sampling = 16000;  // Default to 16kHz
+				char *metadata = NULL;
 
-        // Parse mix-type (default: stereo)
-        // Options: mono, mix, stereo
-        if (argc > 4) {
-          if (!strcasecmp(argv[4], "mono")) {
-            flags = SMBF_READ_STREAM;  // Only read stream for mono
-          } else if (!strcasecmp(argv[4], "mix")) {
-            flags = SMBF_READ_STREAM | SMBF_WRITE_STREAM;  // Mix both streams
-          } else if (!strcasecmp(argv[4], "stereo")) {
-            flags = SMBF_READ_STREAM | SMBF_WRITE_STREAM | SMBF_STEREO;  // Stereo (default)
-          }
-        }
+				// Parse mix-type (argv[4]): mono (default), mixed, stereo
+				if (argc > 4) {
+					if (!strcmp(argv[4], "mixed")) {
+						flags |= SMBF_WRITE_STREAM;  // Mixed: READ + WRITE (single channel)
+					} else if (!strcmp(argv[4], "stereo")) {
+						flags |= SMBF_WRITE_STREAM;  // Stereo: READ + WRITE + STEREO
+						flags |= SMBF_STEREO;
+					}
+					// else: mono is default (SMBF_READ_STREAM only)
+				}
 
-        // Parse sample-rate (default: 16k)
-        // Note: Sample rate is passed to google_speech_session_init via start_capture
-        // The actual sample rate conversion happens in the glue code
-        // For now, we log it but start_capture uses DEFAULT_SAMPLE_RATE
-        if (argc > 5) {
-          const char* sample_rate_str = argv[5];
-          switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
-            "Sample rate parameter: %s (note: actual rate controlled via channel codec)\n", sample_rate_str);
-        }
+				// Parse sampling rate (argv[5]): 8k, 16k, or numeric
+				if (argc > 5) {
+					if (!strcmp(argv[5], "8k")) {
+						sampling = 8000;
+					} else if (!strcmp(argv[5], "16k")) {
+						sampling = 16000;
+					} else {
+						int rate = atoi(argv[5]);
+						if (rate > 0 && rate % 8000 == 0) {
+							sampling = rate;
+						}
+					}
+				}
 
-        char *bugname = MY_BUG_NAME;
+				// Parse metadata (argv[6] or argv[7])
+				if (argc > 6) {
+					// Check if argv[6] is metadata (starts with { or [) or bugname
+					if (argv[6][0] == '{' || argv[6][0] == '[') {
+						metadata = argv[6];
+					} else {
+						bugname = argv[6];
+					}
+				}
+				if (argc > 7) {
+					// If we have 7 args, argv[7] might be metadata
+					if (argv[7][0] == '{' || argv[7][0] == '[') {
+						metadata = argv[7];
+					}
+				}
+
     		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-          "%s start transcribing lang=%s interim=%s\n", bugname, lang, interim ? "true": "false");
-				status = start_capture(lsession, flags, lang, interim, bugname);
+					"start transcribing lang=%s interim=%s mix=%s rate=%d bugname=%s metadata=%s\n",
+					lang,
+					interim ? "yes" : "no",
+					(flags & SMBF_STEREO) ? "stereo" : (flags & SMBF_WRITE_STREAM) ? "mixed" : "mono",
+					sampling,
+					bugname,
+					metadata ? metadata : "none");
+
+				status = start_capture(lsession, flags, lang, interim, bugname, sampling, metadata);
 			}
 			switch_core_session_rwunlock(lsession);
 		}
@@ -800,7 +823,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_transcribe_load)
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Google Speech Transcription API successfully loaded\n");
 
-	SWITCH_ADD_API(api_interface, "uuid_google_transcribe", "Google Speech-to-Text V2 API", transcribe_function, TRANSCRIBE_API_SYNTAX);
+	SWITCH_ADD_API(api_interface, "uuid_google_transcribe", "Google Speech Transcription API", transcribe_function, TRANSCRIBE_API_SYNTAX);
 	switch_console_set_complete("add uuid_google_transcribe start lang-code");
 	switch_console_set_complete("add uuid_google_transcribe stop ");
 
