@@ -342,24 +342,34 @@ void send_session_start_to_pusher(switch_core_session_t* session, const char* ca
 	char timestamp[32];
 	strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
 
-	// Build session start JSON payload
-	char data[1024];
-	snprintf(data, sizeof(data),
-		"{\"type\":\"session_start\",\"caller_id\":\"%s\",\"callee_id\":\"%s\",\"timestamp\":\"%s\"}",
-		caller_id, callee_id, timestamp);
+	// Build session start JSON using cJSON (handles escaping automatically)
+	cJSON* session_data = cJSON_CreateObject();
+	cJSON_AddStringToObject(session_data, "type", "session_start");
+	cJSON_AddStringToObject(session_data, "caller_id", caller_id);
+	cJSON_AddStringToObject(session_data, "callee_id", callee_id);
+	cJSON_AddStringToObject(session_data, "timestamp", timestamp);
+
+	char* data_json = cJSON_PrintUnformatted(session_data);
+	cJSON_Delete(session_data);
+
+	if (!data_json) return;
 
 	// Escape JSON for embedding in outer JSON string
-	size_t data_len = strlen(data);
+	size_t data_len = strlen(data_json);
 	char* escaped = malloc(data_len * 2 + 1);
-	if (!escaped) return;
+	if (!escaped) {
+		free(data_json);
+		return;
+	}
 
 	char* p = escaped;
 	for (size_t i = 0; i < data_len; i++) {
-		if (data[i] == '"') { *p++ = '\\'; *p++ = '"'; }
-		else if (data[i] == '\\') { *p++ = '\\'; *p++ = '\\'; }
-		else *p++ = data[i];
+		if (data_json[i] == '"') { *p++ = '\\'; *p++ = '"'; }
+		else if (data_json[i] == '\\') { *p++ = '\\'; *p++ = '\\'; }
+		else *p++ = data_json[i];
 	}
 	*p = '\0';
+	free(data_json);
 
 	// Build Pusher request body
 	char body[2048];
