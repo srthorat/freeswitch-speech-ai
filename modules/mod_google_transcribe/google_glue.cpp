@@ -6,7 +6,8 @@
 #include <switch_json.h>
 #include <grpc++/grpc++.h>
 
-#include "google/cloud/speech/v2/cloud_speech.grpc.pb.h"
+#include "speech.grpc.pb.h"
+#include "speech.pb.h"
 
 #include <switch_json.h>
 
@@ -25,7 +26,7 @@ using google::cloud::speech::v2::SpeechAdaptation;
 using google::cloud::speech::v2::PhraseSet;
 using google::cloud::speech::v2::AutoDetectDecodingConfig;
 using google::cloud::speech::v2::ExplicitDecodingConfig;
-using google::rpc::Status;
+using google::cloud::speech::v2::Phrase;
 
 #define CHUNKSIZE (320)
 
@@ -235,7 +236,7 @@ public:
 
     // V2 API: Speaker diarization (optional, Chirp 3 supports 14 languages)
     if (var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_SPEAKER_DIARIZATION")) {
-      auto* diarization_config = features->mutable_diarization_config();
+      auto* diarization_config = config->mutable_speaker_diarization_config();
       diarization_config->set_min_speaker_count(1);
       diarization_config->set_max_speaker_count(6); // Default max speakers
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: speaker diarization enabled\n");
@@ -255,6 +256,7 @@ public:
     // V2 API: Language detection config (optional)
     if (switch_true(switch_channel_get_variable(channel, "GOOGLE_SPEECH_ENABLE_LANGUAGE_DETECTION"))) {
       auto* lang_detection = features->mutable_language_detection_config();
+      lang_detection->set_enable_language_detection(true);
       // Language codes already added above
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: language detection enabled\n");
     }
@@ -300,7 +302,7 @@ public:
       }
       return true;
     }
-    m_request.set_audio_content(data, datalen);
+    m_request.set_audio_content(std::string((char*)data, datalen));
     bool ok = m_streamer->Write(m_request);
     return ok;
   }
@@ -380,11 +382,11 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
     count++;
     auto speech_event_type = response.speech_event_type();
     if (response.has_error()) {
-      Status status = response.error();
-      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "grpc_read_thread: error %s (%d)\n", status.message().c_str(), status.code()) ;
+      auto error = response.error();
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "grpc_read_thread: error %s (%d)\n", error.message().c_str(), error.code()) ;
       cJSON* json = cJSON_CreateObject();
       cJSON_AddStringToObject(json, "type", "error");
-      cJSON_AddStringToObject(json, "error", status.message().c_str());
+      cJSON_AddStringToObject(json, "error", error.message().c_str());
       char* jsonString = cJSON_PrintUnformatted(json);
       cb->responseHandler(session, jsonString, cb->bugname);
       free(jsonString);
@@ -404,10 +406,8 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
       cJSON * jLanguageCode = cJSON_CreateString(result.language_code().c_str());
       cJSON * jChannelTag = cJSON_CreateNumber(result.channel_tag());
 
-      auto duration = result.result_end_time();
-      int32_t seconds = duration.seconds();
-      int64_t nanos = duration.nanos();
-      int span = (int) trunc(seconds * 1000. + ((float) nanos / 1000000.));
+      int64_t end_time_seconds = result.result_end_time_seconds();
+      int span = (int)(end_time_seconds * 1000); // Convert to milliseconds
       cJSON * jResultEndTime = cJSON_CreateNumber(span);
 
       cJSON_AddItemToObject(jResult, "stability", jStability);
@@ -432,15 +432,17 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
             auto words = alternative.words(b);
             cJSON* jWord = cJSON_CreateObject();
             cJSON_AddItemToObject(jWord, "word", cJSON_CreateString(words.word().c_str()));
-            if (words.has_start_time()) {
-              cJSON_AddItemToObject(jWord, "start_time", cJSON_CreateNumber(words.start_time().seconds()));
+            int64_t start_time = words.start_time_seconds();
+            if (start_time > 0) {
+              cJSON_AddItemToObject(jWord, "start_time", cJSON_CreateNumber(start_time));
             }
-            if (words.has_end_time()) {
-              cJSON_AddItemToObject(jWord, "end_time", cJSON_CreateNumber(words.end_time().seconds()));
+            int64_t end_time = words.end_time_seconds();
+            if (end_time > 0) {
+              cJSON_AddItemToObject(jWord, "end_time", cJSON_CreateNumber(end_time));
             }
-            int speaker_tag = words.speaker_tag();
-            if (speaker_tag > 0) {
-              cJSON_AddItemToObject(jWord, "speaker_tag", cJSON_CreateNumber(speaker_tag));
+            int speaker_label = words.speaker_label();
+            if (speaker_label > 0) {
+              cJSON_AddItemToObject(jWord, "speaker_tag", cJSON_CreateNumber(speaker_label));
             }
             float confidence = words.confidence();
             if (confidence > 0.0) {
@@ -461,7 +463,7 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
       cJSON_Delete(jResult);
     }
 
-    if (speech_event_type == StreamingRecognizeResponse_SpeechEventType_END_OF_SINGLE_UTTERANCE) {
+    if (speech_event_type == google::cloud::speech::v2::END_OF_SINGLE_UTTERANCE) {
       // we only get this when we have requested it, and recognition stops after we get this
       switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "grpc_read_thread: got end_of_utterance\n") ;
       cb->got_end_of_utterance = 1;

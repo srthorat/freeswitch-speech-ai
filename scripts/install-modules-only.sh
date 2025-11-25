@@ -269,9 +269,10 @@ else
 fi
 
 # Build gRPC and googleapis if not present
+# Build gRPC and googleapis if not present (FAST VERSION - no compilation)
 if ! ldconfig -p | grep -q libgrpc++; then
-    echo "Building gRPC v1.64.2 and googleapis..."
-    echo "This will take 20-40 minutes..."
+    echo "Installing gRPC v1.64.2 (prebuilt binaries)..."
+    echo "This will take 1-2 seconds instead of 20-40 minutes."
 
     # Remove old entry if exists
     sed -i '/^grpc=/d' "$MANIFEST_FILE" 2>/dev/null || true
@@ -279,65 +280,49 @@ if ! ldconfig -p | grep -q libgrpc++; then
 
     cd /usr/local/src || exit 1
 
-    if [ -d "grpc" ]; then
-        rm -rf grpc
-    fi
+    # --------------------------
+    # Install Prebuilt gRPC Bundle
+    # --------------------------
+    GRPC_DIR="/opt/grpc-1.64.2"
 
-    echo "Cloning gRPC repository..."
-    if ! git clone --depth 1 -b v1.64.2 https://github.com/grpc/grpc; then
-        echo -e "${RED}✗ Failed to clone gRPC repository${NC}"
-        echo "Check your internet connection and try again"
+    # Remove old extract if exists
+    rm -rf "$GRPC_DIR"
+
+    echo "Downloading prebuilt gRPC runtime..."
+    if ! curl -fLo /tmp/grpc_cxx.tar.gz \
+        https://packages.grpc.io/archive/2024/05/04/425b34d9/linux/x86_64/grpc_cxx.tar.gz; then
+        echo -e "${RED}✗ Failed to download prebuilt gRPC bundle${NC}"
         exit 1
     fi
 
-    cd grpc || exit 1
-
-    echo "Initializing gRPC submodules (this may take a few minutes)..."
-    if ! git submodule update --init --recursive; then
-        echo -e "${RED}✗ Failed to initialize gRPC submodules${NC}"
+    echo "Extracting gRPC..."
+    mkdir -p "$GRPC_DIR"
+    if ! tar -xzf /tmp/grpc_cxx.tar.gz -C "$GRPC_DIR"; then
+        echo -e "${RED}✗ Failed to extract gRPC bundle${NC}"
         exit 1
     fi
 
-    mkdir -p cmake/build && cd cmake/build || exit 1
-
-    echo "Configuring gRPC..."
-    if ! cmake ../.. \
-        -DBUILD_SHARED_LIBS=ON \
-        -DgRPC_INSTALL=ON \
-        -DgRPC_BUILD_TESTS=OFF \
-        -DgRPC_SSL_PROVIDER=package \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CXX_STANDARD=17; then
-        echo -e "${RED}✗ Failed to configure gRPC${NC}"
-        exit 1
-    fi
-
-    echo "Compiling gRPC (20-40 minutes)..."
-    if ! make -j ${BUILD_CPUS}; then
-        echo -e "${RED}✗ Failed to compile gRPC${NC}"
-        echo "Try reducing build parallelism: --build-cpus 2"
-        exit 1
-    fi
-
-    echo "Installing gRPC..."
-    if ! make install; then
-        echo -e "${RED}✗ Failed to install gRPC${NC}"
-        exit 1
-    fi
-
+    # Register libraries
+    echo "$GRFC_DIR/lib" > /etc/ld.so.conf.d/grpc.conf
     ldconfig
 
-    # Verify gRPC installation
-    if ! /usr/local/bin/protoc --version > /dev/null 2>&1; then
-        echo -e "${RED}✗ protoc not found after installation${NC}"
+    # Validate installation
+    if ! ldconfig -p | grep -q libgrpc++; then
+        echo -e "${RED}✗ gRPC libs not detected after install${NC}"
         exit 1
     fi
 
+    if ! "$GRPC_DIR/bin/protoc" --version > /dev/null 2>&1; then
+        echo -e "${RED}✗ protoc in gRPC bundle not working${NC}"
+        exit 1
+    fi
+
+    # ------------------------------
+    # Build googleapis (same as before)
+    # ------------------------------
     echo "Cloning googleapis repository..."
     cd /usr/local/src || exit 1
-    if [ -d "googleapis" ]; then
-        rm -rf googleapis
-    fi
+    rm -rf googleapis
 
     if ! git clone --depth 1 https://github.com/googleapis/googleapis.git; then
         echo -e "${RED}✗ Failed to clone googleapis repository${NC}"
@@ -348,21 +333,23 @@ if ! ldconfig -p | grep -q libgrpc++; then
 
     echo "Generating protobuf files for Speech V2 API..."
     mkdir -p gens
-    if ! /usr/local/bin/protoc \
+
+    if ! "$GRPC_DIR/bin/protoc" \
         --proto_path=. \
         --cpp_out=gens \
         --grpc_out=gens \
-        --plugin=protoc-gen-grpc=/usr/local/bin/grpc_cpp_plugin \
+        --plugin=protoc-gen-grpc="$GRPC_DIR/bin/grpc_cpp_plugin" \
         google/cloud/speech/v2/*.proto \
         google/api/*.proto \
         google/rpc/*.proto \
         google/longrunning/*.proto \
         google/type/*.proto 2>&1 | grep -v "warning:"; then
+        
         echo -e "${RED}✗ Failed to generate protobuf files${NC}"
         exit 1
     fi
 
-    # Verify Speech V2 API files
+    # Validate output
     if [ ! -f "gens/google/cloud/speech/v2/cloud_speech.pb.cc" ]; then
         echo -e "${RED}✗ Failed to generate Speech V2 API files${NC}"
         exit 1
@@ -371,13 +358,14 @@ if ! ldconfig -p | grep -q libgrpc++; then
     GENERATED_FILES=$(find gens -type f -name "*.pb.cc" | wc -l)
     echo "Generated ${GENERATED_FILES} protobuf source files"
 
-    # Mark as installed by us
+    # Mark as installed
     echo "grpc=installed" >> "$MANIFEST_FILE"
     echo "googleapis=installed" >> "$MANIFEST_FILE"
-    echo -e "${GREEN}✓ gRPC and googleapis built and installed${NC}"
+    echo -e "${GREEN}✓ gRPC (prebuilt) and googleapis prepared${NC}"
+
 else
     echo -e "${YELLOW}ℹ${NC} gRPC already installed"
-    # Mark as existing (not installed by us)
+
     if ! grep -q "^grpc=" "$MANIFEST_FILE"; then
         echo "grpc=existing" >> "$MANIFEST_FILE"
     fi
@@ -468,51 +456,42 @@ echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
 # mod_google_transcribe
 echo "Building mod_google_transcribe..."
 
-# Check if googleapis protobuf files exist
-if [ ! -d "/usr/local/src/googleapis/gens" ]; then
-    echo -e "${RED}✗ googleapis protobuf files not found${NC}"
-    echo "gRPC and googleapis must be installed first"
-    exit 1
-fi
-
 cd ${SCRIPT_DIR}/../modules/mod_google_transcribe || exit 1
 
-if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_google_transcribe.c; then
-    echo -e "${RED}✗ Failed to compile mod_google_transcribe.c${NC}"
+# Check for required tools
+if ! command -v protoc &> /dev/null; then
+    echo -e "${RED}✗ protoc not found${NC}"
+    echo "Protocol Buffers compiler is required"
     exit 1
 fi
 
-if ! g++ -fPIC -c -std=c++17 \
-    -I${FS_PREFIX}/include/freeswitch \
-    -I/usr/local/include \
-    -I/usr/local/src/googleapis/gens \
-    google_glue.cpp; then
-    echo -e "${RED}✗ Failed to compile google_glue.cpp${NC}"
+if ! command -v grpc_cpp_plugin &> /dev/null; then
+    echo -e "${RED}✗ grpc_cpp_plugin not found${NC}"
+    echo "gRPC C++ plugin is required"
     exit 1
 fi
 
-if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so \
-    mod_google_transcribe.o \
-    google_glue.o \
-    /usr/local/src/googleapis/gens/google/cloud/speech/v2/*.pb.cc \
-    /usr/local/src/googleapis/gens/google/api/*.pb.cc \
-    /usr/local/src/googleapis/gens/google/rpc/*.pb.cc \
-    /usr/local/src/googleapis/gens/google/longrunning/*.pb.cc \
-    /usr/local/src/googleapis/gens/google/type/*.pb.cc \
-    -L/usr/local/lib \
-    -lgrpc++ \
-    -lgrpc \
-    -lprotobuf \
-    -lpthread \
-    -lssl \
-    -lcrypto \
-    -lcurl \
-    -lz; then
-    echo -e "${RED}✗ Failed to link mod_google_transcribe${NC}"
+# Generate protobuf files if they don't exist or are older than .proto file
+if [ ! -f "speech.pb.h" ] || [ "speech.proto" -nt "speech.pb.h" ]; then
+    echo "Generating protobuf files..."
+    if ! protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=`which grpc_cpp_plugin` speech.proto; then
+        echo -e "${RED}✗ Failed to generate protobuf files${NC}"
+        exit 1
+    fi
+fi
+
+# Build using Makefile
+if ! make clean && make; then
+    echo -e "${RED}✗ Failed to build mod_google_transcribe${NC}"
     exit 1
 fi
 
-ldconfig
+# Install the module
+if ! make install; then
+    echo -e "${RED}✗ Failed to install mod_google_transcribe${NC}"
+    exit 1
+fi
+
 echo -e "${GREEN}✓ mod_google_transcribe${NC}"
 
 # Mark modules as installed
