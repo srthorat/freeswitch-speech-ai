@@ -334,11 +334,25 @@ void send_session_start_to_pusher(switch_core_session_t* session, const char* ca
 		"{\"type\":\"session_start\",\"caller_id\":\"%s\",\"callee_id\":\"%s\",\"timestamp\":\"%s\"}",
 		caller_id, callee_id, timestamp);
 
+	// Escape JSON for embedding in outer JSON string
+	size_t data_len = strlen(data);
+	char* escaped = malloc(data_len * 2 + 1);
+	if (!escaped) return;
+
+	char* p = escaped;
+	for (size_t i = 0; i < data_len; i++) {
+		if (data[i] == '"') { *p++ = '\\'; *p++ = '"'; }
+		else if (data[i] == '\\') { *p++ = '\\'; *p++ = '\\'; }
+		else *p++ = data[i];
+	}
+	*p = '\0';
+
 	// Build Pusher request body
 	char body[2048];
 	snprintf(body, sizeof(body),
 		"{\"name\":\"%s\",\"channel\":\"%s\",\"data\":\"%s\"}",
-		event_session_start, channel, data);
+		event_session_start, channel, escaped);
+	free(escaped);
 
 	// Calculate MD5 of body
 	unsigned char md5_digest[16];
