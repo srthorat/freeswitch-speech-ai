@@ -7,6 +7,7 @@
 #   - mod_audio_fork (with libwebsockets)
 #   - mod_aws_transcribe (with AWS SDK C++)
 #   - mod_deepgram_transcribe (with libwebsockets)
+#   - mod_google_transcribe (with gRPC, googleapis, Pusher integration)
 #
 # Usage:
 #   sudo ./install-all.sh [OPTIONS]
@@ -19,15 +20,17 @@
 # Note: This script ALWAYS copies the example dialplan from examples/ directory.
 #
 # Environment Variables (set before running):
-#   DEEPGRAM_API_KEY        Deepgram API key
-#   AWS_ACCESS_KEY_ID       AWS access key
-#   AWS_SECRET_ACCESS_KEY   AWS secret key
-#   AWS_REGION              AWS region (default: us-east-1)
-#   AWS_SESSION_TOKEN       AWS session token (for STS)
-#   PUSHER_APP_ID           Pusher app ID
-#   PUSHER_KEY              Pusher key
-#   PUSHER_SECRET           Pusher secret
-#   PUSHER_CLUSTER          Pusher cluster
+#   DEEPGRAM_API_KEY                Deepgram API key
+#   AWS_ACCESS_KEY_ID               AWS access key
+#   AWS_SECRET_ACCESS_KEY           AWS secret key
+#   AWS_REGION                      AWS region (default: us-east-1)
+#   AWS_SESSION_TOKEN               AWS session token (for STS)
+#   GOOGLE_APPLICATION_CREDENTIALS  Google Cloud service account JSON path
+#   GOOGLE_CLOUD_PROJECT            Google Cloud project ID
+#   PUSHER_APP_ID                   Pusher app ID
+#   PUSHER_KEY                      Pusher key
+#   PUSHER_SECRET                   Pusher secret
+#   PUSHER_CLUSTER                  Pusher cluster
 # ============================================================================
 
 # Disable automatic exit on error - we'll handle errors manually for better tracking
@@ -62,12 +65,14 @@ declare -a ALL_STEPS=(
     "Install system dependencies"
     "Build libwebsockets 4.3.3"
     "Build AWS SDK C++ 1.11.345"
+    "Build gRPC and googleapis for Google Speech V2"
     "Build spandsp 3.x from source"
     "Build sofia-sip 1.13.17 from source"
     "Install FreeSWITCH 1.10.11"
     "Build mod_audio_fork"
     "Build mod_deepgram_transcribe"
     "Build mod_aws_transcribe"
+    "Build mod_google_transcribe"
     "Configure FreeSWITCH and modules"
     "Validate installation"
 )
@@ -454,9 +459,109 @@ else
 fi
 
 # ============================================================================
-# Step 4: Build spandsp 3.x from source
+# Step 4: Build gRPC and googleapis for Google Speech V2
 # ============================================================================
 CURRENT_STEP=4
+show_progress $CURRENT_STEP "Build gRPC and googleapis for Google Speech V2"
+echo -e "${YELLOW}  Note: This step will take 20-40 minutes for gRPC build...${NC}"
+
+# Check if gRPC is already installed
+if ldconfig -p | grep -q libgrpc++; then
+    log_substep "gRPC already installed - using existing version"
+    echo "grpc=existing" >> "$MANIFEST_FILE"
+    complete_step "gRPC and googleapis (existing)"
+else
+    log_substep "Cloning gRPC v1.64.2 from GitHub..."
+    cd /usr/local/src
+    check_success "Failed to change directory to /usr/local/src" "cd /usr/local/src"
+
+    if [ -d "grpc" ]; then
+        rm -rf grpc
+    fi
+
+    git clone --depth 1 -b v1.64.2 https://github.com/grpc/grpc > /dev/null 2>&1
+    check_success "Failed to clone gRPC repository" "git clone grpc"
+
+    cd grpc
+    check_success "Failed to enter gRPC directory" "cd grpc"
+
+    log_substep "Initializing gRPC submodules (this may take a few minutes)..."
+    git submodule update --init --recursive > /dev/null 2>&1
+    check_success "Failed to initialize gRPC submodules" "git submodule update"
+
+    log_substep "Configuring gRPC with CMake..."
+    mkdir -p cmake/build && cd cmake/build
+    cmake ../.. \
+        -DBUILD_SHARED_LIBS=ON \
+        -DgRPC_INSTALL=ON \
+        -DgRPC_BUILD_TESTS=OFF \
+        -DgRPC_SSL_PROVIDER=package \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_STANDARD=17 > /dev/null 2>&1
+    check_success "Failed to configure gRPC" "cmake"
+
+    log_substep "Compiling gRPC (using ${BUILD_CPUS} CPU cores, 20-40 min)..."
+    echo -e "  ${CYAN}[$(date +%T)] Running: make -j ${BUILD_CPUS}${NC}"
+    make -j ${BUILD_CPUS} > /dev/null 2>&1
+    check_success "Failed to compile gRPC" "make -j ${BUILD_CPUS}"
+    echo -e "  ${GREEN}[$(date +%T)] ✓ gRPC compilation completed${NC}"
+
+    log_substep "Installing gRPC..."
+    make install > /dev/null 2>&1
+    check_success "Failed to install gRPC" "make install"
+    ldconfig
+
+    log_substep "Verifying gRPC and protoc installation..."
+    /usr/local/bin/protoc --version > /dev/null 2>&1
+    check_success "protoc not found after installation" "protoc --version"
+    ls -1 /usr/local/lib/libgrpc++.so > /dev/null 2>&1
+    check_success "libgrpc++.so not found after installation" "ls libgrpc++.so"
+    echo -e "  ${GREEN}✓${NC} gRPC v1.64.2 installed and verified"
+
+    log_substep "Cloning googleapis repository..."
+    cd /usr/local/src
+    if [ -d "googleapis" ]; then
+        rm -rf googleapis
+    fi
+
+    git clone --depth 1 https://github.com/googleapis/googleapis.git > /dev/null 2>&1
+    check_success "Failed to clone googleapis repository" "git clone googleapis"
+    cd googleapis
+
+    log_substep "Generating protobuf files for Speech V2 API..."
+    mkdir -p gens
+    /usr/local/bin/protoc \
+        --proto_path=. \
+        --cpp_out=gens \
+        --grpc_out=gens \
+        --plugin=protoc-gen-grpc=/usr/local/bin/grpc_cpp_plugin \
+        google/cloud/speech/v2/*.proto \
+        google/api/*.proto \
+        google/rpc/*.proto \
+        google/longrunning/*.proto \
+        google/type/*.proto 2>&1 | grep -v "warning:" || true
+    check_success "Failed to generate protobuf files" "protoc"
+
+    # Count generated files
+    GENERATED_FILES=$(find gens -type f -name "*.pb.cc" | wc -l)
+    echo -e "  ${GREEN}✓${NC} Generated ${GENERATED_FILES} protobuf source files"
+
+    # Verify Speech V2 API files
+    if [ -f "gens/google/cloud/speech/v2/cloud_speech.pb.cc" ]; then
+        echo -e "  ${GREEN}✓${NC} Google Cloud Speech V2 API files generated"
+    else
+        handle_error 1 "Failed to generate Speech V2 API files" "protoc Speech V2"
+    fi
+
+    echo "grpc=installed" >> "$MANIFEST_FILE"
+    echo "googleapis=installed" >> "$MANIFEST_FILE"
+    complete_step "gRPC v1.64.2 and googleapis built and installed"
+fi
+
+# ============================================================================
+# Step 5: Build spandsp 3.x from source
+# ============================================================================
+CURRENT_STEP=5
 show_progress $CURRENT_STEP "Build spandsp 3.x from source"
 
 cd /usr/local/src
@@ -505,9 +610,9 @@ else
 fi
 
 # ============================================================================
-# Step 5: Build sofia-sip 1.13.17 from source
+# Step 6: Build sofia-sip 1.13.17 from source
 # ============================================================================
-CURRENT_STEP=5
+CURRENT_STEP=6
 show_progress $CURRENT_STEP "Build sofia-sip 1.13.17 from source"
 
 cd /usr/local/src
@@ -551,9 +656,9 @@ else
 fi
 
 # ============================================================================
-# Step 6: Install FreeSWITCH 1.10.11 (if not skipped)
+# Step 7: Install FreeSWITCH 1.10.11 (if not skipped)
 # ============================================================================
-CURRENT_STEP=6
+CURRENT_STEP=7
 if [ "$SKIP_FREESWITCH" = false ]; then
     show_progress $CURRENT_STEP "Install FreeSWITCH 1.10.11"
     echo -e "${YELLOW}  Note: This step will take 15-20 minutes...${NC}"
@@ -705,9 +810,9 @@ else
 fi
 
 # ============================================================================
-# Step 7: Build mod_audio_fork
+# Step 8: Build mod_audio_fork
 # ============================================================================
-CURRENT_STEP=7
+CURRENT_STEP=8
 show_progress $CURRENT_STEP "Build mod_audio_fork"
 
 cd ${SCRIPT_DIR}/../modules/mod_audio_fork
@@ -755,9 +860,9 @@ echo -e "  ${GREEN}✓${NC} All dependencies satisfied"
 complete_step "mod_audio_fork built and validated"
 
 # ============================================================================
-# Step 8: Build mod_deepgram_transcribe
+# Step 9: Build mod_deepgram_transcribe
 # ============================================================================
-CURRENT_STEP=8
+CURRENT_STEP=9
 show_progress $CURRENT_STEP "Build mod_deepgram_transcribe"
 
 cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe
@@ -807,9 +912,9 @@ echo -e "  ${GREEN}✓${NC} All dependencies satisfied"
 complete_step "mod_deepgram_transcribe built and validated"
 
 # ============================================================================
-# Step 9: Build mod_aws_transcribe
+# Step 10: Build mod_aws_transcribe
 # ============================================================================
-CURRENT_STEP=9
+CURRENT_STEP=10
 show_progress $CURRENT_STEP "Build mod_aws_transcribe"
 
 cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe
@@ -862,17 +967,106 @@ echo -e "  ${GREEN}✓${NC} All dependencies satisfied"
 
 complete_step "mod_aws_transcribe built and validated"
 
+# ============================================================================
+# Step 11: Build mod_google_transcribe
+# ============================================================================
+CURRENT_STEP=11
+show_progress $CURRENT_STEP "Build mod_google_transcribe"
+
+# Check if googleapis protobuf files exist
+if [ ! -d "/usr/local/src/googleapis/gens" ]; then
+    handle_error 1 "googleapis protobuf files not found. Step 4 may have failed." "googleapis check"
+fi
+
+cd ${SCRIPT_DIR}/../modules/mod_google_transcribe
+check_success "Failed to change directory to mod_google_transcribe" "cd ${SCRIPT_DIR}/../modules/mod_google_transcribe"
+
+log_substep "Compiling mod_google_transcribe.c..."
+echo -e "  ${CYAN}[$(date +%T)] Running: gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_google_transcribe.c${NC}"
+gcc -fPIC -c \
+    -I${FS_PREFIX}/include/freeswitch \
+    mod_google_transcribe.c 2>&1 | tee /tmp/mod_google_gcc.log
+check_success "Failed to compile mod_google_transcribe.c (check /tmp/mod_google_gcc.log)" "gcc mod_google_transcribe.c"
+echo -e "  ${GREEN}[$(date +%T)] ✓ mod_google_transcribe.c compiled${NC}"
+
+log_substep "Compiling google_glue.cpp (C++17)..."
+echo -e "  ${CYAN}[$(date +%T)] Running: g++ -fPIC -c -std=c++17 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include -I/usr/local/src/googleapis/gens google_glue.cpp${NC}"
+g++ -fPIC -c -std=c++17 \
+    -I${FS_PREFIX}/include/freeswitch \
+    -I/usr/local/include \
+    -I/usr/local/src/googleapis/gens \
+    google_glue.cpp 2>&1 | tee /tmp/mod_google_g++.log
+check_success "Failed to compile google_glue.cpp (check /tmp/mod_google_g++.log)" "g++ google_glue.cpp"
+echo -e "  ${GREEN}[$(date +%T)] ✓ google_glue.cpp compiled${NC}"
+
+log_substep "Linking mod_google_transcribe.so with gRPC and googleapis..."
+echo -e "  ${CYAN}[$(date +%T)] Running: g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so ...${NC}"
+g++ -shared \
+    -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so \
+    mod_google_transcribe.o \
+    google_glue.o \
+    /usr/local/src/googleapis/gens/google/cloud/speech/v2/*.pb.cc \
+    /usr/local/src/googleapis/gens/google/api/*.pb.cc \
+    /usr/local/src/googleapis/gens/google/rpc/*.pb.cc \
+    /usr/local/src/googleapis/gens/google/longrunning/*.pb.cc \
+    /usr/local/src/googleapis/gens/google/type/*.pb.cc \
+    -L/usr/local/lib \
+    -lgrpc++ \
+    -lgrpc \
+    -lprotobuf \
+    -lpthread \
+    -lssl \
+    -lcrypto \
+    -lcurl \
+    -lz 2>&1 | tee /tmp/mod_google_link.log
+check_success "Failed to link mod_google_transcribe.so (check /tmp/mod_google_link.log)" "g++ linking"
+echo -e "  ${GREEN}[$(date +%T)] ✓ mod_google_transcribe.so linked${NC}"
+
+ldconfig
+
+log_substep "Validating mod_google_transcribe.so with ldd..."
+if ldd ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so | grep -q "not found"; then
+    echo -e "${RED}✗ mod_google_transcribe has missing dependencies:${NC}"
+    ldd ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so | grep "not found"
+    handle_error 1 "mod_google_transcribe has missing dependencies" "ldd validation"
+fi
+
+# Verify critical libraries
+log_substep "Verifying critical library linkage..."
+if ldd ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so | grep -q "libgrpc++"; then
+    echo -e "  ${GREEN}✓${NC} gRPC++ linked"
+else
+    handle_error 1 "mod_google_transcribe not linked with gRPC++" "gRPC++ linkage check"
+fi
+
+if ldd ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so | grep -q "libssl"; then
+    echo -e "  ${GREEN}✓${NC} OpenSSL linked (Pusher HMAC)"
+else
+    handle_error 1 "mod_google_transcribe not linked with OpenSSL" "OpenSSL linkage check"
+fi
+
+if ldd ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so | grep -q "libcurl"; then
+    echo -e "  ${GREEN}✓${NC} libcurl linked (Pusher HTTP)"
+else
+    handle_error 1 "mod_google_transcribe not linked with libcurl" "libcurl linkage check"
+fi
+
+echo -e "  ${GREEN}✓${NC} All dependencies satisfied"
+
+complete_step "mod_google_transcribe built and validated"
+
 # Mark modules as installed and set permissions
 echo "modules=installed" >> "$MANIFEST_FILE"
 log_substep "Setting module permissions..."
 chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so 2>/dev/null || true
 chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so 2>/dev/null || true
 chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so 2>/dev/null || true
+chown freeswitch:freeswitch ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so 2>/dev/null || true
 
 # ============================================================================
-# Step 10: Configure FreeSWITCH and Modules
+# Step 12: Configure FreeSWITCH and Modules
 # ============================================================================
-CURRENT_STEP=10
+CURRENT_STEP=12
 show_progress $CURRENT_STEP "Configure FreeSWITCH and Modules"
 
 # Add modules to modules.conf.xml
@@ -884,6 +1078,7 @@ if [ -f "$MODULES_CONF" ]; then
         sed -i '/<\/modules>/i \    <load module="mod_audio_fork"/>' "$MODULES_CONF"
         sed -i '/<\/modules>/i \    <load module="mod_aws_transcribe"/>' "$MODULES_CONF"
         sed -i '/<\/modules>/i \    <load module="mod_deepgram_transcribe"/>' "$MODULES_CONF"
+        sed -i '/<\/modules>/i \    <load module="mod_google_transcribe"/>' "$MODULES_CONF"
         echo -e "  ${GREEN}✓${NC} Added modules to modules.conf.xml"
     else
         echo -e "  ${YELLOW}ℹ${NC}  Modules already configured in modules.conf.xml"
@@ -1131,15 +1326,15 @@ fi
 complete_step "FreeSWITCH and modules configured"
 
 # ============================================================================
-# Step 11: Validate Installation
+# Step 13: Validate Installation
 # ============================================================================
-CURRENT_STEP=11
+CURRENT_STEP=13
 if [ "$NO_VALIDATION" = false ]; then
     show_progress $CURRENT_STEP "Validate Installation"
 
     # Check module files exist
     log_substep "Checking module files exist..."
-    for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
+    for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe; do
         if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
             echo -e "  ${GREEN}✓${NC} ${module}.so exists"
         else
@@ -1149,7 +1344,7 @@ if [ "$NO_VALIDATION" = false ]; then
 
     # Check dependencies (already done during build, but double-check)
     log_substep "Verifying module dependencies (ldd)..."
-    for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
+    for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe; do
         MODULE_PATH="${FS_PREFIX}/lib/freeswitch/mod/${module}.so"
         if ldd "$MODULE_PATH" | grep -q "not found"; then
             echo -e "${RED}✗${NC} ${module} has missing dependencies:"
@@ -1200,6 +1395,13 @@ if [ "$NO_VALIDATION" = false ]; then
             MODULE_LOAD_FAILED=true
         fi
 
+        if LD_LIBRARY_PATH=/usr/local/lib ${FS_PREFIX}/bin/fs_cli -x "show modules" 2>/dev/null | grep -q "mod_google_transcribe"; then
+            echo -e "  ${GREEN}✓${NC} mod_google_transcribe loaded successfully"
+        else
+            echo -e "  ${RED}✗${NC} mod_google_transcribe failed to load"
+            MODULE_LOAD_FAILED=true
+        fi
+
         # Stop FreeSWITCH
         log_substep "Stopping FreeSWITCH test instance..."
         kill $FS_PID 2>/dev/null || true
@@ -1241,6 +1443,8 @@ fi
 echo -e "${BOLD}Installation Summary:${NC}"
 echo "  ✓ libwebsockets 4.3.3"
 echo "  ✓ AWS SDK C++ 1.11.345"
+echo "  ✓ gRPC v1.64.2 and Protocol Buffers"
+echo "  ✓ googleapis (Speech V2 API)"
 echo "  ✓ spandsp 3.x (from source)"
 echo "  ✓ sofia-sip 1.13.17 (from source)"
 if [ "$SKIP_FREESWITCH" = false ]; then
@@ -1249,6 +1453,7 @@ fi
 echo "  ✓ mod_audio_fork"
 echo "  ✓ mod_aws_transcribe"
 echo "  ✓ mod_deepgram_transcribe"
+echo "  ✓ mod_google_transcribe"
 echo ""
 echo -e "${BOLD}Installation Location:${NC} ${FS_PREFIX}"
 echo -e "${BOLD}Installation Manifest:${NC} ${MANIFEST_FILE}"
@@ -1260,6 +1465,8 @@ echo "   export DEEPGRAM_API_KEY=your_key"
 echo "   export AWS_ACCESS_KEY_ID=your_key"
 echo "   export AWS_SECRET_ACCESS_KEY=your_secret"
 echo "   export AWS_REGION=us-east-1"
+echo "   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json"
+echo "   export GOOGLE_CLOUD_PROJECT=your-project-id"
 echo ""
 echo -e "${BOLD}2. Start FreeSWITCH:${NC}"
 echo "   sudo systemctl start freeswitch"
@@ -1269,16 +1476,17 @@ echo -e "${BOLD}3. Check FreeSWITCH status:${NC}"
 echo "   sudo systemctl status freeswitch"
 echo ""
 echo -e "${BOLD}4. Verify modules are loaded:${NC}"
-echo "   ${FS_PREFIX}/bin/fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram'"
+echo "   ${FS_PREFIX}/bin/fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram|google'"
 echo ""
 echo -e "${BOLD}5. Test a call:${NC}"
 echo "   - Register SIP extension 1000 (password: 1234)"
 echo "   - Call extension 1002 to test Deepgram transcription"
 echo "   - Call extension 1003 to test AWS Transcribe"
+echo "   - Call extension 1004 to test Google Speech-to-Text V2"
 echo ""
 echo -e "${BOLD}${YELLOW}Troubleshooting:${NC}"
 echo "  - Check FreeSWITCH logs: ${FS_PREFIX}/log/freeswitch.log"
-echo "  - Check module logs: grep 'mod_audio_fork\|mod_aws\|mod_deepgram' ${FS_PREFIX}/log/freeswitch.log"
+echo "  - Check module logs: grep 'mod_audio_fork\|mod_aws\|mod_deepgram\|mod_google' ${FS_PREFIX}/log/freeswitch.log"
 echo "  - Review manifest: cat ${MANIFEST_FILE}"
 echo "  - To clean up and reinstall: sudo ${SCRIPT_DIR}/cleanup-all.sh"
 echo ""
@@ -1289,12 +1497,13 @@ echo "     • sofia-sip: /tmp/sofia_{clone,bootstrap,configure,make,install}.lo
 echo "  📋 FreeSWITCH build:"
 echo "     • Configure: /tmp/freeswitch_configure.log"
 echo "     • Compilation: /tmp/freeswitch_make.log"
-echo "     • Installation: /tmp/freeswitch_install.log" 
+echo "     • Installation: /tmp/freeswitch_install.log"
 echo "     • Sounds: /tmp/freeswitch_sounds.log"
 echo "  📋 Module builds:"
 echo "     • mod_audio_fork: /tmp/mod_audio_fork_{gcc,g++,link}.log"
 echo "     • mod_deepgram: /tmp/mod_deepgram_{gcc,g++,link}.log"
 echo "     • mod_aws: /tmp/mod_aws_{gcc,g++,link}.log"
+echo "     • mod_google: /tmp/mod_google_{gcc,g++,link}.log"
 echo ""
 echo -e "${BOLD}${GREEN}Installation completed at: $(date)${NC}"
 echo ""

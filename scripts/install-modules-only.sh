@@ -2,10 +2,11 @@
 # ============================================================================
 # FreeSWITCH Speech AI - Modules Only Installation Script
 # ============================================================================
-# Installs only the 3 modules on existing FreeSWITCH installation:
+# Installs only the 4 modules on existing FreeSWITCH installation:
 #   - mod_audio_fork
 #   - mod_aws_transcribe
 #   - mod_deepgram_transcribe
+#   - mod_google_transcribe
 #
 # Usage:
 #   sudo ./install-modules-only.sh [OPTIONS]
@@ -267,6 +268,121 @@ else
     echo -e "${YELLOW}⚠${NC}  WARNING: AWS SDK cJSON header not found at expected location"
 fi
 
+# Build gRPC and googleapis if not present
+if ! ldconfig -p | grep -q libgrpc++; then
+    echo "Building gRPC v1.64.2 and googleapis..."
+    echo "This will take 20-40 minutes..."
+
+    # Remove old entry if exists
+    sed -i '/^grpc=/d' "$MANIFEST_FILE" 2>/dev/null || true
+    sed -i '/^googleapis=/d' "$MANIFEST_FILE" 2>/dev/null || true
+
+    cd /usr/local/src || exit 1
+
+    if [ -d "grpc" ]; then
+        rm -rf grpc
+    fi
+
+    echo "Cloning gRPC repository..."
+    if ! git clone --depth 1 -b v1.64.2 https://github.com/grpc/grpc; then
+        echo -e "${RED}✗ Failed to clone gRPC repository${NC}"
+        echo "Check your internet connection and try again"
+        exit 1
+    fi
+
+    cd grpc || exit 1
+
+    echo "Initializing gRPC submodules (this may take a few minutes)..."
+    if ! git submodule update --init --recursive; then
+        echo -e "${RED}✗ Failed to initialize gRPC submodules${NC}"
+        exit 1
+    fi
+
+    mkdir -p cmake/build && cd cmake/build || exit 1
+
+    echo "Configuring gRPC..."
+    if ! cmake ../.. \
+        -DBUILD_SHARED_LIBS=ON \
+        -DgRPC_INSTALL=ON \
+        -DgRPC_BUILD_TESTS=OFF \
+        -DgRPC_SSL_PROVIDER=package \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_STANDARD=17; then
+        echo -e "${RED}✗ Failed to configure gRPC${NC}"
+        exit 1
+    fi
+
+    echo "Compiling gRPC (20-40 minutes)..."
+    if ! make -j ${BUILD_CPUS}; then
+        echo -e "${RED}✗ Failed to compile gRPC${NC}"
+        echo "Try reducing build parallelism: --build-cpus 2"
+        exit 1
+    fi
+
+    echo "Installing gRPC..."
+    if ! make install; then
+        echo -e "${RED}✗ Failed to install gRPC${NC}"
+        exit 1
+    fi
+
+    ldconfig
+
+    # Verify gRPC installation
+    if ! /usr/local/bin/protoc --version > /dev/null 2>&1; then
+        echo -e "${RED}✗ protoc not found after installation${NC}"
+        exit 1
+    fi
+
+    echo "Cloning googleapis repository..."
+    cd /usr/local/src || exit 1
+    if [ -d "googleapis" ]; then
+        rm -rf googleapis
+    fi
+
+    if ! git clone --depth 1 https://github.com/googleapis/googleapis.git; then
+        echo -e "${RED}✗ Failed to clone googleapis repository${NC}"
+        exit 1
+    fi
+
+    cd googleapis || exit 1
+
+    echo "Generating protobuf files for Speech V2 API..."
+    mkdir -p gens
+    if ! /usr/local/bin/protoc \
+        --proto_path=. \
+        --cpp_out=gens \
+        --grpc_out=gens \
+        --plugin=protoc-gen-grpc=/usr/local/bin/grpc_cpp_plugin \
+        google/cloud/speech/v2/*.proto \
+        google/api/*.proto \
+        google/rpc/*.proto \
+        google/longrunning/*.proto \
+        google/type/*.proto 2>&1 | grep -v "warning:"; then
+        echo -e "${RED}✗ Failed to generate protobuf files${NC}"
+        exit 1
+    fi
+
+    # Verify Speech V2 API files
+    if [ ! -f "gens/google/cloud/speech/v2/cloud_speech.pb.cc" ]; then
+        echo -e "${RED}✗ Failed to generate Speech V2 API files${NC}"
+        exit 1
+    fi
+
+    GENERATED_FILES=$(find gens -type f -name "*.pb.cc" | wc -l)
+    echo "Generated ${GENERATED_FILES} protobuf source files"
+
+    # Mark as installed by us
+    echo "grpc=installed" >> "$MANIFEST_FILE"
+    echo "googleapis=installed" >> "$MANIFEST_FILE"
+    echo -e "${GREEN}✓ gRPC and googleapis built and installed${NC}"
+else
+    echo -e "${YELLOW}ℹ${NC} gRPC already installed"
+    # Mark as existing (not installed by us)
+    if ! grep -q "^grpc=" "$MANIFEST_FILE"; then
+        echo "grpc=existing" >> "$MANIFEST_FILE"
+    fi
+fi
+
 echo -e "${GREEN}✓ Dependencies installed${NC}"
 
 # ============================================================================
@@ -349,6 +465,56 @@ if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
 fi
 echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
 
+# mod_google_transcribe
+echo "Building mod_google_transcribe..."
+
+# Check if googleapis protobuf files exist
+if [ ! -d "/usr/local/src/googleapis/gens" ]; then
+    echo -e "${RED}✗ googleapis protobuf files not found${NC}"
+    echo "gRPC and googleapis must be installed first"
+    exit 1
+fi
+
+cd ${SCRIPT_DIR}/../modules/mod_google_transcribe || exit 1
+
+if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_google_transcribe.c; then
+    echo -e "${RED}✗ Failed to compile mod_google_transcribe.c${NC}"
+    exit 1
+fi
+
+if ! g++ -fPIC -c -std=c++17 \
+    -I${FS_PREFIX}/include/freeswitch \
+    -I/usr/local/include \
+    -I/usr/local/src/googleapis/gens \
+    google_glue.cpp; then
+    echo -e "${RED}✗ Failed to compile google_glue.cpp${NC}"
+    exit 1
+fi
+
+if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so \
+    mod_google_transcribe.o \
+    google_glue.o \
+    /usr/local/src/googleapis/gens/google/cloud/speech/v2/*.pb.cc \
+    /usr/local/src/googleapis/gens/google/api/*.pb.cc \
+    /usr/local/src/googleapis/gens/google/rpc/*.pb.cc \
+    /usr/local/src/googleapis/gens/google/longrunning/*.pb.cc \
+    /usr/local/src/googleapis/gens/google/type/*.pb.cc \
+    -L/usr/local/lib \
+    -lgrpc++ \
+    -lgrpc \
+    -lprotobuf \
+    -lpthread \
+    -lssl \
+    -lcrypto \
+    -lcurl \
+    -lz; then
+    echo -e "${RED}✗ Failed to link mod_google_transcribe${NC}"
+    exit 1
+fi
+
+ldconfig
+echo -e "${GREEN}✓ mod_google_transcribe${NC}"
+
 # Mark modules as installed
 sed -i '/^modules=/d' "$MANIFEST_FILE" 2>/dev/null || true
 echo "modules=installed" >> "$MANIFEST_FILE"
@@ -365,6 +531,7 @@ if [ -f "$MODULES_CONF" ]; then
         sed -i '/<\/modules>/i \    <load module="mod_audio_fork"/>' "$MODULES_CONF"
         sed -i '/<\/modules>/i \    <load module="mod_aws_transcribe"/>' "$MODULES_CONF"
         sed -i '/<\/modules>/i \    <load module="mod_deepgram_transcribe"/>' "$MODULES_CONF"
+        sed -i '/<\/modules>/i \    <load module="mod_google_transcribe"/>' "$MODULES_CONF"
         echo -e "${GREEN}✓ Modules added to configuration${NC}"
     else
         echo -e "${YELLOW}ℹ Modules already configured${NC}"
@@ -381,7 +548,7 @@ fi
 # ============================================================================
 echo -e "${GREEN}[4/4] Validating modules...${NC}"
 
-for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
+for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe; do
     if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
         echo -e "${GREEN}✓${NC} ${module}.so exists"
         if ldd "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" | grep -q "not found"; then
@@ -403,5 +570,5 @@ echo ""
 echo "Next steps:"
 echo "  1. Reload FreeSWITCH: ${FS_PREFIX}/bin/fs_cli -x 'reload mod_sofia'"
 echo "  2. Or restart: systemctl restart freeswitch"
-echo "  3. Verify: ${FS_PREFIX}/bin/fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram'"
+echo "  3. Verify: ${FS_PREFIX}/bin/fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram|google'"
 echo ""

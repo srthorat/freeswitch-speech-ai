@@ -2,10 +2,11 @@
 # ============================================================================
 # FreeSWITCH Speech AI - Cleanup Modules Script
 # ============================================================================
-# Removes only the 3 transcription modules:
+# Removes only the 4 transcription modules:
 #   - mod_audio_fork
 #   - mod_aws_transcribe
 #   - mod_deepgram_transcribe
+#   - mod_google_transcribe
 #
 # Usage:
 #   sudo ./cleanup-modules.sh [--freeswitch-prefix PATH]
@@ -48,7 +49,7 @@ echo "FreeSWITCH Prefix: $FS_PREFIX"
 echo ""
 
 # First confirmation
-read -p "This will remove mod_audio_fork, mod_aws_transcribe, and mod_deepgram_transcribe. Continue? (y/N) " -n 1 -r
+read -p "This will remove mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe, and mod_google_transcribe. Continue? (y/N) " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     echo "Aborted."
@@ -76,7 +77,7 @@ fi
 # Remove module files
 echo "Removing module files..."
 MODULES_REMOVED=0
-for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
+for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe; do
     if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
         rm -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so"
         echo -e "${GREEN}✓${NC} Removed ${module}.so"
@@ -96,7 +97,7 @@ if [ -f "$MODULES_CONF" ]; then
     echo "Removing from modules.conf.xml..."
 
     # Check if modules are configured
-    if grep -q "mod_audio_fork\|mod_aws_transcribe\|mod_deepgram_transcribe" "$MODULES_CONF"; then
+    if grep -q "mod_audio_fork\|mod_aws_transcribe\|mod_deepgram_transcribe\|mod_google_transcribe" "$MODULES_CONF"; then
         # Backup first
         cp "$MODULES_CONF" "${MODULES_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
 
@@ -104,6 +105,7 @@ if [ -f "$MODULES_CONF" ]; then
         sed -i '/mod_audio_fork/d' "$MODULES_CONF"
         sed -i '/mod_aws_transcribe/d' "$MODULES_CONF"
         sed -i '/mod_deepgram_transcribe/d' "$MODULES_CONF"
+        sed -i '/mod_google_transcribe/d' "$MODULES_CONF"
         sed -i '/Speech Transcription Modules/d' "$MODULES_CONF"
 
         echo -e "${GREEN}✓${NC} Removed from configuration"
@@ -120,7 +122,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 ARTIFACTS_FOUND=false
-for module_dir in ../modules/mod_audio_fork ../modules/mod_aws_transcribe ../modules/mod_deepgram_transcribe; do
+for module_dir in ../modules/mod_audio_fork ../modules/mod_aws_transcribe ../modules/mod_deepgram_transcribe ../modules/mod_google_transcribe; do
     if [ -d "$module_dir" ]; then
         if ls ${module_dir}/*.o 1> /dev/null 2>&1 || ls ${module_dir}/*.so 1> /dev/null 2>&1; then
             rm -f ${module_dir}/*.o ${module_dir}/*.so
@@ -143,6 +145,7 @@ echo ""
 echo "The following were NOT removed (run cleanup-all.sh to remove):"
 echo "  - libwebsockets"
 echo "  - AWS SDK C++"
+echo "  - gRPC and Protocol Buffers"
 echo "  - FreeSWITCH"
 echo ""
 echo "To reload FreeSWITCH without these modules:"
