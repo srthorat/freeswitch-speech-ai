@@ -108,18 +108,17 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	if (!event_final) event_final = "transcription-final";
 	if (!event_interim) event_interim = "transcription-interim";
 
-	// Build channel name: "call-<callId>"
-	char channel[256];
-	snprintf(channel, sizeof(channel), "%s%s", channel_prefix, callId);
+	// Build Pusher channel name: "call-<callId>"
+	char pusher_channel[256];
+	snprintf(pusher_channel, sizeof(pusher_channel), "%s%s", channel_prefix, callId);
 
 	// Get caller/callee metadata from channel variables for speaker mapping
-	switch_channel_t *chan = switch_core_session_get_channel(session);
-	const char* caller_name = switch_channel_get_variable(chan, "caller_id_name");
-	const char* caller_number = switch_channel_get_variable(chan, "caller_id_number");
-	const char* callee_name = switch_channel_get_variable(chan, "callee_id_name");
-	if (!callee_name) callee_name = switch_channel_get_variable(chan, "effective_callee_id_name");
-	const char* callee_number = switch_channel_get_variable(chan, "destination_number");
-	if (!callee_number) callee_number = switch_channel_get_variable(chan, "callee_id_number");
+	const char* caller_name = switch_channel_get_variable(channel, "caller_id_name");
+	const char* caller_number = switch_channel_get_variable(channel, "caller_id_number");
+	const char* callee_name = switch_channel_get_variable(channel, "callee_id_name");
+	if (!callee_name) callee_name = switch_channel_get_variable(channel, "effective_callee_id_name");
+	const char* callee_number = switch_channel_get_variable(channel, "destination_number");
+	if (!callee_number) callee_number = switch_channel_get_variable(channel, "callee_id_number");
 
 	// Parse transcription JSON to extract text and speaker/channel
 	cJSON* root = cJSON_Parse(json);
@@ -215,7 +214,7 @@ static void send_to_pusher(switch_core_session_t* session, const char* json, con
 	char body[8192];
 	snprintf(body, sizeof(body),
 		"{\"name\":\"%s\",\"channels\":[\"%s\"],\"data\":\"%s\"}",
-		event_name, channel, escaped);
+		event_name, pusher_channel, escaped);
 	free(escaped);
 
 	// Calculate body MD5
@@ -311,9 +310,9 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
 	if (!channel_prefix) channel_prefix = "call-";
 	if (!event_session_start) event_session_start = "session-start";
 
-	// Build channel name: "call-<callId>"
-	char channel[256];
-	snprintf(channel, sizeof(channel), "%s%s", channel_prefix, callId);
+	// Build Pusher channel name: "call-<callId>"
+	char pusher_channel[256];
+	snprintf(pusher_channel, sizeof(pusher_channel), "%s%s", channel_prefix, callId);
 
 	// Get caller/callee metadata from channel variables
 	switch_channel_t *chan = switch_core_session_get_channel(session);
@@ -364,7 +363,7 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
 	char body[2048];
 	snprintf(body, sizeof(body),
 		"{\"name\":\"%s\",\"channel\":\"%s\",\"data\":\"%s\"}",
-		event_session_start, channel, escaped);
+		event_session_start, pusher_channel, escaped);
 	free(escaped);
 
 	// Calculate MD5 of body
