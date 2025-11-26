@@ -265,17 +265,44 @@ check_success "Failed to update package lists"
 log_substep "Installing build tools and core dependencies..."
 apt-get install -y \
     build-essential \
-    git \
     cmake \
-    ca-certificates \
-    wget \
     autoconf \
     automake \
     libtool \
+    libtool-bin \
     pkg-config \
-    libcurl4-openssl-dev \
+    nasm \
+    git \
+    wget \
+    ca-certificates \
     libssl-dev \
+    libcurl4-openssl-dev \
+    libpcre3-dev \
+    libspeex1 \
+    libspeexdsp-dev \
+    libedit-dev \
+    libtiff-dev \
+    libldns-dev \
+    uuid-dev \
+    libopus-dev \
+    libsndfile1-dev \
+    libshout3-dev \
+    libmpg123-dev \
+    libmp3lame-dev \
+    libsqlite3-dev \
+    libpq-dev \
+    unixodbc-dev \
+    libsofia-sip-ua-dev \
+    libsrtp2-dev \
+    libavformat-dev \
+    libswscale-dev \
+    libxml2-dev \
+    liblua5.2-dev \
+    libgoogle-perftools-dev \
+    python3 \
+    python-is-python3 \
     zlib1g-dev \
+    libjpeg-dev \
     > /dev/null 2>&1
 check_success "Failed to install core dependencies"
 
@@ -416,20 +443,8 @@ if should_install_freeswitch; then
                 grep -q "^freeswitch=" "$MANIFEST_FILE" || echo "freeswitch=existing" >> "$MANIFEST_FILE"
             else
                 # Proceed with installation
-                log_substep "Installing FreeSWITCH dependencies..."
-                apt-get install -y \
-                    libpcre3-dev \
-                    libedit-dev \
-                    libsqlite3-dev \
-                    libcurl4-openssl-dev \
-                    libtiff-dev \
-                    nasm \
-                    yasm \
-                    > /dev/null 2>&1
-                check_success "Failed to install FreeSWITCH dependencies"
-
                 # Build spandsp
-                log_substep "Building spandsp 3.x..."
+                log_substep "Building spandsp 3.x (commit 0d2e6ac)..."
                 cd /usr/local/src || exit 1
                 if [ ! -d "spandsp" ]; then
                     log_command "spandsp clone" "${LOG_DIR}/spandsp_clone.log" \
@@ -437,6 +452,10 @@ if should_install_freeswitch; then
                     check_success "Failed to clone spandsp" "${LOG_DIR}/spandsp_clone.log"
                 fi
                 cd spandsp
+                log_command "spandsp checkout" "${LOG_DIR}/spandsp_checkout.log" \
+                    git checkout 0d2e6ac
+                check_success "Failed to checkout spandsp commit" "${LOG_DIR}/spandsp_checkout.log"
+
                 log_command "spandsp bootstrap" "${LOG_DIR}/spandsp_bootstrap.log" \
                     ./bootstrap.sh
                 check_success "Failed to bootstrap spandsp" "${LOG_DIR}/spandsp_bootstrap.log"
@@ -498,8 +517,29 @@ if should_install_freeswitch; then
                     ./bootstrap.sh -j
                 check_success "Failed to bootstrap FreeSWITCH" "${LOG_DIR}/freeswitch_bootstrap.log"
 
+                # Disable optional modules that require additional dependencies
+                log_substep "Disabling optional modules..."
+                sed -i 's|^endpoints/mod_verto$|#endpoints/mod_verto|' modules.conf
+                sed -i 's|^endpoints/mod_skinny$|#endpoints/mod_skinny|' modules.conf
+                sed -i 's|^applications/mod_signalwire$|#applications/mod_signalwire|' modules.conf
+                sed -i 's|^applications/mod_av$|#applications/mod_av|' modules.conf
+                sed -i 's|^languages/mod_python$|#languages/mod_python|' modules.conf
+                sed -i 's|^languages/mod_python3$|#languages/mod_python3|' modules.conf
+                sed -i 's|^languages/mod_java$|#languages/mod_java|' modules.conf
+                sed -i 's|^languages/mod_perl$|#languages/mod_perl|' modules.conf
+                sed -i 's|^languages/mod_php$|#languages/mod_php|' modules.conf
+                log_success "Optional modules disabled"
+
                 log_command "FreeSWITCH configure" "${LOG_DIR}/freeswitch_configure.log" \
-                    ./configure --prefix=$FS_PREFIX
+                    ./configure \
+                    --prefix=$FS_PREFIX \
+                    --enable-core-pgsql-support \
+                    --enable-core-odbc-support \
+                    --enable-tcmalloc \
+                    --without-python \
+                    --without-python3 \
+                    --without-java \
+                    --without-perl
                 check_success "Failed to configure FreeSWITCH" "${LOG_DIR}/freeswitch_configure.log"
 
                 log_command "FreeSWITCH make" "${LOG_DIR}/freeswitch_make.log" \
@@ -522,20 +562,8 @@ if should_install_freeswitch; then
         fi
     else
         # Fresh installation
-        log_substep "Installing FreeSWITCH dependencies..."
-        apt-get install -y \
-            libpcre3-dev \
-            libedit-dev \
-            libsqlite3-dev \
-            libcurl4-openssl-dev \
-            libtiff-dev \
-            nasm \
-            yasm \
-            > /dev/null 2>&1
-        check_success "Failed to install FreeSWITCH dependencies"
-
         # Build spandsp
-        log_substep "Building spandsp 3.x..."
+        log_substep "Building spandsp 3.x (commit 0d2e6ac)..."
         cd /usr/local/src || exit 1
         if [ ! -d "spandsp" ]; then
             log_command "spandsp clone" "${LOG_DIR}/spandsp_clone.log" \
@@ -543,6 +571,10 @@ if should_install_freeswitch; then
             check_success "Failed to clone spandsp" "${LOG_DIR}/spandsp_clone.log"
         fi
         cd spandsp
+        log_command "spandsp checkout" "${LOG_DIR}/spandsp_checkout.log" \
+            git checkout 0d2e6ac
+        check_success "Failed to checkout spandsp commit" "${LOG_DIR}/spandsp_checkout.log"
+
         log_command "spandsp bootstrap" "${LOG_DIR}/spandsp_bootstrap.log" \
             ./bootstrap.sh
         check_success "Failed to bootstrap spandsp" "${LOG_DIR}/spandsp_bootstrap.log"
@@ -604,8 +636,29 @@ if should_install_freeswitch; then
             ./bootstrap.sh -j
         check_success "Failed to bootstrap FreeSWITCH" "${LOG_DIR}/freeswitch_bootstrap.log"
 
+        # Disable optional modules that require additional dependencies
+        log_substep "Disabling optional modules..."
+        sed -i 's|^endpoints/mod_verto$|#endpoints/mod_verto|' modules.conf
+        sed -i 's|^endpoints/mod_skinny$|#endpoints/mod_skinny|' modules.conf
+        sed -i 's|^applications/mod_signalwire$|#applications/mod_signalwire|' modules.conf
+        sed -i 's|^applications/mod_av$|#applications/mod_av|' modules.conf
+        sed -i 's|^languages/mod_python$|#languages/mod_python|' modules.conf
+        sed -i 's|^languages/mod_python3$|#languages/mod_python3|' modules.conf
+        sed -i 's|^languages/mod_java$|#languages/mod_java|' modules.conf
+        sed -i 's|^languages/mod_perl$|#languages/mod_perl|' modules.conf
+        sed -i 's|^languages/mod_php$|#languages/mod_php|' modules.conf
+        log_success "Optional modules disabled"
+
         log_command "FreeSWITCH configure" "${LOG_DIR}/freeswitch_configure.log" \
-            ./configure --prefix=$FS_PREFIX
+            ./configure \
+            --prefix=$FS_PREFIX \
+            --enable-core-pgsql-support \
+            --enable-core-odbc-support \
+            --enable-tcmalloc \
+            --without-python \
+            --without-python3 \
+            --without-java \
+            --without-perl
         check_success "Failed to configure FreeSWITCH" "${LOG_DIR}/freeswitch_configure.log"
 
         log_command "FreeSWITCH make" "${LOG_DIR}/freeswitch_make.log" \
