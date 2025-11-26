@@ -422,6 +422,7 @@ if should_install_freeswitch; then
                     libedit-dev \
                     libsqlite3-dev \
                     libcurl4-openssl-dev \
+                    libtiff-dev \
                     nasm \
                     yasm \
                     > /dev/null 2>&1
@@ -527,6 +528,7 @@ if should_install_freeswitch; then
             libedit-dev \
             libsqlite3-dev \
             libcurl4-openssl-dev \
+            libtiff-dev \
             nasm \
             yasm \
             > /dev/null 2>&1
