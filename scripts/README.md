@@ -9,14 +9,37 @@ This directory contains all installation, maintenance, and utility scripts for *
 > **New:** Google Cloud Speech-to-Text V2 module is now supported in plain Linux with fast installation!
 > If you need Azure modules, use Docker deployment instead.
 
+## 🎯 Unified Installer Pattern
+
+**All installation and cleanup scripts now support modular operation via `--module` flag.**
+
+```bash
+# Install specific module
+sudo ./scripts/install-all.sh --module <module-name>
+
+# Clean specific module
+sudo ./scripts/cleanup-all.sh --module <module-name>
+```
+
+### Available Modules
+
+| Module Name | Description | Dependencies Installed |
+|-------------|-------------|----------------------|
+| `freeswitch` | FreeSWITCH only | spandsp, sofia-sip |
+| `mod_audio_fork` | Audio fork module | libwebsockets |
+| `mod_aws_transcribe` | AWS Transcribe module | AWS SDK C++ |
+| `mod_deepgram_transcribe` | Deepgram module | libwebsockets |
+| `mod_google_transcribe` | Google Speech V2 module | gRPC, protobuf (system packages) |
+| `all` | Everything (default) | All dependencies |
+
 ## 📁 Script Categories
 
 ### 🚀 Installation Scripts
 
 | Script | Description | Use Case |
 |--------|-------------|----------|
-| **install-all.sh** | Full installation (FreeSWITCH + modules + dependencies) | Fresh installation on plain Linux |
-| **install-modules-only.sh** | Install modules only | FreeSWITCH already installed |
+| **install-all.sh** | Unified modular installer | Install FreeSWITCH, modules, or both via --module flag |
+| **install-modules-only.sh** | Legacy module-only installer | Deprecated - use install-all.sh --module instead |
 | **preflight-check.sh** | System requirements validation | Run before installation to catch issues early |
 | **configure-services.sh** | Interactive API credentials setup | Configure transcription service API keys |
 
@@ -24,8 +47,8 @@ This directory contains all installation, maintenance, and utility scripts for *
 
 | Script | Description | Safety Features |
 |--------|-------------|-----------------|
-| **cleanup-all.sh** | Complete removal (FreeSWITCH + modules + dependencies) | Manifest-based, double confirmation |
-| **cleanup-modules.sh** | Remove modules only | Double confirmation, preserves FreeSWITCH |
+| **cleanup-all.sh** | Unified modular cleanup | Remove FreeSWITCH, modules, or both via --module flag |
+| **cleanup-modules.sh** | Legacy module cleanup | Deprecated - use cleanup-all.sh --module instead |
 
 ### 🔧 Maintenance Scripts
 
@@ -55,13 +78,13 @@ This directory contains all installation, maintenance, and utility scripts for *
 ./scripts/preflight-check.sh --strict
 ```
 
-### Fresh Installation
+### Fresh Installation (Everything)
 ```bash
 # 1. Check system requirements
 ./scripts/preflight-check.sh
 
-# 2. Install everything
-sudo ./scripts/install-all.sh
+# 2. Install everything (FreeSWITCH + all modules)
+sudo ./scripts/install-all.sh --module all
 
 # 3. Configure API credentials
 ./scripts/configure-services.sh
@@ -71,10 +94,31 @@ sudo ./scripts/install-all.sh
 ./scripts/health-check.sh
 ```
 
-### Modules-Only Installation
+### Modular Installation Examples
 ```bash
-# If FreeSWITCH already installed
-sudo ./scripts/install-modules-only.sh --freeswitch-prefix /usr/local/freeswitch
+# Install only FreeSWITCH
+sudo ./scripts/install-all.sh --module freeswitch
+
+# Install only Google module (requires FreeSWITCH to be installed)
+sudo ./scripts/install-all.sh --module mod_google_transcribe
+
+# Install only AWS module
+sudo ./scripts/install-all.sh --module mod_aws_transcribe --build-cpus 8
+
+# Install Deepgram module
+sudo ./scripts/install-all.sh --module mod_deepgram_transcribe
+```
+
+### Modular Cleanup Examples
+```bash
+# Remove only Google module and its dependencies (gRPC)
+sudo ./scripts/cleanup-all.sh --module mod_google_transcribe
+
+# Remove only FreeSWITCH (keeps modules)
+sudo ./scripts/cleanup-all.sh --module freeswitch
+
+# Remove everything
+sudo ./scripts/cleanup-all.sh --module all --yes
 ```
 
 ### Update Modules
@@ -172,33 +216,50 @@ sudo ./scripts/cleanup-all.sh --yes
 
 ### install-all.sh
 
-**Purpose:** Full installation of FreeSWITCH + core modules + dependencies (Plain Linux)
+**Purpose:** **UNIFIED** modular installer - install FreeSWITCH, specific modules, or everything
 
-**What it installs:**
-- FreeSWITCH 1.10.11
-- libwebsockets 4.3.3
-- AWS SDK C++ 1.11.345
-- 3 core transcription modules:
-  - mod_audio_fork
-  - mod_aws_transcribe
-  - mod_deepgram_transcribe
-- Example dialplan
-- Systemd service
+**Key Features:**
+- ✨ **Module selection via `--module` flag**
+- ⚡ **Fast gRPC installation** (system packages, not source compilation)
+- 📦 **Dependency-aware** (installs only what's needed for selected module)
+- 🎯 **Single unified script** replaces multiple installer scripts
 
-> **Note:** Google Cloud module support is available via `install-modules-only.sh` with fast gRPC installation.
-> Azure module requires Docker deployment.
+**Module Options:**
+- `--module all` - FreeSWITCH + all modules (default)
+- `--module freeswitch` - FreeSWITCH only
+- `--module mod_audio_fork` - Audio fork module only
+- `--module mod_aws_transcribe` - AWS module only
+- `--module mod_deepgram_transcribe` - Deepgram module only
+- `--module mod_google_transcribe` - Google V2 module only
 
-**Options:**
+**Other Options:**
 - `--freeswitch-prefix PATH` - Installation directory (default: /usr/local/freeswitch)
 - `--build-cpus N` - CPU cores for compilation (default: 4)
 - `--yes` - Skip confirmation prompts
+- `--no-validation` - Skip module validation after build
 
-**Installation time:** 25-30 minutes
+**Installation times:**
+- `--module freeswitch`: 15-20 minutes
+- `--module mod_google_transcribe`: 2-3 minutes (with system gRPC!)
+- `--module mod_aws_transcribe`: 20-25 minutes (AWS SDK compilation)
+- `--module all`: 30-35 minutes
 
-**Example:**
+**Examples:**
 ```bash
-sudo ./scripts/install-all.sh
-sudo ./scripts/install-all.sh --build-cpus 8 --freeswitch-prefix /opt/freeswitch
+# Install everything (default)
+sudo ./scripts/install-all.sh --module all
+
+# Install only FreeSWITCH
+sudo ./scripts/install-all.sh --module freeswitch
+
+# Install only Google module (fast!)
+sudo ./scripts/install-all.sh --module mod_google_transcribe --build-cpus 8
+
+# Install only AWS module
+sudo ./scripts/install-all.sh --module mod_aws_transcribe
+
+# Auto-accept prompts
+sudo ./scripts/install-all.sh --module all --yes
 ```
 
 ---
@@ -266,22 +327,42 @@ sudo ./scripts/update-modules.sh --no-restart
 
 ### cleanup-all.sh
 
-**Purpose:** Complete removal of FreeSWITCH, modules, and dependencies
+**Purpose:** **UNIFIED** modular cleanup - remove FreeSWITCH, specific modules, or everything
 
-**Safety features:**
-- Uses manifest to only remove what we installed
-- Double confirmation required
-- Preserves pre-existing dependencies
-- Extra warnings if manifest missing
+**Key Features:**
+- ✨ **Module selection via `--module` flag**
+- 🛡️ **Manifest-aware** (only removes what we installed)
+- 🔒 **Confirmation required** for safety
+- 🎯 **Single unified script** for all cleanup operations
 
-**Options:**
-- `--freeswitch-prefix PATH` - Installation directory to remove
-- `--yes` - Skip confirmations (still requires double confirmation)
+**Module Options:**
+- `--module all` - Remove everything (default)
+- `--module freeswitch` - Remove FreeSWITCH only
+- `--module mod_audio_fork` - Remove audio fork module only
+- `--module mod_aws_transcribe` - Remove AWS module and AWS SDK
+- `--module mod_deepgram_transcribe` - Remove Deepgram module only
+- `--module mod_google_transcribe` - Remove Google module and gRPC
 
-**Example:**
+**Other Options:**
+- `--keep-sources` - Keep source directories in /usr/local/src
+- `--yes` - Skip confirmation prompts
+
+**Examples:**
 ```bash
-sudo ./scripts/cleanup-all.sh
-sudo ./scripts/cleanup-all.sh --yes
+# Remove everything
+sudo ./scripts/cleanup-all.sh --module all
+
+# Remove only Google module and its dependencies (gRPC)
+sudo ./scripts/cleanup-all.sh --module mod_google_transcribe
+
+# Remove only FreeSWITCH (keeps modules)
+sudo ./scripts/cleanup-all.sh --module freeswitch
+
+# Remove AWS module but keep sources
+sudo ./scripts/cleanup-all.sh --module mod_aws_transcribe --keep-sources
+
+# Auto-confirm removal
+sudo ./scripts/cleanup-all.sh --module all --yes
 ```
 
 ---
