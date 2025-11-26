@@ -431,14 +431,27 @@ if should_install_freeswitch; then
                 log_substep "Building spandsp 3.x..."
                 cd /usr/local/src || exit 1
                 if [ ! -d "spandsp" ]; then
-                    git clone https://github.com/freeswitch/spandsp.git > /dev/null 2>&1
-                    check_success "Failed to clone spandsp"
+                    log_command "spandsp clone" "${LOG_DIR}/spandsp_clone.log" \
+                        git clone https://github.com/freeswitch/spandsp.git
+                    check_success "Failed to clone spandsp" "${LOG_DIR}/spandsp_clone.log"
                 fi
                 cd spandsp
-                ./bootstrap.sh > /dev/null 2>&1
-                ./configure > /dev/null 2>&1
-                make -j ${BUILD_CPUS} > /dev/null 2>&1
-                make install > /dev/null 2>&1
+                log_command "spandsp bootstrap" "${LOG_DIR}/spandsp_bootstrap.log" \
+                    ./bootstrap.sh
+                check_success "Failed to bootstrap spandsp" "${LOG_DIR}/spandsp_bootstrap.log"
+
+                log_command "spandsp configure" "${LOG_DIR}/spandsp_configure.log" \
+                    ./configure
+                check_success "Failed to configure spandsp" "${LOG_DIR}/spandsp_configure.log"
+
+                log_command "spandsp make" "${LOG_DIR}/spandsp_make.log" \
+                    make -j ${BUILD_CPUS}
+                check_success "Failed to compile spandsp" "${LOG_DIR}/spandsp_make.log"
+
+                log_command "spandsp install" "${LOG_DIR}/spandsp_install.log" \
+                    make install
+                check_success "Failed to install spandsp" "${LOG_DIR}/spandsp_install.log"
+
                 ldconfig
                 log_success "spandsp installed"
 
@@ -446,29 +459,55 @@ if should_install_freeswitch; then
                 log_substep "Building sofia-sip 1.13.17..."
                 cd /usr/local/src || exit 1
                 if [ ! -d "sofia-sip" ]; then
-                    git clone --depth 1 -b v1.13.17 https://github.com/freeswitch/sofia-sip.git > /dev/null 2>&1
-                    check_success "Failed to clone sofia-sip"
+                    log_command "sofia-sip clone" "${LOG_DIR}/sofia_clone.log" \
+                        git clone --depth 1 -b v1.13.17 https://github.com/freeswitch/sofia-sip.git
+                    check_success "Failed to clone sofia-sip" "${LOG_DIR}/sofia_clone.log"
                 fi
                 cd sofia-sip
-                ./bootstrap.sh > /dev/null 2>&1
-                ./configure > /dev/null 2>&1
-                make -j ${BUILD_CPUS} > /dev/null 2>&1
-                make install > /dev/null 2>&1
+                log_command "sofia-sip bootstrap" "${LOG_DIR}/sofia_bootstrap.log" \
+                    ./bootstrap.sh
+                check_success "Failed to bootstrap sofia-sip" "${LOG_DIR}/sofia_bootstrap.log"
+
+                log_command "sofia-sip configure" "${LOG_DIR}/sofia_configure.log" \
+                    ./configure
+                check_success "Failed to configure sofia-sip" "${LOG_DIR}/sofia_configure.log"
+
+                log_command "sofia-sip make" "${LOG_DIR}/sofia_make.log" \
+                    make -j ${BUILD_CPUS}
+                check_success "Failed to compile sofia-sip" "${LOG_DIR}/sofia_make.log"
+
+                log_command "sofia-sip install" "${LOG_DIR}/sofia_install.log" \
+                    make install
+                check_success "Failed to install sofia-sip" "${LOG_DIR}/sofia_install.log"
+
                 ldconfig
                 log_success "sofia-sip installed"
 
                 # Build FreeSWITCH
-                log_substep "Building FreeSWITCH 1.10.11..."
+                log_substep "Building FreeSWITCH 1.10.11 (this takes 15-20 minutes)..."
                 cd /usr/local/src || exit 1
                 if [ ! -d "freeswitch" ]; then
-                    git clone --depth 1 -b v1.10.11 https://github.com/signalwire/freeswitch.git > /dev/null 2>&1
-                    check_success "Failed to clone FreeSWITCH"
+                    log_command "FreeSWITCH clone" "${LOG_DIR}/freeswitch_clone.log" \
+                        git clone --depth 1 -b v1.10.11 https://github.com/signalwire/freeswitch.git
+                    check_success "Failed to clone FreeSWITCH" "${LOG_DIR}/freeswitch_clone.log"
                 fi
                 cd freeswitch
-                ./bootstrap.sh -j > /dev/null 2>&1
-                ./configure --prefix=$FS_PREFIX > /dev/null 2>&1
-                make -j ${BUILD_CPUS} > /dev/null 2>&1
-                make install > /dev/null 2>&1
+
+                log_command "FreeSWITCH bootstrap" "${LOG_DIR}/freeswitch_bootstrap.log" \
+                    ./bootstrap.sh -j
+                check_success "Failed to bootstrap FreeSWITCH" "${LOG_DIR}/freeswitch_bootstrap.log"
+
+                log_command "FreeSWITCH configure" "${LOG_DIR}/freeswitch_configure.log" \
+                    ./configure --prefix=$FS_PREFIX
+                check_success "Failed to configure FreeSWITCH" "${LOG_DIR}/freeswitch_configure.log"
+
+                log_command "FreeSWITCH make" "${LOG_DIR}/freeswitch_make.log" \
+                    make -j ${BUILD_CPUS}
+                check_success "Failed to compile FreeSWITCH" "${LOG_DIR}/freeswitch_make.log"
+
+                log_command "FreeSWITCH install" "${LOG_DIR}/freeswitch_install.log" \
+                    make install
+                check_success "Failed to install FreeSWITCH" "${LOG_DIR}/freeswitch_install.log"
 
                 echo "freeswitch=installed" >> "$MANIFEST_FILE"
                 log_success "FreeSWITCH installed"
@@ -493,8 +532,96 @@ if should_install_freeswitch; then
             > /dev/null 2>&1
         check_success "Failed to install FreeSWITCH dependencies"
 
-        # ... (rest of FreeSWITCH installation as above)
-        log_success "FreeSWITCH installation completed"
+        # Build spandsp
+        log_substep "Building spandsp 3.x..."
+        cd /usr/local/src || exit 1
+        if [ ! -d "spandsp" ]; then
+            log_command "spandsp clone" "${LOG_DIR}/spandsp_clone.log" \
+                git clone https://github.com/freeswitch/spandsp.git
+            check_success "Failed to clone spandsp" "${LOG_DIR}/spandsp_clone.log"
+        fi
+        cd spandsp
+        log_command "spandsp bootstrap" "${LOG_DIR}/spandsp_bootstrap.log" \
+            ./bootstrap.sh
+        check_success "Failed to bootstrap spandsp" "${LOG_DIR}/spandsp_bootstrap.log"
+
+        log_command "spandsp configure" "${LOG_DIR}/spandsp_configure.log" \
+            ./configure
+        check_success "Failed to configure spandsp" "${LOG_DIR}/spandsp_configure.log"
+
+        log_command "spandsp make" "${LOG_DIR}/spandsp_make.log" \
+            make -j ${BUILD_CPUS}
+        check_success "Failed to compile spandsp" "${LOG_DIR}/spandsp_make.log"
+
+        log_command "spandsp install" "${LOG_DIR}/spandsp_install.log" \
+            make install
+        check_success "Failed to install spandsp" "${LOG_DIR}/spandsp_install.log"
+
+        ldconfig
+        log_success "spandsp installed"
+
+        # Build sofia-sip
+        log_substep "Building sofia-sip 1.13.17..."
+        cd /usr/local/src || exit 1
+        if [ ! -d "sofia-sip" ]; then
+            log_command "sofia-sip clone" "${LOG_DIR}/sofia_clone.log" \
+                git clone --depth 1 -b v1.13.17 https://github.com/freeswitch/sofia-sip.git
+            check_success "Failed to clone sofia-sip" "${LOG_DIR}/sofia_clone.log"
+        fi
+        cd sofia-sip
+        log_command "sofia-sip bootstrap" "${LOG_DIR}/sofia_bootstrap.log" \
+            ./bootstrap.sh
+        check_success "Failed to bootstrap sofia-sip" "${LOG_DIR}/sofia_bootstrap.log"
+
+        log_command "sofia-sip configure" "${LOG_DIR}/sofia_configure.log" \
+            ./configure
+        check_success "Failed to configure sofia-sip" "${LOG_DIR}/sofia_configure.log"
+
+        log_command "sofia-sip make" "${LOG_DIR}/sofia_make.log" \
+            make -j ${BUILD_CPUS}
+        check_success "Failed to compile sofia-sip" "${LOG_DIR}/sofia_make.log"
+
+        log_command "sofia-sip install" "${LOG_DIR}/sofia_install.log" \
+            make install
+        check_success "Failed to install sofia-sip" "${LOG_DIR}/sofia_install.log"
+
+        ldconfig
+        log_success "sofia-sip installed"
+
+        # Build FreeSWITCH
+        log_substep "Building FreeSWITCH 1.10.11 (this takes 15-20 minutes)..."
+        cd /usr/local/src || exit 1
+        if [ ! -d "freeswitch" ]; then
+            log_command "FreeSWITCH clone" "${LOG_DIR}/freeswitch_clone.log" \
+                git clone --depth 1 -b v1.10.11 https://github.com/signalwire/freeswitch.git
+            check_success "Failed to clone FreeSWITCH" "${LOG_DIR}/freeswitch_clone.log"
+        fi
+        cd freeswitch
+
+        log_command "FreeSWITCH bootstrap" "${LOG_DIR}/freeswitch_bootstrap.log" \
+            ./bootstrap.sh -j
+        check_success "Failed to bootstrap FreeSWITCH" "${LOG_DIR}/freeswitch_bootstrap.log"
+
+        log_command "FreeSWITCH configure" "${LOG_DIR}/freeswitch_configure.log" \
+            ./configure --prefix=$FS_PREFIX
+        check_success "Failed to configure FreeSWITCH" "${LOG_DIR}/freeswitch_configure.log"
+
+        log_command "FreeSWITCH make" "${LOG_DIR}/freeswitch_make.log" \
+            make -j ${BUILD_CPUS}
+        check_success "Failed to compile FreeSWITCH" "${LOG_DIR}/freeswitch_make.log"
+
+        log_command "FreeSWITCH install" "${LOG_DIR}/freeswitch_install.log" \
+            make install
+        check_success "Failed to install FreeSWITCH" "${LOG_DIR}/freeswitch_install.log"
+
+        echo "freeswitch=installed" >> "$MANIFEST_FILE"
+        log_success "FreeSWITCH installed"
+
+        # Copy dialplan
+        log_substep "Copying example dialplan..."
+        cp -r ${SCRIPT_DIR}/../examples/freeswitch-config/dialplan/default.xml ${FS_PREFIX}/conf/dialplan/ 2>/dev/null || true
+        cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/*.xml ${FS_PREFIX}/conf/directory/default/ 2>/dev/null || true
+        log_success "Dialplan copied"
     fi
 else
     log_step "[Step 3/7] Skipping FreeSWITCH Installation"

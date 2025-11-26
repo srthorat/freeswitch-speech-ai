@@ -31,11 +31,16 @@ NC='\033[0m'
 FS_PREFIX="/usr/local/freeswitch"
 BUILD_CPUS=4
 AUTO_YES=false
+VERBOSE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Installation manifest file
 # Placed in repository root (parent of scripts/)
 MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
+
+# Detailed logging directory
+LOG_DIR="/tmp/freeswitch-install-logs"
+mkdir -p "$LOG_DIR"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -52,6 +57,10 @@ while [[ $# -gt 0 ]]; do
             AUTO_YES=true
             shift
             ;;
+        --verbose)
+            VERBOSE=true
+            shift
+            ;;
         --help)
             echo "FreeSWITCH Speech AI - Modules-Only Installation Script"
             echo ""
@@ -61,6 +70,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --freeswitch-prefix PATH  FreeSWITCH installation directory (default: /usr/local/freeswitch)"
             echo "  --build-cpus N            Number of CPU cores for compilation (default: 4)"
             echo "  --yes                     Skip confirmation prompts (auto-accept)"
+            echo "  --verbose                 Show detailed compilation output in real-time"
             echo "  --help                    Show this help message"
             echo ""
             echo "Example:"
@@ -84,6 +94,45 @@ if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Error: This script must be run as root${NC}"
     exit 1
 fi
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+# Conditional logging helper: shows real-time output if --verbose, otherwise logs to file
+log_command() {
+    local description="$1"
+    local log_file="$2"
+    shift 2
+
+    if [ "$VERBOSE" = true ]; then
+        echo -e "${CYAN}    Running: $@${NC}"
+        "$@" 2>&1 | tee "$log_file"
+        return ${PIPESTATUS[0]}
+    else
+        "$@" > "$log_file" 2>&1
+        return $?
+    fi
+}
+
+# Enhanced error handler with automatic log display
+check_success() {
+    local exit_code=$?
+    local error_msg="$1"
+    local log_file="$2"
+
+    if [ $exit_code -ne 0 ]; then
+        echo -e "${RED}✗ $error_msg${NC}"
+        if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+            echo -e "${YELLOW}  ↪ Error log: $log_file${NC}"
+            echo ""
+            echo -e "\033[1mLast 20 lines of error log:\033[0m"
+            tail -20 "$log_file" | sed 's/^/    /'
+            echo ""
+        fi
+        exit $exit_code
+    fi
+}
 
 echo -e "${GREEN}=============================================${NC}"
 echo -e "${GREEN}Installing Modules Only${NC}"
@@ -154,22 +203,19 @@ if ! ldconfig -p | grep -q libwebsockets; then
     mkdir -p build && cd build || exit 1
 
     echo "Configuring libwebsockets..."
-    if ! cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo; then
-        echo -e "${RED}✗ Failed to configure libwebsockets${NC}"
-        exit 1
-    fi
+    log_command "libwebsockets cmake" "${LOG_DIR}/libwebsockets_cmake.log" \
+        cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    check_success "Failed to configure libwebsockets" "${LOG_DIR}/libwebsockets_cmake.log"
 
     echo "Compiling libwebsockets (this may take a few minutes)..."
-    if ! make -j ${BUILD_CPUS}; then
-        echo -e "${RED}✗ Failed to compile libwebsockets${NC}"
-        exit 1
-    fi
+    log_command "libwebsockets make" "${LOG_DIR}/libwebsockets_make.log" \
+        make -j ${BUILD_CPUS}
+    check_success "Failed to compile libwebsockets" "${LOG_DIR}/libwebsockets_make.log"
 
     echo "Installing libwebsockets..."
-    if ! make install; then
-        echo -e "${RED}✗ Failed to install libwebsockets${NC}"
-        exit 1
-    fi
+    log_command "libwebsockets install" "${LOG_DIR}/libwebsockets_install.log" \
+        make install
+    check_success "Failed to install libwebsockets" "${LOG_DIR}/libwebsockets_install.log"
 
     ldconfig
 
@@ -215,28 +261,24 @@ if ! ldconfig -p | grep -q aws-cpp-sdk-transcribestreaming; then
     mkdir -p build && cd build || exit 1
 
     echo "Configuring AWS SDK..."
-    if ! cmake .. \
+    log_command "AWS SDK cmake" "${LOG_DIR}/aws_sdk_cmake.log" \
+        cmake .. \
         -DBUILD_ONLY="transcribestreaming" \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DBUILD_SHARED_LIBS=ON \
         -DENABLE_TESTING=OFF \
-        -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull"; then
-        echo -e "${RED}✗ Failed to configure AWS SDK${NC}"
-        exit 1
-    fi
+        -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull"
+    check_success "Failed to configure AWS SDK" "${LOG_DIR}/aws_sdk_cmake.log"
 
     echo "Compiling AWS SDK (this will take 20-30 minutes)..."
-    if ! make -j ${BUILD_CPUS}; then
-        echo -e "${RED}✗ Failed to compile AWS SDK${NC}"
-        echo "Try reducing build parallelism: --build-cpus 2"
-        exit 1
-    fi
+    log_command "AWS SDK make" "${LOG_DIR}/aws_sdk_make.log" \
+        make -j ${BUILD_CPUS}
+    check_success "Failed to compile AWS SDK" "${LOG_DIR}/aws_sdk_make.log"
 
     echo "Installing AWS SDK..."
-    if ! make install; then
-        echo -e "${RED}✗ Failed to install AWS SDK${NC}"
-        exit 1
-    fi
+    log_command "AWS SDK install" "${LOG_DIR}/aws_sdk_install.log" \
+        make install
+    check_success "Failed to install AWS SDK" "${LOG_DIR}/aws_sdk_install.log"
 
     ldconfig
 
@@ -328,68 +370,71 @@ fi
 echo "Building mod_audio_fork..."
 cd ${SCRIPT_DIR}/../modules/mod_audio_fork || exit 1
 
-if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c; then
-    echo -e "${RED}✗ Failed to compile mod_audio_fork.c${NC}"
-    exit 1
-fi
+echo "  Compiling mod_audio_fork.c..."
+log_command "mod_audio_fork.c" "${LOG_DIR}/mod_audio_fork_c.log" \
+    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c
+check_success "Failed to compile mod_audio_fork.c" "${LOG_DIR}/mod_audio_fork_c.log"
 
-if ! g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp; then
-    echo -e "${RED}✗ Failed to compile mod_audio_fork C++ sources${NC}"
-    exit 1
-fi
+echo "  Compiling mod_audio_fork C++ sources..."
+log_command "mod_audio_fork C++" "${LOG_DIR}/mod_audio_fork_cpp.log" \
+    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
+check_success "Failed to compile mod_audio_fork C++ sources" "${LOG_DIR}/mod_audio_fork_cpp.log"
 
 mkdir -p ${FS_PREFIX}/lib/freeswitch/mod
 
-if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto; then
-    echo -e "${RED}✗ Failed to link mod_audio_fork${NC}"
-    exit 1
-fi
+echo "  Linking mod_audio_fork..."
+log_command "mod_audio_fork link" "${LOG_DIR}/mod_audio_fork_link.log" \
+    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto
+check_success "Failed to link mod_audio_fork" "${LOG_DIR}/mod_audio_fork_link.log"
+
 echo -e "${GREEN}✓ mod_audio_fork${NC}"
 
 # mod_aws_transcribe
 echo "Building mod_aws_transcribe..."
 cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe || exit 1
 
-if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c; then
-    echo -e "${RED}✗ Failed to compile mod_aws_transcribe.c${NC}"
-    exit 1
-fi
+echo "  Compiling mod_aws_transcribe.c..."
+log_command "mod_aws_transcribe.c" "${LOG_DIR}/mod_aws_transcribe_c.log" \
+    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c
+check_success "Failed to compile mod_aws_transcribe.c" "${LOG_DIR}/mod_aws_transcribe_c.log"
 
-if ! g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp; then
-    echo -e "${RED}✗ Failed to compile mod_aws_transcribe C++ sources${NC}"
-    exit 1
-fi
+echo "  Compiling mod_aws_transcribe C++ sources..."
+log_command "mod_aws_transcribe C++" "${LOG_DIR}/mod_aws_transcribe_cpp.log" \
+    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp
+check_success "Failed to compile mod_aws_transcribe C++ sources" "${LOG_DIR}/mod_aws_transcribe_cpp.log"
 
-if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
+echo "  Linking mod_aws_transcribe..."
+log_command "mod_aws_transcribe link" "${LOG_DIR}/mod_aws_transcribe_link.log" \
+    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
     mod_aws_transcribe.o aws_transcribe_glue.o \
     -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
     -laws-c-event-stream -laws-checksums -laws-c-common \
-    -lpthread -lcurl -lssl -lcrypto -lz; then
-    echo -e "${RED}✗ Failed to link mod_aws_transcribe${NC}"
-    exit 1
-fi
+    -lpthread -lcurl -lssl -lcrypto -lz
+check_success "Failed to link mod_aws_transcribe" "${LOG_DIR}/mod_aws_transcribe_link.log"
+
 echo -e "${GREEN}✓ mod_aws_transcribe${NC}"
 
 # mod_deepgram_transcribe
 echo "Building mod_deepgram_transcribe..."
 cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe || exit 1
 
-if ! gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c; then
-    echo -e "${RED}✗ Failed to compile mod_deepgram_transcribe.c${NC}"
-    exit 1
-fi
+echo "  Compiling mod_deepgram_transcribe.c..."
+log_command "mod_deepgram_transcribe.c" "${LOG_DIR}/mod_deepgram_transcribe_c.log" \
+    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c
+check_success "Failed to compile mod_deepgram_transcribe.c" "${LOG_DIR}/mod_deepgram_transcribe_c.log"
 
-if ! g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp; then
-    echo -e "${RED}✗ Failed to compile mod_deepgram_transcribe C++ sources${NC}"
-    exit 1
-fi
+echo "  Compiling mod_deepgram_transcribe C++ sources..."
+log_command "mod_deepgram_transcribe C++" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log" \
+    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp
+check_success "Failed to compile mod_deepgram_transcribe C++ sources" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log"
 
-if ! g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
+echo "  Linking mod_deepgram_transcribe..."
+log_command "mod_deepgram_transcribe link" "${LOG_DIR}/mod_deepgram_transcribe_link.log" \
+    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
     mod_deepgram_transcribe.o dg_transcribe_glue.o audio_pipe.o parser.o \
-    -lwebsockets -lpthread -lssl -lcrypto; then
-    echo -e "${RED}✗ Failed to link mod_deepgram_transcribe${NC}"
-    exit 1
-fi
+    -lwebsockets -lpthread -lssl -lcrypto
+check_success "Failed to link mod_deepgram_transcribe" "${LOG_DIR}/mod_deepgram_transcribe_link.log"
+
 echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
 
 # mod_google_transcribe
@@ -412,24 +457,28 @@ fi
 
 # Generate protobuf files if they don't exist or are older than .proto file
 if [ ! -f "speech.pb.h" ] || [ "speech.proto" -nt "speech.pb.h" ]; then
-    echo "Generating protobuf files..."
-    if ! protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=`which grpc_cpp_plugin` speech.proto; then
-        echo -e "${RED}✗ Failed to generate protobuf files${NC}"
-        exit 1
-    fi
+    echo "  Generating protobuf files..."
+    log_command "protoc" "${LOG_DIR}/mod_google_transcribe_protoc.log" \
+        protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=`which grpc_cpp_plugin` speech.proto
+    check_success "Failed to generate protobuf files" "${LOG_DIR}/mod_google_transcribe_protoc.log"
 fi
 
 # Build using Makefile
-if ! make clean && make; then
-    echo -e "${RED}✗ Failed to build mod_google_transcribe${NC}"
-    exit 1
-fi
+echo "  Cleaning previous build..."
+log_command "mod_google_transcribe clean" "${LOG_DIR}/mod_google_transcribe_clean.log" \
+    make clean
+# Don't check success for clean, it's okay if it fails
+
+echo "  Building mod_google_transcribe..."
+log_command "mod_google_transcribe make" "${LOG_DIR}/mod_google_transcribe_make.log" \
+    make
+check_success "Failed to build mod_google_transcribe" "${LOG_DIR}/mod_google_transcribe_make.log"
 
 # Install the module
-if ! make install; then
-    echo -e "${RED}✗ Failed to install mod_google_transcribe${NC}"
-    exit 1
-fi
+echo "  Installing mod_google_transcribe..."
+log_command "mod_google_transcribe install" "${LOG_DIR}/mod_google_transcribe_install.log" \
+    make install
+check_success "Failed to install mod_google_transcribe" "${LOG_DIR}/mod_google_transcribe_install.log"
 
 echo -e "${GREEN}✓ mod_google_transcribe${NC}"
 

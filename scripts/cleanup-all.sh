@@ -268,7 +268,7 @@ if should_remove_module "mod_aws_transcribe"; then
     if grep -q "aws-sdk-cpp=installed" "$MANIFEST_FILE" 2>/dev/null || [ "$MODULE" = "all" ]; then
         log_remove "AWS SDK C++ libraries"
         rm -f /usr/local/lib/libaws-*
-        rm -f /usr/local/lib/cmake/aws-*
+        rm -rf /usr/local/lib/cmake/aws-*
         rm -rf /usr/local/include/aws
         ldconfig
         log_success "AWS SDK C++ removed"
