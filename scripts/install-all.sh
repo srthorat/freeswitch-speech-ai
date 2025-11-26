@@ -44,11 +44,16 @@ FS_PREFIX="/usr/local/freeswitch"
 BUILD_CPUS=4
 AUTO_YES=false
 NO_VALIDATION=false
+VERBOSE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
+LOG_DIR="/tmp/freeswitch-install-logs"
 
 # Valid module names
 VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe")
+
+# Create log directory
+mkdir -p "$LOG_DIR"
 
 # ============================================================================
 # Helper Functions
@@ -56,8 +61,21 @@ VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_dee
 
 check_success() {
     local exit_code=$?
+    local error_msg="$1"
+    local log_file="$2"
+
     if [ $exit_code -ne 0 ]; then
-        echo -e "${RED}✗ $1${NC}"
+        echo -e "${RED}✗ $error_msg${NC}"
+
+        # Show log file location if available
+        if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+            echo -e "${YELLOW}  ↪ Error log: $log_file${NC}"
+            echo ""
+            echo -e "${BOLD}Last 20 lines of error log:${NC}"
+            tail -20 "$log_file" | sed 's/^/    /'
+            echo ""
+        fi
+
         exit $exit_code
     fi
 }
@@ -75,6 +93,21 @@ log_substep() {
 
 log_success() {
     echo -e "${GREEN}  ✓ $1${NC}"
+}
+
+log_command() {
+    local description="$1"
+    local log_file="$2"
+    shift 2
+
+    if [ "$VERBOSE" = true ]; then
+        echo -e "${CYAN}    Running: $@${NC}"
+        "$@" 2>&1 | tee "$log_file"
+        return ${PIPESTATUS[0]}
+    else
+        "$@" > "$log_file" 2>&1
+        return $?
+    fi
 }
 
 # Check if module should be installed
@@ -114,6 +147,10 @@ while [[ $# -gt 0 ]]; do
             NO_VALIDATION=true
             shift
             ;;
+        --verbose)
+            VERBOSE=true
+            shift
+            ;;
         --help)
             echo "FreeSWITCH Speech AI - Unified Installation Script"
             echo ""
@@ -132,6 +169,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --build-cpus N            Number of CPU cores for compilation (default: 4)"
             echo "  --yes                     Skip confirmation prompts (auto-accept)"
             echo "  --no-validation           Skip module validation after build"
+            echo "  --verbose                 Show detailed compilation output"
             echo "  --help                    Show this help message"
             echo ""
             echo "Examples:"
@@ -480,16 +518,22 @@ if should_install_module "mod_audio_fork"; then
 
     cd ${SCRIPT_DIR}/../modules/mod_audio_fork || exit 1
 
-    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c > /dev/null 2>&1
-    check_success "Failed to compile mod_audio_fork.c"
+    log_substep "Compiling mod_audio_fork.c..."
+    log_command "mod_audio_fork.c" "${LOG_DIR}/mod_audio_fork_c.log" \
+        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c
+    check_success "Failed to compile mod_audio_fork.c" "${LOG_DIR}/mod_audio_fork_c.log"
 
-    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp > /dev/null 2>&1
-    check_success "Failed to compile mod_audio_fork C++ sources"
+    log_substep "Compiling C++ sources..."
+    log_command "mod_audio_fork C++" "${LOG_DIR}/mod_audio_fork_cpp.log" \
+        g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
+    check_success "Failed to compile mod_audio_fork C++ sources" "${LOG_DIR}/mod_audio_fork_cpp.log"
 
     mkdir -p ${FS_PREFIX}/lib/freeswitch/mod
 
-    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto > /dev/null 2>&1
-    check_success "Failed to link mod_audio_fork"
+    log_substep "Linking mod_audio_fork.so..."
+    log_command "mod_audio_fork link" "${LOG_DIR}/mod_audio_fork_link.log" \
+        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto
+    check_success "Failed to link mod_audio_fork" "${LOG_DIR}/mod_audio_fork_link.log"
 
     log_success "mod_audio_fork built and installed"
 else
@@ -505,18 +549,24 @@ if should_install_module "mod_aws_transcribe"; then
 
     cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe || exit 1
 
-    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c > /dev/null 2>&1
-    check_success "Failed to compile mod_aws_transcribe.c"
+    log_substep "Compiling mod_aws_transcribe.c..."
+    log_command "mod_aws_transcribe.c" "${LOG_DIR}/mod_aws_transcribe_c.log" \
+        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c
+    check_success "Failed to compile mod_aws_transcribe.c" "${LOG_DIR}/mod_aws_transcribe_c.log"
 
-    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp > /dev/null 2>&1
-    check_success "Failed to compile mod_aws_transcribe C++ sources"
+    log_substep "Compiling C++ sources..."
+    log_command "mod_aws_transcribe C++" "${LOG_DIR}/mod_aws_transcribe_cpp.log" \
+        g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp
+    check_success "Failed to compile mod_aws_transcribe C++ sources" "${LOG_DIR}/mod_aws_transcribe_cpp.log"
 
-    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
-        mod_aws_transcribe.o aws_transcribe_glue.o \
-        -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
-        -laws-c-event-stream -laws-checksums -laws-c-common \
-        -lpthread -lcurl -lssl -lcrypto -lz > /dev/null 2>&1
-    check_success "Failed to link mod_aws_transcribe"
+    log_substep "Linking mod_aws_transcribe.so..."
+    log_command "mod_aws_transcribe link" "${LOG_DIR}/mod_aws_transcribe_link.log" \
+        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
+            mod_aws_transcribe.o aws_transcribe_glue.o \
+            -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
+            -laws-c-event-stream -laws-checksums -laws-c-common \
+            -lpthread -lcurl -lssl -lcrypto -lz
+    check_success "Failed to link mod_aws_transcribe" "${LOG_DIR}/mod_aws_transcribe_link.log"
 
     log_success "mod_aws_transcribe built and installed"
 else
@@ -532,16 +582,22 @@ if should_install_module "mod_deepgram_transcribe"; then
 
     cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe || exit 1
 
-    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c > /dev/null 2>&1
-    check_success "Failed to compile mod_deepgram_transcribe.c"
+    log_substep "Compiling mod_deepgram_transcribe.c..."
+    log_command "mod_deepgram_transcribe.c" "${LOG_DIR}/mod_deepgram_transcribe_c.log" \
+        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c
+    check_success "Failed to compile mod_deepgram_transcribe.c" "${LOG_DIR}/mod_deepgram_transcribe_c.log"
 
-    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp > /dev/null 2>&1
-    check_success "Failed to compile mod_deepgram_transcribe C++ sources"
+    log_substep "Compiling C++ sources..."
+    log_command "mod_deepgram_transcribe C++" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log" \
+        g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp
+    check_success "Failed to compile mod_deepgram_transcribe C++ sources" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log"
 
-    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
-        mod_deepgram_transcribe.o dg_transcribe_glue.o audio_pipe.o parser.o \
-        -lwebsockets -lpthread -lssl -lcrypto > /dev/null 2>&1
-    check_success "Failed to link mod_deepgram_transcribe"
+    log_substep "Linking mod_deepgram_transcribe.so..."
+    log_command "mod_deepgram_transcribe link" "${LOG_DIR}/mod_deepgram_transcribe_link.log" \
+        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
+            mod_deepgram_transcribe.o dg_transcribe_glue.o audio_pipe.o parser.o \
+            -lwebsockets -lpthread -lssl -lcrypto
+    check_success "Failed to link mod_deepgram_transcribe" "${LOG_DIR}/mod_deepgram_transcribe_link.log"
 
     log_success "mod_deepgram_transcribe built and installed"
 else
@@ -560,17 +616,24 @@ if should_install_module "mod_google_transcribe"; then
     # Generate protobuf files if needed
     if [ ! -f "speech.pb.h" ] || [ "speech.proto" -nt "speech.pb.h" ]; then
         log_substep "Generating protobuf files..."
-        protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=$(which grpc_cpp_plugin) speech.proto > /dev/null 2>&1
-        check_success "Failed to generate protobuf files"
+        log_command "protobuf generation" "${LOG_DIR}/mod_google_transcribe_proto.log" \
+            protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=$(which grpc_cpp_plugin) speech.proto
+        check_success "Failed to generate protobuf files" "${LOG_DIR}/mod_google_transcribe_proto.log"
     fi
 
     # Build using Makefile
+    log_substep "Cleaning previous build..."
     make clean > /dev/null 2>&1
-    make -j ${BUILD_CPUS} > /dev/null 2>&1
-    check_success "Failed to build mod_google_transcribe"
 
-    make install > /dev/null 2>&1
-    check_success "Failed to install mod_google_transcribe"
+    log_substep "Building mod_google_transcribe..."
+    log_command "mod_google_transcribe build" "${LOG_DIR}/mod_google_transcribe_make.log" \
+        make -j ${BUILD_CPUS}
+    check_success "Failed to build mod_google_transcribe" "${LOG_DIR}/mod_google_transcribe_make.log"
+
+    log_substep "Installing mod_google_transcribe..."
+    log_command "mod_google_transcribe install" "${LOG_DIR}/mod_google_transcribe_install.log" \
+        make install
+    check_success "Failed to install mod_google_transcribe" "${LOG_DIR}/mod_google_transcribe_install.log"
 
     log_success "mod_google_transcribe built and installed"
 else
@@ -662,6 +725,7 @@ echo -e "${GREEN}=============================================${NC}"
 echo ""
 echo "Module: $MODULE"
 echo "Install Prefix: $FS_PREFIX"
+echo "Build Logs: $LOG_DIR"
 echo ""
 echo "Next steps:"
 if should_install_freeswitch; then
@@ -672,4 +736,7 @@ if [ "$MODULE" != "freeswitch" ]; then
     echo "  - Reload FreeSWITCH: ${FS_PREFIX}/bin/fs_cli -x 'reload mod_sofia'"
     echo "  - Verify modules: ${FS_PREFIX}/bin/fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram|google'"
 fi
+echo ""
+echo "Logs are available at: $LOG_DIR"
+echo "To view a specific log: cat $LOG_DIR/<module>_<step>.log"
 echo ""
