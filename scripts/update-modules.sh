@@ -27,7 +27,12 @@ FS_PREFIX="/usr/local/freeswitch"
 BUILD_CPUS=4
 NO_RESTART=false
 AUTO_YES=false
+VERBOSE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Detailed logging directory
+LOG_DIR="/tmp/freeswitch-install-logs"
+mkdir -p "$LOG_DIR"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -48,9 +53,13 @@ while [[ $# -gt 0 ]]; do
             AUTO_YES=true
             shift
             ;;
+        --verbose)
+            VERBOSE=true
+            shift
+            ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
-            echo "Usage: $0 [--freeswitch-prefix PATH] [--build-cpus N] [--no-restart] [--yes]"
+            echo "Usage: $0 [--freeswitch-prefix PATH] [--build-cpus N] [--no-restart] [--yes] [--verbose]"
             exit 1
             ;;
     esac
@@ -61,6 +70,45 @@ if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Error: This script must be run as root${NC}"
     exit 1
 fi
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+# Conditional logging helper: shows real-time output if --verbose, otherwise logs to file
+log_command() {
+    local description="$1"
+    local log_file="$2"
+    shift 2
+
+    if [ "$VERBOSE" = true ]; then
+        echo -e "\033[0;36m    Running: $@\033[0m"
+        "$@" 2>&1 | tee "$log_file"
+        return ${PIPESTATUS[0]}
+    else
+        "$@" > "$log_file" 2>&1
+        return $?
+    fi
+}
+
+# Enhanced error handler with automatic log display
+check_success() {
+    local exit_code=$?
+    local error_msg="$1"
+    local log_file="$2"
+
+    if [ $exit_code -ne 0 ]; then
+        echo -e "${RED}✗ $error_msg${NC}"
+        if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+            echo -e "${YELLOW}  ↪ Error log: $log_file${NC}"
+            echo ""
+            echo -e "\033[1mLast 20 lines of error log:\033[0m"
+            tail -20 "$log_file" | sed 's/^/    /'
+            echo ""
+        fi
+        exit $exit_code
+    fi
+}
 
 echo -e "${GREEN}=============================================${NC}"
 echo -e "${GREEN}FreeSWITCH Speech AI - Update Modules${NC}"
@@ -141,9 +189,21 @@ cd ${SCRIPT_DIR}/../modules/mod_audio_fork
 # Clean previous build
 rm -f *.o *.so
 
-gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c
-g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
-g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto
+echo "  Compiling mod_audio_fork.c..."
+log_command "mod_audio_fork.c" "${LOG_DIR}/update_mod_audio_fork_c.log" \
+    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c
+check_success "Failed to compile mod_audio_fork.c" "${LOG_DIR}/update_mod_audio_fork_c.log"
+
+echo "  Compiling mod_audio_fork C++ sources..."
+log_command "mod_audio_fork C++" "${LOG_DIR}/update_mod_audio_fork_cpp.log" \
+    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
+check_success "Failed to compile mod_audio_fork C++ sources" "${LOG_DIR}/update_mod_audio_fork_cpp.log"
+
+echo "  Linking mod_audio_fork..."
+log_command "mod_audio_fork link" "${LOG_DIR}/update_mod_audio_fork_link.log" \
+    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto
+check_success "Failed to link mod_audio_fork" "${LOG_DIR}/update_mod_audio_fork_link.log"
+
 echo -e "${GREEN}✓ mod_audio_fork${NC}"
 
 # Build mod_aws_transcribe
@@ -153,13 +213,25 @@ cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe
 # Clean previous build
 rm -f *.o *.so
 
-gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c
-g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp
-g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
+echo "  Compiling mod_aws_transcribe.c..."
+log_command "mod_aws_transcribe.c" "${LOG_DIR}/update_mod_aws_transcribe_c.log" \
+    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c
+check_success "Failed to compile mod_aws_transcribe.c" "${LOG_DIR}/update_mod_aws_transcribe_c.log"
+
+echo "  Compiling mod_aws_transcribe C++ sources..."
+log_command "mod_aws_transcribe C++" "${LOG_DIR}/update_mod_aws_transcribe_cpp.log" \
+    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp
+check_success "Failed to compile mod_aws_transcribe C++ sources" "${LOG_DIR}/update_mod_aws_transcribe_cpp.log"
+
+echo "  Linking mod_aws_transcribe..."
+log_command "mod_aws_transcribe link" "${LOG_DIR}/update_mod_aws_transcribe_link.log" \
+    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
     mod_aws_transcribe.o aws_transcribe_glue.o \
     -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
     -laws-c-event-stream -laws-checksums -laws-c-common \
     -lpthread -lcurl -lssl -lcrypto -lz
+check_success "Failed to link mod_aws_transcribe" "${LOG_DIR}/update_mod_aws_transcribe_link.log"
+
 echo -e "${GREEN}✓ mod_aws_transcribe${NC}"
 
 # Build mod_deepgram_transcribe
@@ -169,58 +241,67 @@ cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe
 # Clean previous build
 rm -f *.o *.so
 
-gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c
-g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp
-g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
+echo "  Compiling mod_deepgram_transcribe.c..."
+log_command "mod_deepgram_transcribe.c" "${LOG_DIR}/update_mod_deepgram_transcribe_c.log" \
+    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c
+check_success "Failed to compile mod_deepgram_transcribe.c" "${LOG_DIR}/update_mod_deepgram_transcribe_c.log"
+
+echo "  Compiling mod_deepgram_transcribe C++ sources..."
+log_command "mod_deepgram_transcribe C++" "${LOG_DIR}/update_mod_deepgram_transcribe_cpp.log" \
+    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp
+check_success "Failed to compile mod_deepgram_transcribe C++ sources" "${LOG_DIR}/update_mod_deepgram_transcribe_cpp.log"
+
+echo "  Linking mod_deepgram_transcribe..."
+log_command "mod_deepgram_transcribe link" "${LOG_DIR}/update_mod_deepgram_transcribe_link.log" \
+    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
     mod_deepgram_transcribe.o dg_transcribe_glue.o audio_pipe.o parser.o \
     -lwebsockets -lpthread -lssl -lcrypto
+check_success "Failed to link mod_deepgram_transcribe" "${LOG_DIR}/update_mod_deepgram_transcribe_link.log"
+
 echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
 
 # Build mod_google_transcribe
 echo "Building mod_google_transcribe..."
 cd ${SCRIPT_DIR}/../modules/mod_google_transcribe
 
-# Check if googleapis source exists
-if [ ! -d "/usr/local/src/googleapis/gens" ]; then
-    echo -e "${RED}✗ googleapis not found${NC}"
-    echo "Please run install-google-module.sh first to generate googleapis protobuf files"
+# Check for required tools
+if ! command -v protoc &> /dev/null; then
+    echo -e "${RED}✗ protoc not found${NC}"
+    echo "Protocol Buffers compiler is required"
     exit 1
 fi
 
-# Clean previous build
-rm -f *.o *.so
+if ! command -v grpc_cpp_plugin &> /dev/null; then
+    echo -e "${RED}✗ grpc_cpp_plugin not found${NC}"
+    echo "gRPC C++ plugin is required"
+    exit 1
+fi
 
-echo "  Compiling mod_google_transcribe.c..."
-gcc -fPIC -c \
-    -I${FS_PREFIX}/include/freeswitch \
-    mod_google_transcribe.c
+# Generate protobuf files if they don't exist or are older than .proto file
+if [ ! -f "speech.pb.h" ] || [ "speech.proto" -nt "speech.pb.h" ]; then
+    echo "  Generating protobuf files..."
+    log_command "protoc" "${LOG_DIR}/update_mod_google_transcribe_protoc.log" \
+        protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=`which grpc_cpp_plugin` speech.proto
+    check_success "Failed to generate protobuf files" "${LOG_DIR}/update_mod_google_transcribe_protoc.log"
+fi
 
-echo "  Compiling google_glue.cpp (C++17)..."
-g++ -fPIC -c -std=c++17 \
-    -I${FS_PREFIX}/include/freeswitch \
-    -I/usr/local/include \
-    -I/usr/local/src/googleapis/gens \
-    google_glue.cpp
+# Build using Makefile
+echo "  Cleaning previous build..."
+log_command "mod_google_transcribe clean" "${LOG_DIR}/update_mod_google_transcribe_clean.log" \
+    make clean
+# Don't check success for clean, it's okay if it fails
 
-echo "  Linking mod_google_transcribe.so..."
-g++ -shared \
-    -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so \
-    mod_google_transcribe.o \
-    google_glue.o \
-    /usr/local/src/googleapis/gens/google/cloud/speech/v2/*.pb.cc \
-    /usr/local/src/googleapis/gens/google/api/*.pb.cc \
-    /usr/local/src/googleapis/gens/google/rpc/*.pb.cc \
-    /usr/local/src/googleapis/gens/google/longrunning/*.pb.cc \
-    /usr/local/src/googleapis/gens/google/type/*.pb.cc \
-    -L/usr/local/lib \
-    -lgrpc++ \
-    -lgrpc \
-    -lprotobuf \
-    -lpthread \
-    -lssl \
-    -lcrypto \
-    -lcurl \
-    -lz
+echo "  Building mod_google_transcribe..."
+log_command "mod_google_transcribe make" "${LOG_DIR}/update_mod_google_transcribe_make.log" \
+    make
+check_success "Failed to build mod_google_transcribe" "${LOG_DIR}/update_mod_google_transcribe_make.log"
+
+# Install the module
+echo "  Installing mod_google_transcribe..."
+log_command "mod_google_transcribe install" "${LOG_DIR}/update_mod_google_transcribe_install.log" \
+    make install
+check_success "Failed to install mod_google_transcribe" "${LOG_DIR}/update_mod_google_transcribe_install.log"
+
 echo -e "${GREEN}✓ mod_google_transcribe${NC}"
 
 echo -e "${GREEN}✓ All modules rebuilt${NC}"
