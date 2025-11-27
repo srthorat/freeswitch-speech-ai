@@ -634,6 +634,7 @@ if should_install_freeswitch; then
             --with-rundir=${FS_PREFIX}/run \
             --with-logdir=${FS_PREFIX}/log \
             --with-modinstdir=${FS_PREFIX}/lib/freeswitch/mod \
+            --disable-fhs \
             --enable-core-pgsql-support \
             --enable-core-odbc-support \
             --enable-tcmalloc \
