@@ -122,6 +122,42 @@ should_install_freeswitch() {
     [ "$MODULE" = "all" ] || [ "$MODULE" = "freeswitch" ]
 }
 
+# Detect existing FreeSWITCH installation
+detect_freeswitch_installation() {
+    local STANDARD_PATHS=(
+        "/usr/local/freeswitch"
+        "/opt/freeswitch"
+        "/usr/freeswitch"
+        "/etc/freeswitch"
+    )
+    
+    # Check if FreeSWITCH binary is in PATH
+    if command -v freeswitch &> /dev/null; then
+        local FS_BIN=$(command -v freeswitch)
+        local FS_DIR=$(dirname $(dirname "$FS_BIN"))
+        echo "$FS_DIR"
+        return 0
+    fi
+    
+    # Check standard installation paths
+    for path in "${STANDARD_PATHS[@]}"; do
+        if [ -d "$path" ] && [ -f "$path/bin/freeswitch" ]; then
+            echo "$path"
+            return 0
+        fi
+    done
+    
+    # Check if include files exist (development installation)
+    for path in "${STANDARD_PATHS[@]}"; do
+        if [ -d "$path/include/freeswitch" ]; then
+            echo "$path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # ============================================================================
 # Parse Command Line Arguments
 # ============================================================================
@@ -481,236 +517,21 @@ fi
 if should_install_freeswitch; then
     log_step "[Step 3/8] Installing FreeSWITCH 1.10.11"
 
-    # Check if already installed
-    if [ -d "$FS_PREFIX" ]; then
-        log_substep "FreeSWITCH already exists at $FS_PREFIX"
-        if [ "$AUTO_YES" = false ]; then
-            read -p "Overwrite existing installation? (y/N) " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                echo "Skipping FreeSWITCH installation"
-                grep -q "^freeswitch=" "$MANIFEST_FILE" || echo "freeswitch=existing" >> "$MANIFEST_FILE"
-            else
-                # Proceed with installation
-                # Build spandsp
-                log_substep "Building spandsp 3.x (commit 0d2e6ac)..."
-                cd /usr/local/src || exit 1
-                if [ ! -d "spandsp" ]; then
-                    log_command "spandsp clone" "${LOG_DIR}/spandsp_clone.log" \
-                        git clone https://github.com/freeswitch/spandsp.git
-                    check_success "Failed to clone spandsp" "${LOG_DIR}/spandsp_clone.log"
-                fi
-                cd spandsp
-                log_command "spandsp checkout" "${LOG_DIR}/spandsp_checkout.log" \
-                    git checkout 0d2e6ac
-                check_success "Failed to checkout spandsp commit" "${LOG_DIR}/spandsp_checkout.log"
-
-                log_command "spandsp bootstrap" "${LOG_DIR}/spandsp_bootstrap.log" \
-                    ./bootstrap.sh
-                check_success "Failed to bootstrap spandsp" "${LOG_DIR}/spandsp_bootstrap.log"
-
-                log_command "spandsp configure" "${LOG_DIR}/spandsp_configure.log" \
-                    ./configure
-                check_success "Failed to configure spandsp" "${LOG_DIR}/spandsp_configure.log"
-
-                log_command "spandsp make" "${LOG_DIR}/spandsp_make.log" \
-                    make -j ${BUILD_CPUS}
-                check_success "Failed to compile spandsp" "${LOG_DIR}/spandsp_make.log"
-
-                log_command "spandsp install" "${LOG_DIR}/spandsp_install.log" \
-                    make install
-                check_success "Failed to install spandsp" "${LOG_DIR}/spandsp_install.log"
-
-                ldconfig
-                log_success "spandsp installed"
-
-                # Build sofia-sip
-                log_substep "Building sofia-sip 1.13.17..."
-                cd /usr/local/src || exit 1
-                if [ ! -d "sofia-sip" ]; then
-                    log_command "sofia-sip clone" "${LOG_DIR}/sofia_clone.log" \
-                        git clone --depth 1 -b v1.13.17 https://github.com/freeswitch/sofia-sip.git
-                    check_success "Failed to clone sofia-sip" "${LOG_DIR}/sofia_clone.log"
-                fi
-                cd sofia-sip
-                log_command "sofia-sip bootstrap" "${LOG_DIR}/sofia_bootstrap.log" \
-                    ./bootstrap.sh
-                check_success "Failed to bootstrap sofia-sip" "${LOG_DIR}/sofia_bootstrap.log"
-
-                log_command "sofia-sip configure" "${LOG_DIR}/sofia_configure.log" \
-                    ./configure
-                check_success "Failed to configure sofia-sip" "${LOG_DIR}/sofia_configure.log"
-
-                log_command "sofia-sip make" "${LOG_DIR}/sofia_make.log" \
-                    make -j ${BUILD_CPUS}
-                check_success "Failed to compile sofia-sip" "${LOG_DIR}/sofia_make.log"
-
-                log_command "sofia-sip install" "${LOG_DIR}/sofia_install.log" \
-                    make install
-                check_success "Failed to install sofia-sip" "${LOG_DIR}/sofia_install.log"
-
-                ldconfig
-                log_success "sofia-sip installed"
-
-                # Build FreeSWITCH
-                log_substep "Building FreeSWITCH 1.10.11 (this takes 15-20 minutes)..."
-                cd /usr/local/src || exit 1
-                if [ ! -d "freeswitch" ]; then
-                    log_command "FreeSWITCH clone" "${LOG_DIR}/freeswitch_clone.log" \
-                        git clone --depth 1 -b v1.10.11 https://github.com/signalwire/freeswitch.git
-                    check_success "Failed to clone FreeSWITCH" "${LOG_DIR}/freeswitch_clone.log"
-                fi
-                cd freeswitch
-
-                log_command "FreeSWITCH bootstrap" "${LOG_DIR}/freeswitch_bootstrap.log" \
-                    ./bootstrap.sh -j
-                check_success "Failed to bootstrap FreeSWITCH" "${LOG_DIR}/freeswitch_bootstrap.log"
-
-                # Disable optional modules that require additional dependencies
-                log_substep "Disabling optional modules..."
-                sed -i 's|^endpoints/mod_verto$|#endpoints/mod_verto|' modules.conf
-                sed -i 's|^endpoints/mod_skinny$|#endpoints/mod_skinny|' modules.conf
-                sed -i 's|^applications/mod_signalwire$|#applications/mod_signalwire|' modules.conf
-                sed -i 's|^applications/mod_av$|#applications/mod_av|' modules.conf
-                sed -i 's|^languages/mod_python$|#languages/mod_python|' modules.conf
-                sed -i 's|^languages/mod_python3$|#languages/mod_python3|' modules.conf
-                sed -i 's|^languages/mod_java$|#languages/mod_java|' modules.conf
-                sed -i 's|^languages/mod_perl$|#languages/mod_perl|' modules.conf
-                sed -i 's|^languages/mod_php$|#languages/mod_php|' modules.conf
-                log_success "Optional modules disabled"
-
-                log_command "FreeSWITCH configure" "${LOG_DIR}/freeswitch_configure.log" \
-                    ./configure \
-                    --prefix=${FS_PREFIX} \
-                    --exec-prefix=${FS_PREFIX} \
-                    --bindir=${FS_PREFIX}/bin \
-                    --sbindir=${FS_PREFIX}/bin \
-                    --sysconfdir=${FS_PREFIX} \
-                    --localstatedir=${FS_PREFIX} \
-                    --with-rundir=${FS_PREFIX}/run \
-                    --with-logdir=${FS_PREFIX}/log \
-                    --with-modinstdir=${FS_PREFIX}/lib/freeswitch/mod \
-                    --enable-core-pgsql-support \
-                    --enable-core-odbc-support \
-                    --enable-tcmalloc \
-                    --without-python \
-                    --without-python3 \
-                    --without-java \
-                    --without-perl
-                check_success "Failed to configure FreeSWITCH" "${LOG_DIR}/freeswitch_configure.log"
-
-                log_command "FreeSWITCH make" "${LOG_DIR}/freeswitch_make.log" \
-                    make -j ${BUILD_CPUS}
-                check_success "Failed to compile FreeSWITCH" "${LOG_DIR}/freeswitch_make.log"
-
-                log_command "FreeSWITCH install" "${LOG_DIR}/freeswitch_install.log" \
-                    make install
-                check_success "Failed to install FreeSWITCH" "${LOG_DIR}/freeswitch_install.log"
-
-                echo "freeswitch=installed" >> "$MANIFEST_FILE"
-                log_success "FreeSWITCH installed"
-
-                # Copy example configuration files (dialplan and directory)
-                log_substep "Copying example configuration files..."
-                cp ${SCRIPT_DIR}/../examples/freeswitch-config/dialplan/default.xml ${FS_PREFIX}/conf/dialplan/default.xml 2>/dev/null || true
-                cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/1000.xml ${FS_PREFIX}/conf/directory/default/1000.xml 2>/dev/null || true
-                cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/1001.xml ${FS_PREFIX}/conf/directory/default/1001.xml 2>/dev/null || true
-                cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/1002.xml ${FS_PREFIX}/conf/directory/default/1002.xml 2>/dev/null || true
-                log_success "Configuration files copied"
-
-                # Create FreeSWITCH systemd service
-                log_substep "Creating FreeSWITCH systemd service..."
-                cat > /etc/systemd/system/freeswitch.service <<EOF
-[Unit]
-Description=FreeSWITCH open source softswitch
-Wants=network-online.target
-After=network-online.target
-After=syslog.target
-
-[Service]
-Type=forking
-PIDFile=${FS_PREFIX}/run/freeswitch.pid
-ExecStartPre=/bin/chown -R root:root ${FS_PREFIX}
-ExecStart=${FS_PREFIX}/bin/freeswitch -u root -g root -nonat -nc
-TimeoutSec=45s
-Restart=always
-WorkingDirectory=${FS_PREFIX}
-User=root
-Group=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-                # Create systemd drop-in directory
-                mkdir -p /etc/systemd/system/freeswitch.service.d
-
-                # Create environment drop-in file
-                log_substep "Creating FreeSWITCH environment configuration..."
-                cat > /etc/systemd/system/freeswitch.service.d/freeswitch.conf <<EOF
-# FreeSWITCH Speech AI Environment Configuration
-# This drop-in file provides environment variables for the FreeSWITCH service
-# Edit this file to configure API keys and service settings
-
-[Service]
-# Library Path (required for modules)
-Environment="LD_LIBRARY_PATH=/usr/local/lib"
-
-# Google Cloud Configuration (for mod_google_transcribe and mod_google_transcribev2)
-# Uncomment and set your values:
-#Environment="GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json"
-#Environment="GCP_PROJECT_ID=your-project-id"
-#Environment="GCP_LOCATION=us-central1"
-
-# AWS Configuration (for mod_aws_transcribe)
-# Uncomment and set your values:
-#Environment="AWS_ACCESS_KEY_ID=your-access-key"
-#Environment="AWS_SECRET_ACCESS_KEY=your-secret-key"
-#Environment="AWS_DEFAULT_REGION=us-east-1"
-
-# Deepgram Configuration (for mod_deepgram_transcribe)
-# Uncomment and set your values:
-#Environment="DEEPGRAM_API_KEY=your-deepgram-api-key"
-
-# Pusher Configuration (for real-time transcript delivery)
-# Uncomment and set your values:
-#Environment="PUSHER_APP_ID=your-app-id"
-#Environment="PUSHER_KEY=your-key"
-#Environment="PUSHER_SECRET=your-secret"
-#Environment="PUSHER_CLUSTER=us2"
-
-# Audio Processing Configuration
-# Uncomment and adjust as needed:
-#Environment="MOD_AUDIO_FORK_BUFFER_SECS=3"
-#Environment="MOD_AUDIO_FORK_SERVICE_THREADS=2"
-EOF
-
-                # Set permissions
-                chmod 644 /etc/systemd/system/freeswitch.service
-                chmod 644 /etc/systemd/system/freeswitch.service.d/freeswitch.conf
-
-                # Reload systemd and enable service
-                systemctl daemon-reload
-                systemctl enable freeswitch
-                log_success "FreeSWITCH systemd service created and enabled"
-
-                # Add FreeSWITCH binaries to system PATH
-                log_substep "Configuring system PATH for FreeSWITCH binaries..."
-                cat > /etc/profile.d/freeswitch.sh <<EOF
-# FreeSWITCH Speech AI - Add FreeSWITCH binaries to PATH
-export PATH="\$PATH:${FS_PREFIX}/bin"
-EOF
-                chmod 644 /etc/profile.d/freeswitch.sh
-                
-                # Create symbolic links for common commands
-                ln -sf ${FS_PREFIX}/bin/fs_cli /usr/local/bin/fs_cli 2>/dev/null || true
-                ln -sf ${FS_PREFIX}/bin/freeswitch /usr/local/bin/freeswitch 2>/dev/null || true
-                
-                log_success "FreeSWITCH binaries configured for system-wide access"
-            fi
+    # Check if FreeSWITCH is already installed in any standard location
+    DETECTED_FS_PATH=$(detect_freeswitch_installation)
+    if [ $? -eq 0 ]; then
+        log_substep "FreeSWITCH already installed at $DETECTED_FS_PATH"
+        
+        # Update FS_PREFIX if detected path is different
+        if [ "$DETECTED_FS_PATH" != "$FS_PREFIX" ]; then
+            log_substep "Using detected FreeSWITCH installation instead of $FS_PREFIX"
+            FS_PREFIX="$DETECTED_FS_PATH"
         fi
+        
+        grep -q "^freeswitch=" "$MANIFEST_FILE" || echo "freeswitch=existing" >> "$MANIFEST_FILE"
+        log_success "Skipping FreeSWITCH installation - using existing installation"
     else
-        # Fresh installation
+        # No existing installation detected - proceed with fresh installation
         # Build spandsp
         log_substep "Building spandsp 3.x (commit 0d2e6ac)..."
         cd /usr/local/src || exit 1
@@ -773,6 +594,12 @@ EOF
 
         # Build FreeSWITCH
         log_substep "Building FreeSWITCH 1.10.11 (this takes 15-20 minutes)..."
+        # >>> MINIMAL FIX: prevent conf/freeswitch/conf nesting
+        export FREESWITCH_CONF_DIR=${FS_PREFIX}/conf
+        export FREESWITCH_LOG_DIR=${FS_PREFIX}/log
+        export FREESWITCH_RUN_DIR=${FS_PREFIX}/run
+        export FREESWITCH_MOD_DIR=${FS_PREFIX}/lib/freeswitch/mod
+        # <<< END FIX
         cd /usr/local/src || exit 1
         if [ ! -d "freeswitch" ]; then
             log_command "FreeSWITCH clone" "${LOG_DIR}/freeswitch_clone.log" \
@@ -931,13 +758,30 @@ else
     log_step "[Step 3/8] Skipping FreeSWITCH Installation"
     log_substep "Module-only installation (FreeSWITCH not selected)"
 
-    # Verify FreeSWITCH exists
-    if [ ! -d "$FS_PREFIX" ]; then
-        echo -e "${RED}Error: FreeSWITCH not found at $FS_PREFIX${NC}"
+    # Detect existing FreeSWITCH installation
+    DETECTED_FS_PATH=$(detect_freeswitch_installation)
+    if [ $? -eq 0 ]; then
+        log_substep "FreeSWITCH detected at $DETECTED_FS_PATH"
+        
+        # Update FS_PREFIX if detected path is different
+        if [ "$DETECTED_FS_PATH" != "$FS_PREFIX" ]; then
+            log_substep "Using detected FreeSWITCH installation instead of $FS_PREFIX"
+            FS_PREFIX="$DETECTED_FS_PATH"
+        fi
+        
+        log_success "FreeSWITCH found at $FS_PREFIX"
+    else
+        echo -e "${RED}Error: FreeSWITCH not found in standard locations${NC}"
+        echo "Checked paths:"
+        echo "  - /usr/local/freeswitch"
+        echo "  - /opt/freeswitch"
+        echo "  - /usr/freeswitch"
+        echo "  - /etc/freeswitch"
+        echo "  - $FS_PREFIX (specified prefix)"
+        echo ""
         echo "Please install FreeSWITCH first or run: sudo $0 --module freeswitch"
         exit 1
     fi
-    log_success "FreeSWITCH found at $FS_PREFIX"
 fi
 
 # ============================================================================
