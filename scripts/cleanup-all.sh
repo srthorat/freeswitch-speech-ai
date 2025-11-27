@@ -303,9 +303,11 @@ fi
 
 if should_remove_module "mod_google_transcribev2"; then
     if grep -q "google_cloud_cpp=installed" "$MANIFEST_FILE" 2>/dev/null; then
-        log_remove "Google Cloud C++ libraries (system packages)"
-        apt-get remove -y libgoogle-cloud-cpp-dev > /dev/null 2>&1 || true
-        apt-get autoremove -y > /dev/null 2>&1 || true
+        log_remove "Google Cloud C++ libraries"
+        rm -f /usr/local/lib/libgoogle_cloud_cpp*
+        rm -rf /usr/local/lib/cmake/google_cloud_cpp*
+        rm -rf /usr/local/include/google/cloud
+        ldconfig
         log_success "Google Cloud C++ libraries removed"
     else
         log_skip "Google Cloud C++ libraries (was pre-existing or not installed)"
@@ -333,6 +335,10 @@ if ! $KEEP_SOURCES; then
     if should_remove_module "mod_google_transcribe"; then
         rm -rf /usr/local/src/grpc
         rm -rf /usr/local/src/googleapis
+    fi
+
+    if should_remove_module "mod_google_transcribev2"; then
+        rm -rf /usr/local/src/google-cloud-cpp
     fi
 
     log_success "Source directories removed"

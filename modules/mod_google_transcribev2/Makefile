@@ -11,12 +11,12 @@ CXXFLAGS = -fPIC -std=c++17 -I${FS_PREFIX}/include/freeswitch -Wall -Werror
 
 # Find Google Cloud Speech library using pkg-config
 GOOGLE_CFLAGS = $(shell pkg-config --cflags google_cloud_cpp_speech 2>/dev/null || echo "-I/usr/local/include")
-GOOGLE_LIBS = $(shell pkg-config --libs google_cloud_cpp_speech 2>/dev/null || echo "-lgoogle_cloud_cpp_speech -lgrpc++ -lgrpc -lprotobuf")
+GOOGLE_LIBS = $(shell pkg-config --libs google_cloud_cpp_speech 2>/dev/null || echo "-L/usr/local/lib -lgoogle_cloud_cpp_speech -lgoogle_cloud_cpp_grpc_utils -lgoogle_cloud_cpp_common -labsl_strings -labsl_str_format_internal -lgrpc++ -lgrpc -lprotobuf -pthread")
 
 CXXFLAGS += $(GOOGLE_CFLAGS)
 
 # Linker flags
-LDFLAGS = -shared -lcurl -lssl -lcrypto -lspeex -lspeexdsp $(GOOGLE_LIBS)
+LDFLAGS = -shared -Wl,-rpath,/usr/local/lib -lcurl -lssl -lcrypto -lspeex -lspeexdsp $(GOOGLE_LIBS)
 
 # Source files
 SOURCES_C = mod_google_transcribev2.c

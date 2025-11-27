@@ -432,21 +432,42 @@ fi
 
 # Google Cloud C++ Speech library (for mod_google_transcribev2)
 if should_install_module "mod_google_transcribev2"; then
-    if ! pkg-config --exists google_cloud_cpp_speech 2>/dev/null; then
-        log_substep "Installing Google Cloud C++ Speech library from system packages..."
+    if ! ldconfig -p | grep -q libgoogle_cloud_cpp_speech; then
+        log_substep "Building Google Cloud C++ Speech library v2.30.0 (10-15 minutes)..."
+        cd /usr/local/src || exit 1
 
-        sed -i '/^google_cloud_cpp=/d' "$MANIFEST_FILE" 2>/dev/null || true
-
+        # Install additional dependencies
         apt-get install -y \
-            libgoogle-cloud-cpp-dev \
+            nlohmann-json3-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
             > /dev/null 2>&1
-        check_success "Failed to install Google Cloud C++ packages"
 
-        pkg-config --exists google_cloud_cpp_speech 2>/dev/null
-        check_success "google_cloud_cpp_speech not found after installation"
+        if [ ! -d "google-cloud-cpp" ]; then
+            git clone --depth 1 -b v2.30.0 https://github.com/googleapis/google-cloud-cpp.git > /dev/null 2>&1
+            check_success "Failed to clone Google Cloud C++ SDK"
+        fi
 
+        cd google-cloud-cpp
+        mkdir -p build && cd build
+        cmake .. \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGOOGLE_CLOUD_CPP_ENABLE=speech \
+            -DBUILD_TESTING=OFF \
+            -DGOOGLE_CLOUD_CPP_WITH_MOCKS=OFF \
+            > /dev/null 2>&1
+        check_success "Failed to configure Google Cloud C++ SDK"
+
+        make -j ${BUILD_CPUS} > /dev/null 2>&1
+        check_success "Failed to compile Google Cloud C++ SDK"
+
+        make install > /dev/null 2>&1
+        check_success "Failed to install Google Cloud C++ SDK"
+
+        ldconfig
         echo "google_cloud_cpp=installed" >> "$MANIFEST_FILE"
-        log_success "Google Cloud C++ Speech library installed from system packages"
+        log_success "Google Cloud C++ Speech library built and installed"
     else
         log_success "Google Cloud C++ Speech library already installed"
         grep -q "^google_cloud_cpp=" "$MANIFEST_FILE" || echo "google_cloud_cpp=existing" >> "$MANIFEST_FILE"
