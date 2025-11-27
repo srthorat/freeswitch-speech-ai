@@ -10,9 +10,10 @@ FreeSWITCH module for **Google Cloud Speech-to-Text v2** streaming API with unif
 - Word-level timestamps and confidence scores
 
 ✅ **Multi-Channel Support**
-- Separate recognition per channel (stereo mode)
+- Automatic multichannel processing when stereo mode enabled
+- Separate recognition per channel with SEPARATE_RECOGNITION_PER_CHANNEL
 - Channel-based speaker identification (0=caller, 1=callee)
-- Mono, mixed, and stereo audio modes
+- Mono, mixed, and stereo audio modes with auto-detection
 
 ✅ **Pusher Integration**
 - Direct Pusher API integration with HMAC SHA256 signing
@@ -182,18 +183,23 @@ uuid_google_transcribev2 <uuid> [start|stop] lang-code [interim] [mono|mixed|ste
 | `lang-code` | Language code | en-US, es-ES, etc. | Required for start |
 | `interim` | Enable partial results | interim | Optional |
 | `mix-type` | Audio mode | mono, mixed, stereo | mono |
+|           |            | **stereo auto-enables multichannel** |      |
 | `rate` | Sample rate | 8k, 16k | 16k |
 | `metadata` | JSON metadata | Valid JSON string | Auto-generated |
 
 ### Examples
 
-#### Start Mono Transcription
+#### Start Mono Transcription (Single Channel)
 ```bash
 uuid_google_transcribev2 abc123 start en-US
 ```
 
-#### Start Stereo with Interim Results
+#### Start Stereo with Interim Results (AUTO-ENABLES MULTICHANNEL)
 ```bash
+# This automatically enables:
+# - Multi-channel mode: SEPARATE_RECOGNITION_PER_CHANNEL  
+# - Channel detection: 2 channels (caller/callee separation)
+# - Audio channel count: 2
 uuid_google_transcribev2 abc123 start en-US interim stereo 16k
 ```
 
@@ -274,14 +280,16 @@ Identical to mod_aws_transcribe and mod_deepgram_transcribe:
 
 ### Channel-to-Speaker Mapping
 
-**Stereo Mode** (2 channels):
+**Stereo Mode** (2 channels) - **AUTO-ENABLES MULTICHANNEL & CHANNEL DETECTION**:
 - **Channel 0** (left audio) = **Caller** (A-leg)
   - speaker_id = `"{caller_name}({caller_number})"`
   - Example: `"Alice(+15551234567)"`
+  - Automatic multichannel processing enabled
 
 - **Channel 1** (right audio) = **Callee** (B-leg)
   - speaker_id = `"{callee_name}({callee_number})"`
   - Example: `"Bob(+15559876543)"`
+  - Separate recognition per channel enabled
 
 **Mono/Mixed Mode** (1 channel):
 - **Channel 0** = Combined audio
@@ -353,6 +361,8 @@ tail -f /usr/local/freeswitch/log/freeswitch.log | grep google_transcribev2
 | "Failed to write initial config" | Invalid project ID | Check `GCP_PROJECT_ID` environment variable |
 | "Pusher not configured" | Missing Pusher credentials | Set `PUSHER_APP_ID`, `PUSHER_KEY`, `PUSHER_SECRET` |
 | "AudioBuffer overflow" | High load | Increase `MOD_AUDIO_FORK_BUFFER_SECS` |
+| Single channel in stereo mode | Stereo not properly enabled | Check `SMBF_STEREO` flag in logs |
+| No multichannel processing | Using mono/mixed instead of stereo | Use `stereo` parameter to auto-enable multichannel |
 
 ## Performance
 
@@ -375,6 +385,20 @@ export MOD_AUDIO_FORK_BUFFER_SECS=5
 export MOD_AUDIO_FORK_SERVICE_THREADS=4
 ```
 
+## Audio Mode Features
+
+| Mode | Channels | Multi-Channel | Channel Detection | Use Case |
+|------|----------|---------------|-------------------|----------|
+| `mono` | 1 | ❌ No | ❌ No | Single speaker or mixed audio |
+| `mixed` | 1 | ❌ No | ❌ No | Combined stereo to mono |
+| `stereo` | 2 | ✅ **Auto-Enabled** | ✅ **Auto-Enabled** | Caller/callee separation |
+
+### Stereo Mode Auto-Enables:
+- **Multi-channel processing**: `SEPARATE_RECOGNITION_PER_CHANNEL`
+- **Channel detection**: 2-channel speaker identification
+- **Audio channel count**: Automatic 2-channel configuration
+- **Enhanced metadata**: Per-channel speaker information
+
 ## Comparison with Other Modules
 
 | Feature | mod_google_transcribev2 | mod_aws_transcribe | mod_deepgram_transcribe |
@@ -382,7 +406,7 @@ export MOD_AUDIO_FORK_SERVICE_THREADS=4
 | API | Google Speech v2 | AWS Transcribe | Deepgram |
 | Protocol | gRPC | WebSocket | WebSocket |
 | Partial Results | ✅ | ✅ | ✅ |
-| Multi-Channel | ✅ | ✅ | ✅ |
+| Multi-Channel | ✅ Auto w/ Stereo | ✅ | ✅ |
 | Pusher Integration | ✅ | ✅ | ✅ |
 | Unified API | ✅ | ✅ | ✅ |
 | Speaker Diarization | Channel-based | Channel-based | Channel-based |

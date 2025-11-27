@@ -50,6 +50,95 @@ docker-compose up -d
 
 ---
 
+## Scripts Directory
+
+The `scripts/` directory contains a comprehensive set of shell scripts for **Plain Linux installation** and **system management**. These scripts provide an alternative to Docker deployment, installing FreeSWITCH and transcription modules directly on Ubuntu/Debian systems.
+
+### 📁 Script Organization
+
+| Category | Scripts | Purpose |
+|----------|---------|---------|
+| **Installation** | `install-all.sh`, `install-modules-only.sh` | Full system or module-only installation |
+| **Management** | `cleanup-all.sh`, `cleanup-modules.sh` | Safe removal with manifest tracking |
+| **Utilities** | `status.sh`, `health-check.sh`, `update-modules.sh` | System monitoring and maintenance |
+| **Configuration** | `configure-services.sh`, `preflight-check.sh` | Setup and validation tools |
+| **Backup/Recovery** | `backup.sh`, `rollback.sh` | Data protection and recovery |
+
+### 🔧 Key Features
+
+- **Modular Installation**: Install FreeSWITCH only, modules only, or complete system
+- **Systemd Integration**: Automatic service creation with environment configuration
+- **Manifest Tracking**: Smart cleanup that preserves existing system dependencies
+- **Environment Management**: Systemd drop-in files for API credentials
+- **Comprehensive Validation**: Health checks and dependency verification
+- **Backup/Recovery**: Safe upgrade paths with automatic rollback capability
+
+### 📋 Installation Manifest System
+
+All installation scripts create a **manifest file** (`.freeswitch-install-manifest.txt`) that tracks components:
+
+```bash
+# FreeSWITCH Speech AI Installation Manifest
+# Created: 2025-11-27 10:30:00
+# Format: component=status (installed|existing)
+
+freeswitch=installed        # We installed this
+libwebsockets=installed     # We installed this
+aws-sdk-cpp=existing        # Was already present
+grpc=existing              # Was already present
+```
+
+**Benefits:**
+- ✅ Safe cleanup - only removes what we installed
+- ✅ Preserves system dependencies used by other applications
+- ✅ Prevents breaking existing software during removal
+
+### 🐧 Platform Support
+
+**Supported Linux Distributions:**
+- Ubuntu 20.04 LTS (Focal Fossa)
+- Ubuntu 22.04 LTS (Jammy Jellyfish)  
+- Ubuntu 24.04 LTS (Noble Numbat)
+- Debian 11 (Bullseye)
+- Debian 12 (Bookworm)
+
+**System Requirements:**
+- 4+ CPU cores (8+ recommended)
+- 8GB RAM minimum (16GB+ recommended)
+- 20GB free disk space
+- Root/sudo access
+- Internet connectivity for package downloads
+
+### 🚀 Quick Start Commands
+
+```bash
+# System validation before installation
+./scripts/preflight-check.sh
+
+# Complete installation (FreeSWITCH + all modules)
+sudo ./scripts/install-all.sh
+
+# Module-only installation (FreeSWITCH already exists)
+sudo ./scripts/install-modules-only.sh
+
+# Configure API credentials interactively
+sudo ./scripts/configure-services.sh
+
+# Check system status and health
+./scripts/status.sh
+./scripts/health-check.sh
+
+# Clean removal (uses manifest for safety)
+sudo ./scripts/cleanup-all.sh
+```
+
+### 📖 Complete Documentation
+
+For comprehensive script documentation, usage examples, and troubleshooting guides, see:
+**[scripts/README.md](scripts/README.md)**
+
+---
+
 ## Plain Linux Installation
 
 For installing directly on Ubuntu/Debian Linux (without Docker), use the installation scripts in the `scripts/` directory.

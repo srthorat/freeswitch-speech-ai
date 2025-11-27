@@ -585,7 +585,7 @@ if should_install_freeswitch; then
                     --exec-prefix=${FS_PREFIX} \
                     --bindir=${FS_PREFIX}/bin \
                     --sbindir=${FS_PREFIX}/bin \
-                    --sysconfdir=${FS_PREFIX}/conf \
+                    --sysconfdir=${FS_PREFIX} \
                     --localstatedir=${FS_PREFIX} \
                     --with-rundir=${FS_PREFIX}/run \
                     --with-logdir=${FS_PREFIX}/log \
@@ -610,11 +610,103 @@ if should_install_freeswitch; then
                 echo "freeswitch=installed" >> "$MANIFEST_FILE"
                 log_success "FreeSWITCH installed"
 
-                # Copy dialplan
-                log_substep "Copying example dialplan..."
-                cp -r ${SCRIPT_DIR}/../examples/freeswitch-config/dialplan/default.xml ${FS_PREFIX}/conf/dialplan/ 2>/dev/null || true
-                cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/*.xml ${FS_PREFIX}/conf/directory/default/ 2>/dev/null || true
-                log_success "Dialplan copied"
+                # Copy example configuration files (dialplan and directory)
+                log_substep "Copying example configuration files..."
+                cp ${SCRIPT_DIR}/../examples/freeswitch-config/dialplan/default.xml ${FS_PREFIX}/conf/dialplan/default.xml 2>/dev/null || true
+                cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/1000.xml ${FS_PREFIX}/conf/directory/default/1000.xml 2>/dev/null || true
+                cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/1001.xml ${FS_PREFIX}/conf/directory/default/1001.xml 2>/dev/null || true
+                cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/1002.xml ${FS_PREFIX}/conf/directory/default/1002.xml 2>/dev/null || true
+                log_success "Configuration files copied"
+
+                # Create FreeSWITCH systemd service
+                log_substep "Creating FreeSWITCH systemd service..."
+                cat > /etc/systemd/system/freeswitch.service <<EOF
+[Unit]
+Description=FreeSWITCH open source softswitch
+Wants=network-online.target
+After=network-online.target
+After=syslog.target
+
+[Service]
+Type=forking
+PIDFile=${FS_PREFIX}/run/freeswitch.pid
+ExecStartPre=/bin/chown -R root:root ${FS_PREFIX}
+ExecStart=${FS_PREFIX}/bin/freeswitch -u root -g root -nonat -nc
+TimeoutSec=45s
+Restart=always
+WorkingDirectory=${FS_PREFIX}
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+                # Create systemd drop-in directory
+                mkdir -p /etc/systemd/system/freeswitch.service.d
+
+                # Create environment drop-in file
+                log_substep "Creating FreeSWITCH environment configuration..."
+                cat > /etc/systemd/system/freeswitch.service.d/freeswitch.conf <<EOF
+# FreeSWITCH Speech AI Environment Configuration
+# This drop-in file provides environment variables for the FreeSWITCH service
+# Edit this file to configure API keys and service settings
+
+[Service]
+# Library Path (required for modules)
+Environment="LD_LIBRARY_PATH=/usr/local/lib"
+
+# Google Cloud Configuration (for mod_google_transcribe and mod_google_transcribev2)
+# Uncomment and set your values:
+#Environment="GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json"
+#Environment="GCP_PROJECT_ID=your-project-id"
+#Environment="GCP_LOCATION=us-central1"
+
+# AWS Configuration (for mod_aws_transcribe)
+# Uncomment and set your values:
+#Environment="AWS_ACCESS_KEY_ID=your-access-key"
+#Environment="AWS_SECRET_ACCESS_KEY=your-secret-key"
+#Environment="AWS_DEFAULT_REGION=us-east-1"
+
+# Deepgram Configuration (for mod_deepgram_transcribe)
+# Uncomment and set your values:
+#Environment="DEEPGRAM_API_KEY=your-deepgram-api-key"
+
+# Pusher Configuration (for real-time transcript delivery)
+# Uncomment and set your values:
+#Environment="PUSHER_APP_ID=your-app-id"
+#Environment="PUSHER_KEY=your-key"
+#Environment="PUSHER_SECRET=your-secret"
+#Environment="PUSHER_CLUSTER=us2"
+
+# Audio Processing Configuration
+# Uncomment and adjust as needed:
+#Environment="MOD_AUDIO_FORK_BUFFER_SECS=3"
+#Environment="MOD_AUDIO_FORK_SERVICE_THREADS=2"
+EOF
+
+                # Set permissions
+                chmod 644 /etc/systemd/system/freeswitch.service
+                chmod 644 /etc/systemd/system/freeswitch.service.d/freeswitch.conf
+
+                # Reload systemd and enable service
+                systemctl daemon-reload
+                systemctl enable freeswitch
+                log_success "FreeSWITCH systemd service created and enabled"
+
+                # Add FreeSWITCH binaries to system PATH
+                log_substep "Configuring system PATH for FreeSWITCH binaries..."
+                cat > /etc/profile.d/freeswitch.sh <<EOF
+# FreeSWITCH Speech AI - Add FreeSWITCH binaries to PATH
+export PATH="\$PATH:${FS_PREFIX}/bin"
+EOF
+                chmod 644 /etc/profile.d/freeswitch.sh
+                
+                # Create symbolic links for common commands
+                ln -sf ${FS_PREFIX}/bin/fs_cli /usr/local/bin/fs_cli 2>/dev/null || true
+                ln -sf ${FS_PREFIX}/bin/freeswitch /usr/local/bin/freeswitch 2>/dev/null || true
+                
+                log_success "FreeSWITCH binaries configured for system-wide access"
             fi
         fi
     else
@@ -712,7 +804,7 @@ if should_install_freeswitch; then
             --exec-prefix=${FS_PREFIX} \
             --bindir=${FS_PREFIX}/bin \
             --sbindir=${FS_PREFIX}/bin \
-            --sysconfdir=${FS_PREFIX}/conf \
+            --sysconfdir=${FS_PREFIX} \
             --localstatedir=${FS_PREFIX} \
             --with-rundir=${FS_PREFIX}/run \
             --with-logdir=${FS_PREFIX}/log \
@@ -737,11 +829,103 @@ if should_install_freeswitch; then
         echo "freeswitch=installed" >> "$MANIFEST_FILE"
         log_success "FreeSWITCH installed"
 
-        # Copy dialplan
-        log_substep "Copying example dialplan..."
-        cp -r ${SCRIPT_DIR}/../examples/freeswitch-config/dialplan/default.xml ${FS_PREFIX}/conf/dialplan/ 2>/dev/null || true
-        cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/*.xml ${FS_PREFIX}/conf/directory/default/ 2>/dev/null || true
-        log_success "Dialplan copied"
+        # Copy example configuration files (dialplan and directory)
+        log_substep "Copying example configuration files..."
+        cp ${SCRIPT_DIR}/../examples/freeswitch-config/dialplan/default.xml ${FS_PREFIX}/conf/dialplan/default.xml 2>/dev/null || true
+        cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/1000.xml ${FS_PREFIX}/conf/directory/default/1000.xml 2>/dev/null || true
+        cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/1001.xml ${FS_PREFIX}/conf/directory/default/1001.xml 2>/dev/null || true
+        cp ${SCRIPT_DIR}/../examples/freeswitch-config/directory/1002.xml ${FS_PREFIX}/conf/directory/default/1002.xml 2>/dev/null || true
+        log_success "Configuration files copied"
+
+        # Create FreeSWITCH systemd service
+        log_substep "Creating FreeSWITCH systemd service..."
+        cat > /etc/systemd/system/freeswitch.service <<EOF
+[Unit]
+Description=FreeSWITCH open source softswitch
+Wants=network-online.target
+After=network-online.target
+After=syslog.target
+
+[Service]
+Type=forking
+PIDFile=${FS_PREFIX}/run/freeswitch.pid
+ExecStartPre=/bin/chown -R root:root ${FS_PREFIX}
+ExecStart=${FS_PREFIX}/bin/freeswitch -u root -g root -nonat -nc
+TimeoutSec=45s
+Restart=always
+WorkingDirectory=${FS_PREFIX}
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+        # Create systemd drop-in directory
+        mkdir -p /etc/systemd/system/freeswitch.service.d
+
+        # Create environment drop-in file
+        log_substep "Creating FreeSWITCH environment configuration..."
+        cat > /etc/systemd/system/freeswitch.service.d/freeswitch.conf <<EOF
+# FreeSWITCH Speech AI Environment Configuration
+# This drop-in file provides environment variables for the FreeSWITCH service
+# Edit this file to configure API keys and service settings
+
+[Service]
+# Library Path (required for modules)
+Environment="LD_LIBRARY_PATH=/usr/local/lib"
+
+# Google Cloud Configuration (for mod_google_transcribe and mod_google_transcribev2)
+# Uncomment and set your values:
+#Environment="GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json"
+#Environment="GCP_PROJECT_ID=your-project-id"
+#Environment="GCP_LOCATION=us-central1"
+
+# AWS Configuration (for mod_aws_transcribe)
+# Uncomment and set your values:
+#Environment="AWS_ACCESS_KEY_ID=your-access-key"
+#Environment="AWS_SECRET_ACCESS_KEY=your-secret-key"
+#Environment="AWS_DEFAULT_REGION=us-east-1"
+
+# Deepgram Configuration (for mod_deepgram_transcribe)
+# Uncomment and set your values:
+#Environment="DEEPGRAM_API_KEY=your-deepgram-api-key"
+
+# Pusher Configuration (for real-time transcript delivery)
+# Uncomment and set your values:
+#Environment="PUSHER_APP_ID=your-app-id"
+#Environment="PUSHER_KEY=your-key"
+#Environment="PUSHER_SECRET=your-secret"
+#Environment="PUSHER_CLUSTER=us2"
+
+# Audio Processing Configuration
+# Uncomment and adjust as needed:
+#Environment="MOD_AUDIO_FORK_BUFFER_SECS=3"
+#Environment="MOD_AUDIO_FORK_SERVICE_THREADS=2"
+EOF
+
+        # Set permissions
+        chmod 644 /etc/systemd/system/freeswitch.service
+        chmod 644 /etc/systemd/system/freeswitch.service.d/freeswitch.conf
+
+        # Reload systemd and enable service
+        systemctl daemon-reload
+        systemctl enable freeswitch
+        log_success "FreeSWITCH systemd service created and enabled"
+
+        # Add FreeSWITCH binaries to system PATH
+        log_substep "Configuring system PATH for FreeSWITCH binaries..."
+        cat > /etc/profile.d/freeswitch.sh <<EOF
+# FreeSWITCH Speech AI - Add FreeSWITCH binaries to PATH
+export PATH="\$PATH:${FS_PREFIX}/bin"
+EOF
+        chmod 644 /etc/profile.d/freeswitch.sh
+        
+        # Create symbolic links for common commands
+        ln -sf ${FS_PREFIX}/bin/fs_cli /usr/local/bin/fs_cli 2>/dev/null || true
+        ln -sf ${FS_PREFIX}/bin/freeswitch /usr/local/bin/freeswitch 2>/dev/null || true
+        
+        log_success "FreeSWITCH binaries configured for system-wide access"
     fi
 else
     log_step "[Step 3/8] Skipping FreeSWITCH Installation"
@@ -920,10 +1104,11 @@ fi
 # ============================================================================
 
 if [ "$MODULE" != "freeswitch" ]; then
-    log_step "Configuring FreeSWITCH modules.conf.xml"
+    if [ -d "$FS_PREFIX" ]; then
+        log_step "Configuring FreeSWITCH modules.conf.xml"
 
-    MODULES_CONF="${FS_PREFIX}/conf/autoload_configs/modules.conf.xml"
-    if [ -f "$MODULES_CONF" ]; then
+        MODULES_CONF="${FS_PREFIX}/conf/autoload_configs/modules.conf.xml"
+        if [ -f "$MODULES_CONF" ]; then
         if ! grep -q "mod_audio_fork" "$MODULES_CONF" 2>/dev/null; then
             sed -i '/<\/modules>/i \    <!-- Speech Transcription Modules -->' "$MODULES_CONF"
         fi
@@ -945,6 +1130,13 @@ if [ "$MODULE" != "freeswitch" ]; then
         fi
 
         log_success "modules.conf.xml configured"
+        else
+            echo -e "${YELLOW}⚠ Warning: modules.conf.xml not found at $MODULES_CONF${NC}"
+            echo -e "${YELLOW}  Module will need to be manually added to FreeSWITCH configuration${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠ Warning: FreeSWITCH not found at $FS_PREFIX${NC}"
+        echo -e "${YELLOW}  Install FreeSWITCH first, then manually add module to modules.conf.xml${NC}"
     fi
 fi
 
@@ -1015,13 +1207,32 @@ echo "Build Logs: $LOG_DIR"
 echo ""
 echo "Next steps:"
 if should_install_freeswitch; then
-    echo "  1. Start FreeSWITCH: systemctl start freeswitch"
-    echo "  2. Or run directly: ${FS_PREFIX}/bin/freeswitch -nc"
+    echo "  1. Configure environment variables: sudo nano /etc/systemd/system/freeswitch.service.d/freeswitch.conf"
+    echo "  2. Reload systemd configuration: sudo systemctl daemon-reload"
+    echo "  3. Start FreeSWITCH service: sudo systemctl start freeswitch"
+    echo "  4. Check service status: sudo systemctl status freeswitch"
+    echo "  5. View logs: sudo journalctl -u freeswitch -f"
+    echo "  6. Or run directly: freeswitch -nc (available system-wide)"
+    echo ""
+    echo "FreeSWITCH Commands (available after logout/login or source /etc/profile.d/freeswitch.sh):"
+    echo "  - fs_cli (FreeSWITCH CLI)"
+    echo "  - freeswitch (FreeSWITCH daemon)"
+    echo ""
+    echo "Service Management:"
+    echo "  - Enable auto-start: sudo systemctl enable freeswitch (already done)"
+    echo "  - Stop service: sudo systemctl stop freeswitch"
+    echo "  - Restart service: sudo systemctl restart freeswitch"
+    echo "  - After editing environment: sudo systemctl daemon-reload && sudo systemctl restart freeswitch"
 fi
 if [ "$MODULE" != "freeswitch" ]; then
-    echo "  - Reload FreeSWITCH: ${FS_PREFIX}/bin/fs_cli -x 'reload mod_sofia'"
-    echo "  - Verify modules: ${FS_PREFIX}/bin/fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram|google'"
+    echo "  - Reload FreeSWITCH: fs_cli -x 'reload mod_sofia'"
+    echo "  - Verify modules: fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram|google'"
 fi
+echo ""
+echo "Configuration Files:"
+echo "  - Service: /etc/systemd/system/freeswitch.service"
+echo "  - Environment: /etc/systemd/system/freeswitch.service.d/freeswitch.conf"
+echo "  - FreeSWITCH config: ${FS_PREFIX}/conf/"
 echo ""
 echo "Logs are available at: $LOG_DIR"
 echo "To view a specific log: cat $LOG_DIR/<module>_<step>.log"
