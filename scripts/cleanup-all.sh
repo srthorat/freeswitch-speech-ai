@@ -8,6 +8,7 @@
 #   --module mod_aws_transcribe      Remove only mod_aws_transcribe and AWS SDK
 #   --module mod_deepgram_transcribe Remove only mod_deepgram_transcribe
 #   --module mod_google_transcribe   Remove only mod_google_transcribe and gRPC
+#   --module mod_google_transcribev2 Remove only mod_google_transcribev2 and Google Cloud C++
 #   --module all                     Remove everything (default)
 #
 # Usage:
@@ -43,7 +44,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 
 # Valid module names
-VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe")
+VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe" "mod_google_transcribev2")
 
 # ============================================================================
 # Helper Functions
@@ -100,6 +101,7 @@ while [[ $# -gt 0 ]]; do
             echo "  mod_aws_transcribe       Remove only mod_aws_transcribe and AWS SDK dependencies"
             echo "  mod_deepgram_transcribe  Remove only mod_deepgram_transcribe"
             echo "  mod_google_transcribe    Remove only mod_google_transcribe and gRPC dependencies"
+            echo "  mod_google_transcribev2  Remove only mod_google_transcribev2 and Google Cloud C++ dependencies"
             echo ""
             echo "Options:"
             echo "  --keep-sources    Keep source directories in /usr/local/src"
@@ -169,6 +171,11 @@ if should_remove_module "mod_google_transcribe"; then
     echo "  ✗ mod_google_transcribe module and binary"
 fi
 
+if should_remove_module "mod_google_transcribev2"; then
+    echo "  ✗ mod_google_transcribev2 module and binary"
+    echo "  ✗ Google Cloud C++ libraries (/usr/local/lib/libgoogle_cloud_cpp*)"
+fi
+
 # libwebsockets shared by audio_fork and deepgram
 if should_remove_module "mod_audio_fork" || should_remove_module "mod_deepgram_transcribe"; then
     echo "  ✗ libwebsockets (/usr/local/lib/libwebsockets*)"
@@ -227,6 +234,12 @@ if should_remove_module "mod_google_transcribe"; then
     log_remove "mod_google_transcribe"
     rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so*
     log_success "mod_google_transcribe removed"
+fi
+
+if should_remove_module "mod_google_transcribev2"; then
+    log_remove "mod_google_transcribev2"
+    rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribev2.so
+    log_success "mod_google_transcribev2 removed"
 fi
 
 # Remove FreeSWITCH
@@ -288,6 +301,17 @@ if should_remove_module "mod_google_transcribe"; then
     fi
 fi
 
+if should_remove_module "mod_google_transcribev2"; then
+    if grep -q "google_cloud_cpp=installed" "$MANIFEST_FILE" 2>/dev/null; then
+        log_remove "Google Cloud C++ libraries (system packages)"
+        apt-get remove -y libgoogle-cloud-cpp-dev > /dev/null 2>&1 || true
+        apt-get autoremove -y > /dev/null 2>&1 || true
+        log_success "Google Cloud C++ libraries removed"
+    else
+        log_skip "Google Cloud C++ libraries (was pre-existing or not installed)"
+    fi
+fi
+
 # Remove source directories
 if ! $KEEP_SOURCES; then
     log_remove "Source directories"
@@ -338,6 +362,9 @@ else
         if should_remove_module "mod_google_transcribe"; then
             sed -i '/^grpc=/d' "$MANIFEST_FILE" 2>/dev/null || true
             sed -i '/^googleapis=/d' "$MANIFEST_FILE" 2>/dev/null || true
+        fi
+        if should_remove_module "mod_google_transcribev2"; then
+            sed -i '/^google_cloud_cpp=/d' "$MANIFEST_FILE" 2>/dev/null || true
         fi
         log_success "Manifest updated"
     fi
