@@ -626,7 +626,7 @@ if should_install_freeswitch; then
             --exec-prefix=${FS_PREFIX} \
             --bindir=${FS_PREFIX}/bin \
             --sbindir=${FS_PREFIX}/bin \
-            --sysconfdir=${FS_PREFIX} \
+            --sysconfdir=${FS_PREFIX}/conf \
             --localstatedir=${FS_PREFIX} \
             --with-rundir=${FS_PREFIX}/run \
             --with-logdir=${FS_PREFIX}/log \
@@ -634,6 +634,7 @@ if should_install_freeswitch; then
             --enable-core-pgsql-support \
             --enable-core-odbc-support \
             --enable-tcmalloc \
+            --disable-cc \
             --without-python \
             --without-python3 \
             --without-java \
