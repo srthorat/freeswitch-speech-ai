@@ -130,7 +130,7 @@ fi
 if [ "$AUTO_YES" = false ]; then
     echo "This will:"
     echo "  1. Pull latest code from repository"
-    echo "  2. Rebuild all modules (mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe, mod_google_transcribe)"
+    echo "  2. Rebuild all modules (mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe, mod_google_transcribe, mod_google_transcribev2)"
     echo "  3. Replace existing modules"
     if [ "$NO_RESTART" = false ]; then
         echo "  4. Restart FreeSWITCH"
@@ -174,7 +174,7 @@ echo "Backing up existing modules..."
 BACKUP_DIR="${FS_PREFIX}/lib/freeswitch/mod/.backup.$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
-for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe; do
+for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe mod_google_transcribev2; do
     if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
         cp "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" "$BACKUP_DIR/"
         echo -e "${GREEN}✓${NC} Backed up ${module}.so"
@@ -304,6 +304,34 @@ check_success "Failed to install mod_google_transcribe" "${LOG_DIR}/update_mod_g
 
 echo -e "${GREEN}✓ mod_google_transcribe${NC}"
 
+# Build mod_google_transcribev2
+echo "Building mod_google_transcribev2..."
+cd ${SCRIPT_DIR}/../modules/mod_google_transcribev2
+
+# Check if module directory exists
+if [ ! -d "${SCRIPT_DIR}/../modules/mod_google_transcribev2" ]; then
+    echo -e "${YELLOW}⚠${NC}  mod_google_transcribev2 not found - skipping"
+else
+    # Build using Makefile
+    echo "  Cleaning previous build..."
+    log_command "mod_google_transcribev2 clean" "${LOG_DIR}/update_mod_google_transcribev2_clean.log" \
+        make clean
+    # Don't check success for clean, it's okay if it fails
+
+    echo "  Building mod_google_transcribev2..."
+    log_command "mod_google_transcribev2 make" "${LOG_DIR}/update_mod_google_transcribev2_make.log" \
+        make FS_PREFIX=${FS_PREFIX}
+    check_success "Failed to build mod_google_transcribev2" "${LOG_DIR}/update_mod_google_transcribev2_make.log"
+
+    # Install the module
+    echo "  Installing mod_google_transcribev2..."
+    log_command "mod_google_transcribev2 install" "${LOG_DIR}/update_mod_google_transcribev2_install.log" \
+        make install FS_PREFIX=${FS_PREFIX}
+    check_success "Failed to install mod_google_transcribev2" "${LOG_DIR}/update_mod_google_transcribev2_install.log"
+
+    echo -e "${GREEN}✓ mod_google_transcribev2${NC}"
+fi
+
 echo -e "${GREEN}✓ All modules rebuilt${NC}"
 
 # Step 3: Restart FreeSWITCH
@@ -344,6 +372,7 @@ echo "  ✓ mod_audio_fork"
 echo "  ✓ mod_aws_transcribe"
 echo "  ✓ mod_deepgram_transcribe"
 echo "  ✓ mod_google_transcribe"
+echo "  ✓ mod_google_transcribev2"
 echo ""
 echo "Backup location: $BACKUP_DIR"
 echo ""
