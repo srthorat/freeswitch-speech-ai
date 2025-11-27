@@ -39,24 +39,19 @@ sudo ./scripts/cleanup-all.sh --module <module-name>
 | Script | Description | Use Case |
 |--------|-------------|----------|
 | **install-all.sh** | Unified modular installer | Install FreeSWITCH, modules, or both via --module flag |
-| **install-modules-only.sh** | Legacy module-only installer | Deprecated - use install-all.sh --module instead |
 | **preflight-check.sh** | System requirements validation | Run before installation to catch issues early |
-| **configure-services.sh** | Interactive API credentials setup | Configure transcription service API keys |
 
 ### 🧹 Cleanup Scripts
 
 | Script | Description | Safety Features |
 |--------|-------------|-----------------|
 | **cleanup-all.sh** | Unified modular cleanup | Remove FreeSWITCH, modules, or both via --module flag |
-| **cleanup-modules.sh** | Legacy module cleanup | Deprecated - use cleanup-all.sh --module instead |
 
 ### 🔧 Maintenance Scripts
 
 | Script | Description | Typical Use |
 |--------|-------------|-------------|
-| **update-modules.sh** | Fast module updates (3-5 min) | Update modules without rebuilding dependencies |
-| **backup.sh** | Create backup of FreeSWITCH installation | Before upgrades or major changes |
-| **rollback.sh** | Restore from backup | Recover from failed upgrades |
+| **update-modules.sh** | Fast module updates (3-5 min) | Update modules without rebuilding dependencies (auto-creates backups) |
 
 ### 📊 Monitoring Scripts
 
@@ -86,10 +81,7 @@ sudo ./scripts/cleanup-all.sh --module <module-name>
 # 2. Install everything (FreeSWITCH + all modules)
 sudo ./scripts/install-all.sh --module all
 
-# 3. Configure API credentials
-./scripts/configure-services.sh
-
-# 4. Verify installation
+# 3. Verify installation
 ./scripts/status.sh
 ./scripts/health-check.sh
 ```
@@ -123,7 +115,7 @@ sudo ./scripts/cleanup-all.sh --module all --yes
 
 ### Update Modules
 ```bash
-# Fast update (5-10 minutes)
+# Fast update (5-10 minutes) - automatically creates backup before updating
 sudo ./scripts/update-modules.sh
 
 # Update without restarting FreeSWITCH
@@ -131,30 +123,9 @@ sudo ./scripts/update-modules.sh --no-restart
 
 # Update with 8 CPU cores
 sudo ./scripts/update-modules.sh --build-cpus 8
-```
 
-### Backup & Restore
-```bash
-# Create backup
-sudo ./scripts/backup.sh
-
-# Create backup with custom location
-sudo ./scripts/backup.sh --backup-dir /mnt/backups
-
-# Restore from backup (interactive)
-sudo ./scripts/rollback.sh
-
-# Restore specific backup
-sudo ./scripts/rollback.sh --backup /var/backups/freeswitch/backup-20251123-103000.tar.gz
-```
-
-### Configure API Credentials
-```bash
-# Interactive wizard
-./scripts/configure-services.sh
-
-# Generates .env.transcription file with credentials
-# Automatically configures systemd (if running as root)
+# Note: Backups are automatically created in:
+# /usr/local/freeswitch/lib/freeswitch/mod/.backup.YYYYMMDD_HHMMSS/
 ```
 
 ### Monitoring
@@ -386,106 +357,32 @@ sudo ./scripts/cleanup-modules.sh
 
 ---
 
-### backup.sh
-
-**Purpose:** Create backup before upgrades or changes
-
-**What it backs up:**
-- FreeSWITCH binaries
-- Modules
-- Configuration files
-- Recent logs (last 7 days)
-- Systemd service
-
-**Options:**
-- `--freeswitch-prefix PATH` - FreeSWITCH directory
-- `--backup-dir PATH` - Backup location (default: /var/backups/freeswitch)
-- `--name NAME` - Backup name
-- `--no-compress` - Don't compress (faster but larger)
-
-**Default location:** `/var/backups/freeswitch/backup-YYYYMMDD-HHMMSS.tar.gz`
-
-**Example:**
-```bash
-sudo ./scripts/backup.sh
-sudo ./scripts/backup.sh --backup-dir /mnt/backups --no-compress
-```
-
----
-
-### rollback.sh
-
-**Purpose:** Restore FreeSWITCH from backup
-
-**What it does:**
-1. Lists available backups
-2. Stops FreeSWITCH
-3. Removes current installation
-4. Restores from backup
-5. Starts FreeSWITCH
-
-**Options:**
-- `--freeswitch-prefix PATH` - FreeSWITCH directory
-- `--backup FILE` - Specific backup to restore
-- `--yes` - Skip confirmations
-
-**Example:**
-```bash
-sudo ./scripts/rollback.sh
-sudo ./scripts/rollback.sh --backup /var/backups/freeswitch/backup-20251123-103000.tar.gz
-```
-
----
-
-### configure-services.sh
-
-**Purpose:** Interactive wizard for configuring API credentials
-
-**What it configures (for Plain Linux):**
-- Deepgram API key
-- AWS credentials (permanent or STS)
-- Pusher credentials (for real-time event delivery)
-
-> **Note:** The wizard also prompts for Azure and Google Cloud credentials, but these can be skipped as those modules are only available in Docker deployments.
-
-**Output files:**
-- `.env.transcription` - Environment file
-- `/etc/systemd/system/freeswitch.service.d/transcription.conf` - Systemd config (if root)
-
-**Options:**
-- `--output FILE` - Output environment file
-- `--docker-compose` - Update docker-compose.yml
-- `--freeswitch-prefix PATH` - FreeSWITCH directory
-
-**Example:**
-```bash
-./scripts/configure-services.sh
-sudo ./scripts/configure-services.sh  # Also configures systemd
-```
-
----
-
 ### status.sh
 
 **Purpose:** Quick status overview
 
-**What it shows:**
-- FreeSWITCH running status
+**Features:**
+- ✨ **Auto-detects FreeSWITCH installation** (checks PATH and standard directories)
+- Shows FreeSWITCH running status
 - Module installation and load status
 - Manifest components
 
 **Options:**
-- `--freeswitch-prefix PATH` - FreeSWITCH directory
+- `--freeswitch-prefix PATH` - Override auto-detection and use specific FreeSWITCH directory
 
 **Example:**
 ```bash
 ./scripts/status.sh
 
 # Output:
+# FreeSWITCH Prefix: /usr/local/freeswitch
 # ✓ FreeSWITCH: Running
 #   ✓ mod_audio_fork: Installed and loaded
 #   ✓ mod_aws_transcribe: Installed and loaded
 #   ⚠  mod_deepgram_transcribe: Installed but not loaded
+
+# Custom prefix
+./scripts/status.sh --freeswitch-prefix /opt/freeswitch
 ```
 
 ---
@@ -494,9 +391,10 @@ sudo ./scripts/configure-services.sh  # Also configures systemd
 
 **Purpose:** Comprehensive health validation
 
-**What it checks:**
-- FreeSWITCH responsive
-- All modules loaded
+**Features:**
+- ✨ **Auto-detects FreeSWITCH installation** (checks PATH and standard directories)
+- FreeSWITCH responsive check
+- All modules loaded verification
 - Module dependencies (ldd)
 - Systemd service status
 - Configuration files
@@ -507,14 +405,22 @@ sudo ./scripts/configure-services.sh  # Also configures systemd
 - `1` - One or more failures
 
 **Options:**
-- `--freeswitch-prefix PATH` - FreeSWITCH directory
+- `--freeswitch-prefix PATH` - Override auto-detection and use specific FreeSWITCH directory
 
 **Example:**
 ```bash
 ./scripts/health-check.sh
 
+# Output:
+# FreeSWITCH Prefix: /usr/local/freeswitch
+# ✓ FreeSWITCH service... Running
+# ✓ FreeSWITCH CLI connectivity... Responsive
+
 # CI/CD usage
 ./scripts/health-check.sh || exit 1
+
+# Custom prefix
+./scripts/health-check.sh --freeswitch-prefix /opt/freeswitch
 ```
 
 ---
@@ -533,27 +439,18 @@ sudo ./scripts/configure-services.sh  # Also configures systemd
 # 2. Install everything
 sudo ./scripts/install-all.sh --build-cpus 8
 
-# 3. Configure services
-./scripts/configure-services.sh
-
-# 4. Verify
+# 3. Verify installation
 ./scripts/status.sh
 ./scripts/health-check.sh
 ```
 
 ### Safe Update Workflow
 ```bash
-# 1. Create backup
-sudo ./scripts/backup.sh
-
-# 2. Update modules
+# 1. Update modules (auto-creates backup)
 sudo ./scripts/update-modules.sh
 
-# 3. Verify
+# 2. Verify
 ./scripts/health-check.sh
-
-# 4. If issues, rollback
-sudo ./scripts/rollback.sh
 ```
 
 ### Troubleshooting Workflow

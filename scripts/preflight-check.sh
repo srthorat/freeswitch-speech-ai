@@ -235,9 +235,9 @@ echo "🔍 Checking for Conflicting Installations:"
 CONFLICTS_FOUND=false
 
 # Check for existing FreeSWITCH
-if [ -d "/usr/local/freeswitch" ]; then
-    echo -e "  ${YELLOW}ℹ${NC}  FreeSWITCH already installed at /usr/local/freeswitch"
-    echo "    Use install-modules-only.sh if you only need to update modules"
+if [ -d "/usr/local/freeswitch" ] || [ -d "/opt/freeswitch" ] || [ -d "/etc/freeswitch" ]; then
+    echo -e "  ${YELLOW}ℹ${NC}  FreeSWITCH already installed"
+    echo "    Use install-all.sh --module <module> to update specific modules"
     CONFLICTS_FOUND=true
 fi
 
@@ -281,8 +281,9 @@ if [ $FAILED_CHECKS -eq 0 ] && [ $WARNING_CHECKS -eq 0 ]; then
     echo "  System is ready for FreeSWITCH Speech AI installation."
     echo ""
     echo "Next steps:"
-    echo "  1. Run: sudo ./scripts/install-all.sh"
-    echo "  2. Or:  sudo ./scripts/install-modules-only.sh (if FreeSWITCH already installed)"
+    echo "  1. Full installation:    sudo ./scripts/install-all.sh"
+    echo "  2. Module only:          sudo ./scripts/install-all.sh --module <module>"
+    echo "  3. Update modules:       sudo ./scripts/update-modules.sh"
     exit 0
 elif [ $FAILED_CHECKS -eq 0 ]; then
     echo -e "${YELLOW}⚠ ${WARNING_CHECKS} warning(s) found${NC}"

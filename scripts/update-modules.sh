@@ -264,39 +264,23 @@ echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
 echo "Building mod_google_transcribe..."
 cd ${SCRIPT_DIR}/../modules/mod_google_transcribe
 
-# Check for required tools
-if ! command -v protoc &> /dev/null; then
-    echo -e "${RED}✗ protoc not found${NC}"
-    echo "Protocol Buffers compiler is required"
-    exit 1
-fi
-
-if ! command -v grpc_cpp_plugin &> /dev/null; then
-    echo -e "${RED}✗ grpc_cpp_plugin not found${NC}"
-    echo "gRPC C++ plugin is required"
-    exit 1
-fi
-
-# Generate protobuf files if they don't exist or are older than .proto file
+# Generate protobuf files if needed
 if [ ! -f "speech.pb.h" ] || [ "speech.proto" -nt "speech.pb.h" ]; then
     echo "  Generating protobuf files..."
-    log_command "protoc" "${LOG_DIR}/update_mod_google_transcribe_protoc.log" \
-        protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=`which grpc_cpp_plugin` speech.proto
-    check_success "Failed to generate protobuf files" "${LOG_DIR}/update_mod_google_transcribe_protoc.log"
+    log_command "protobuf generation" "${LOG_DIR}/update_mod_google_transcribe_proto.log" \
+        protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=$(which grpc_cpp_plugin) speech.proto
+    check_success "Failed to generate protobuf files" "${LOG_DIR}/update_mod_google_transcribe_proto.log"
 fi
 
 # Build using Makefile
 echo "  Cleaning previous build..."
-log_command "mod_google_transcribe clean" "${LOG_DIR}/update_mod_google_transcribe_clean.log" \
-    make clean
-# Don't check success for clean, it's okay if it fails
+make clean > /dev/null 2>&1
 
 echo "  Building mod_google_transcribe..."
-log_command "mod_google_transcribe make" "${LOG_DIR}/update_mod_google_transcribe_make.log" \
-    make
+log_command "mod_google_transcribe build" "${LOG_DIR}/update_mod_google_transcribe_make.log" \
+    make -j ${BUILD_CPUS}
 check_success "Failed to build mod_google_transcribe" "${LOG_DIR}/update_mod_google_transcribe_make.log"
 
-# Install the module
 echo "  Installing mod_google_transcribe..."
 log_command "mod_google_transcribe install" "${LOG_DIR}/update_mod_google_transcribe_install.log" \
     make install
@@ -308,29 +292,21 @@ echo -e "${GREEN}✓ mod_google_transcribe${NC}"
 echo "Building mod_google_transcribev2..."
 cd ${SCRIPT_DIR}/../modules/mod_google_transcribev2
 
-# Check if module directory exists
-if [ ! -d "${SCRIPT_DIR}/../modules/mod_google_transcribev2" ]; then
-    echo -e "${YELLOW}⚠${NC}  mod_google_transcribev2 not found - skipping"
-else
-    # Build using Makefile
-    echo "  Cleaning previous build..."
-    log_command "mod_google_transcribev2 clean" "${LOG_DIR}/update_mod_google_transcribev2_clean.log" \
-        make clean
-    # Don't check success for clean, it's okay if it fails
+# Build using Makefile
+echo "  Cleaning previous build..."
+make clean > /dev/null 2>&1
 
-    echo "  Building mod_google_transcribev2..."
-    log_command "mod_google_transcribev2 make" "${LOG_DIR}/update_mod_google_transcribev2_make.log" \
-        make FS_PREFIX=${FS_PREFIX}
-    check_success "Failed to build mod_google_transcribev2" "${LOG_DIR}/update_mod_google_transcribev2_make.log"
+echo "  Building mod_google_transcribev2..."
+log_command "mod_google_transcribev2 build" "${LOG_DIR}/update_mod_google_transcribev2_make.log" \
+    make -j ${BUILD_CPUS} FS_PREFIX=${FS_PREFIX}
+check_success "Failed to build mod_google_transcribev2" "${LOG_DIR}/update_mod_google_transcribev2_make.log"
 
-    # Install the module
-    echo "  Installing mod_google_transcribev2..."
-    log_command "mod_google_transcribev2 install" "${LOG_DIR}/update_mod_google_transcribev2_install.log" \
-        make install FS_PREFIX=${FS_PREFIX}
-    check_success "Failed to install mod_google_transcribev2" "${LOG_DIR}/update_mod_google_transcribev2_install.log"
+echo "  Installing mod_google_transcribev2..."
+log_command "mod_google_transcribev2 install" "${LOG_DIR}/update_mod_google_transcribev2_install.log" \
+    make install FS_PREFIX=${FS_PREFIX}
+check_success "Failed to install mod_google_transcribev2" "${LOG_DIR}/update_mod_google_transcribev2_install.log"
 
-    echo -e "${GREEN}✓ mod_google_transcribev2${NC}"
-fi
+echo -e "${GREEN}✓ mod_google_transcribev2${NC}"
 
 echo -e "${GREEN}✓ All modules rebuilt${NC}"
 

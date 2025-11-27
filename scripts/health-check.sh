@@ -18,8 +18,48 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-FS_PREFIX="/usr/local/freeswitch"
 FAILED_CHECKS=0
+
+# Detect FreeSWITCH installation
+detect_freeswitch_installation() {
+    local detected_prefix=""
+    
+    # Check if freeswitch is in PATH
+    if command -v freeswitch &> /dev/null; then
+        local fs_bin=$(command -v freeswitch)
+        detected_prefix=$(dirname $(dirname "$fs_bin"))
+        echo "$detected_prefix"
+        return 0
+    fi
+    
+    # Check standard installation directories
+    local standard_paths=(
+        "/usr/local/freeswitch"
+        "/opt/freeswitch"
+        "/usr/freeswitch"
+    )
+    
+    for path in "${standard_paths[@]}"; do
+        if [ -f "$path/bin/freeswitch" ] || [ -d "$path/include/freeswitch" ]; then
+            echo "$path"
+            return 0
+        fi
+    done
+    
+    # Check /etc/freeswitch (configuration directory)
+    if [ -d "/etc/freeswitch" ]; then
+        echo "/usr"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Default FreeSWITCH installation prefix - auto-detect if not specified
+FS_PREFIX=$(detect_freeswitch_installation)
+if [ -z "$FS_PREFIX" ]; then
+    FS_PREFIX="/usr/local/freeswitch"
+fi
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -38,6 +78,7 @@ done
 echo "========================================"
 echo "FreeSWITCH Speech AI - Health Check"
 echo "========================================"
+echo "FreeSWITCH Prefix: $FS_PREFIX"
 echo ""
 
 # Check 1: FreeSWITCH running
