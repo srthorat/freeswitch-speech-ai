@@ -590,11 +590,12 @@ if should_install_freeswitch; then
         # Build FreeSWITCH
         log_substep "Building FreeSWITCH 1.10.11 (this takes 15-20 minutes)..."
 
-        # Pre-create directory structure to prevent autoconf nesting
-        log_substep "Creating FreeSWITCH directory structure..."
-        mkdir -p ${FS_PREFIX}/{conf,log,run,db,lib/freeswitch/mod,bin,share,include}
+        # Pre-create runtime directories to prevent autoconf nesting
+        # Note: We don't create conf/ here - let 'make install' create and populate it
+        log_substep "Creating FreeSWITCH runtime directories..."
+        mkdir -p ${FS_PREFIX}/{log,run,db}
         chown -R root:root ${FS_PREFIX}
-        log_success "Directory structure created"
+        log_success "Runtime directories created"
 
         cd /usr/local/src || exit 1
         if [ ! -d "freeswitch" ]; then
@@ -627,9 +628,9 @@ if should_install_freeswitch; then
             --exec-prefix=${FS_PREFIX} \
             --bindir=${FS_PREFIX}/bin \
             --sbindir=${FS_PREFIX}/bin \
-            --with-sysconfdir=${FS_PREFIX}/conf \
+            --sysconfdir=${FS_PREFIX}/conf \
             --with-dbdir=${FS_PREFIX}/db \
-            --with-localstatedir=${FS_PREFIX} \
+            --localstatedir=${FS_PREFIX} \
             --with-rundir=${FS_PREFIX}/run \
             --with-logdir=${FS_PREFIX}/log \
             --with-modinstdir=${FS_PREFIX}/lib/freeswitch/mod \
