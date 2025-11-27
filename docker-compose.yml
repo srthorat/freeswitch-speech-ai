@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   freeswitch-speech-ai:
-    image: freeswitch-speech-ai:all-modules
+    image: freeswitch-speech-ai:latest
     container_name: freeswitch-speech-ai
     hostname: freeswitch
 
@@ -14,7 +14,7 @@ services:
         BUILD_CPUS: 4
         AWS_SDK_CPP_VERSION: 1.11.345
         LIBWEBSOCKETS_VERSION: 4.3.3
-        GRPC_VERSION: 1.64.2
+        GOOGLE_CLOUD_CPP_VERSION: 2.30.0
 
     # Network ports
     ports:
@@ -29,50 +29,48 @@ services:
       - "16384-16484:16384-16484/udp"
 
     # Environment variables for all transcription services
+    # Mirrors /etc/systemd/system/freeswitch.service.d/freeswitch.conf
     environment:
-      # Deepgram API Key (for mod_deepgram_transcribe)
-      # - DEEPGRAM_API_KEY=your_deepgram_api_key_here
+      # Library Path (required for modules)
+      - LD_LIBRARY_PATH=/usr/local/lib
 
-      # AWS Credentials (for mod_aws_transcribe - optional if using IAM roles)
-      # - AWS_ACCESS_KEY_ID=your_access_key_here
-      # - AWS_SECRET_ACCESS_KEY=your_secret_key_here
-      # - AWS_REGION=us-east-1
-      # - AWS_SESSION_TOKEN=your_session_token_here  # For temporary credentials (ASIA*)
-
-      # Azure Cognitive Services (for mod_azure_transcribe)
-      # - AZURE_SUBSCRIPTION_KEY=your_azure_key_here
-      # - AZURE_REGION=eastus
-
-      # Google Cloud (for mod_google_transcribe)
+      # Google Cloud Configuration (for mod_google_transcribev2)
+      # Uncomment and set your values:
       # - GOOGLE_APPLICATION_CREDENTIALS=/etc/google/credentials.json
+      # - GCP_PROJECT_ID=your-project-id
+      # - GCP_LOCATION=us-central1
 
-      # Pusher (Real-time Event Delivery - optional)
-      # - PUSHER_APP_ID=123456
-      # - PUSHER_KEY=your_pusher_key
-      # - PUSHER_SECRET=your_pusher_secret
-      # - PUSHER_CLUSTER=ap2
+      # AWS Configuration (for mod_aws_transcribe)
+      # Uncomment and set your values:
+      # - AWS_ACCESS_KEY_ID=your-access-key
+      # - AWS_SECRET_ACCESS_KEY=your-secret-key
+      # - AWS_DEFAULT_REGION=us-east-1
+
+      # Deepgram Configuration (for mod_deepgram_transcribe)
+      # Uncomment and set your values:
+      # - DEEPGRAM_API_KEY=your-deepgram-api-key
+
+      # Pusher Configuration (for real-time transcript delivery)
+      # Uncomment and set your values:
+      # - PUSHER_APP_ID=your-app-id
+      # - PUSHER_KEY=your-key
+      # - PUSHER_SECRET=your-secret
+      # - PUSHER_CLUSTER=us2
+
+      # Audio Processing Configuration
+      # Uncomment and adjust as needed:
+      # - MOD_AUDIO_FORK_BUFFER_SECS=3
+      # - MOD_AUDIO_FORK_SERVICE_THREADS=2
 
       # FreeSWITCH logging
       - FREESWITCH_LOG_LEVEL=INFO
-
-      # mod_audio_fork settings (optional)
-      # Buffer size in seconds (default: 2, min: 1, max: 5)
-      # Controls audio buffering before sending to WebSocket
-      - MOD_AUDIO_FORK_BUFFER_SECS=2
-
-      # Number of libwebsocket service threads (default: 1, min: 1, max: 5)
-      # These threads handle sending messages for all sessions
-      - MOD_AUDIO_FORK_SERVICE_THREADS=1
-
-      # WebSocket sub-protocol name (default: "audio.drachtio.org")
-      # - MOD_AUDIO_FORK_SUBPROTOCOL_NAME=audio.drachtio.org
 
     # Volume mounts for persistence and configuration
     volumes:
       # Logs
       - ./logs:/usr/local/freeswitch/log
 
-      # Google Cloud credentials (uncomment and set path if using mod_google_transcribe)
+      # Google Cloud credentials (uncomment and set path if using mod_google_transcribev2)
       # - /path/to/your/google-credentials.json:/etc/google/credentials.json:ro
 
       # Configuration (optional - uncomment to customize)
