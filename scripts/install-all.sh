@@ -532,7 +532,15 @@ if should_install_freeswitch; then
 
                 log_command "FreeSWITCH configure" "${LOG_DIR}/freeswitch_configure.log" \
                     ./configure \
-                    --prefix=$FS_PREFIX \
+                    --prefix=${FS_PREFIX} \
+                    --exec-prefix=${FS_PREFIX} \
+                    --bindir=${FS_PREFIX}/bin \
+                    --sbindir=${FS_PREFIX}/bin \
+                    --sysconfdir=${FS_PREFIX}/conf \
+                    --localstatedir=${FS_PREFIX} \
+                    --with-rundir=${FS_PREFIX}/run \
+                    --with-logdir=${FS_PREFIX}/log \
+                    --with-modinstdir=${FS_PREFIX}/lib/freeswitch/mod \
                     --enable-core-pgsql-support \
                     --enable-core-odbc-support \
                     --enable-tcmalloc \
@@ -651,7 +659,15 @@ if should_install_freeswitch; then
 
         log_command "FreeSWITCH configure" "${LOG_DIR}/freeswitch_configure.log" \
             ./configure \
-            --prefix=$FS_PREFIX \
+            --prefix=${FS_PREFIX} \
+            --exec-prefix=${FS_PREFIX} \
+            --bindir=${FS_PREFIX}/bin \
+            --sbindir=${FS_PREFIX}/bin \
+            --sysconfdir=${FS_PREFIX}/conf \
+            --localstatedir=${FS_PREFIX} \
+            --with-rundir=${FS_PREFIX}/run \
+            --with-logdir=${FS_PREFIX}/log \
+            --with-modinstdir=${FS_PREFIX}/lib/freeswitch/mod \
             --enable-core-pgsql-support \
             --enable-core-odbc-support \
             --enable-tcmalloc \
