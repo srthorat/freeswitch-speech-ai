@@ -1,601 +1,486 @@
+#include <cstdlib>
+#include <algorithm>
+#include <future>
+
 #include <switch.h>
 #include <switch_json.h>
-#include <string.h>
-#include <string>
-#include <mutex>
-#include <thread>
-#include <list>
-#include <algorithm>
-#include <functional>
-#include <cassert>
-#include <cstdlib>
-#include <fstream>
-#include <sstream>
-#include <iostream>
-#include <memory>
-#include <chrono>
-#include <queue>
-#include <condition_variable>
+#include <grpc++/grpc++.h>
 
-#include <google/cloud/speech/v2/speech_client.h>
-#include <grpcpp/grpcpp.h>
+#include "speech.grpc.pb.h"
+#include "speech.pb.h"
+
+#include <switch_json.h>
 
 #include "mod_google_transcribev2.h"
 
-namespace gc = ::google::cloud;
-namespace speech = ::google::cloud::speech_v2;
+using google::cloud::speech::v2::RecognitionConfig;
+using google::cloud::speech::v2::Speech;
+using google::cloud::speech::v2::StreamingRecognizeRequest;
+using google::cloud::speech::v2::StreamingRecognizeResponse;
+using google::cloud::speech::v2::StreamingRecognitionConfig;
+using google::cloud::speech::v2::RecognitionFeatures;
+using google::cloud::speech::v2::SpeakerDiarizationConfig;
+using google::cloud::speech::v2::SpeechAdaptation;
+using google::cloud::speech::v2::PhraseSet;
+using google::cloud::speech::v2::AutoDetectDecodingConfig;
+using google::cloud::speech::v2::ExplicitDecodingConfig;
+// using google::cloud::speech::v2::Phrase; // Not available in v2
 
-#define RTP_PACKETIZATION_PERIOD 20
-#define FRAME_SIZE_8000  320 /* 20ms frame at 8 kHz (1 channel) */
+#define CHUNKSIZE (320)
 
 namespace {
-  static const char *requestedBufferSecs = std::getenv("MOD_AUDIO_FORK_BUFFER_SECS");
-  static int nAudioBufferSecs = std::max(1, std::min(requestedBufferSecs ? ::atoi(requestedBufferSecs) : 2, 5));
-  static unsigned int idxCallCount = 0;
+  // Utility functions
+}
+class GStreamer;
 
-  /* ============================================================================
-   * Audio Buffer Class - Handles chunked audio buffering
-   * ============================================================================ */
-  class AudioBuffer {
-  public:
-    AudioBuffer(size_t max_size = 4096 * 100) : max_size_(max_size) {}
+class GStreamer {
+public:
+	GStreamer(
+    switch_core_session_t *session, 
+    uint32_t channels, 
+    char* lang, 
+    int interim, 
+    uint32_t config_sample_rate,
+    char* project_id, 
+    char* location_id) : 
+		m_session(session), m_writesDone(false), m_connected(false), m_interim(interim), m_finishing(false), m_packets(0) {
 
-    bool write(const uint8_t* data, size_t len) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (buffer_.size() + len > max_size_) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
-          "AudioBuffer overflow: size=%zu, incoming=%zu, max=%zu\n",
-          buffer_.size(), len, max_size_);
-        return false;
-      }
-      buffer_.insert(buffer_.end(), data, data + len);
-      return true;
+    const char* var;
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+
+		m_request.set_recognizer(std::string("projects/") + project_id + "/locations/" + location_id + "/recognizers/_");
+
+		StreamingRecognitionConfig* streaming_config = m_request.mutable_streaming_config();
+		RecognitionConfig* config = streaming_config->mutable_config();
+
+		// Set explicit decoding config
+		ExplicitDecodingConfig* explicit_config = config->mutable_explicit_decoding_config();
+		explicit_config->set_encoding(ExplicitDecodingConfig::LINEAR16);
+		explicit_config->set_sample_rate_hertz(config_sample_rate);
+		explicit_config->set_audio_channel_count(channels);
+
+		config->add_language_codes(lang);
+
+		// Configure features
+		RecognitionFeatures* features = config->mutable_features();
+
+		// V2 API: Enable word confidence and timing
+		features->set_enable_word_confidence(true);
+		features->set_enable_word_time_offsets(true);
+
+		// V2 API: Multi-channel mode (stereo)
+		if (channels > 1) {
+			features->set_multi_channel_mode(RecognitionFeatures::SEPARATE_RECOGNITION_PER_CHANNEL);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: multi-channel mode enabled\n");
+		}
+
+		// Set model if specified
+		if ((var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_MODEL"))) {
+			config->set_model(var);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: model: %s\n", var);
+		} else {
+			config->set_model("long");
+		}
+
+		// V2 API: Enable automatic punctuation
+		if (switch_true(switch_channel_get_variable(channel, "GOOGLE_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION"))) {
+			features->set_enable_automatic_punctuation(true);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: automatic punctuation enabled\n");
+		}
+
+		// V2 API: Profanity filter
+		if (switch_true(switch_channel_get_variable(channel, "GOOGLE_SPEECH_PROFANITY_FILTER"))) {
+			features->set_profanity_filter(true);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: profanity filter enabled\n");
+		}
+
+		// V2 API: Speaker diarization
+		if (switch_true(switch_channel_get_variable(channel, "GOOGLE_SPEECH_ENABLE_SPEAKER_DIARIZATION"))) {
+			SpeakerDiarizationConfig* diarization_config = features->mutable_diarization_config();
+			diarization_config->set_min_speaker_count(1);
+			diarization_config->set_max_speaker_count(6);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: speaker diarization enabled\n");
+
+			if ((var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_SPEAKER_DIARIZATION_MIN_SPEAKER_COUNT"))) {
+				int count = std::max(atoi(var), 1);
+				diarization_config->set_min_speaker_count(count);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: min speaker count: %d\n", count);
+			}
+			if ((var = switch_channel_get_variable(channel, "GOOGLE_SPEECH_SPEAKER_DIARIZATION_MAX_SPEAKER_COUNT"))) {
+				int count = std::max(atoi(var), 2);
+				diarization_config->set_max_speaker_count(count);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2: max speaker count: %d\n", count);
+			}
+		}
+
+		// V2 API: Voice activity events 
+		streaming_config->set_enable_voice_activity_events(true);
+
+		// create the channel and stub
+		auto creds = grpc::GoogleDefaultCredentials();
+		auto channel_grpc = grpc::CreateChannel("speech.googleapis.com", creds);
+		m_stub = Speech::NewStub(channel_grpc);
+
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "GStreamer %p created\n", this);	
+	}
+
+	~GStreamer() {
+		//switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "GStreamer::~GStreamer - deleting channel and stub: %p\n", (void*)this);
+	}
+
+  void connect() {
+    assert(!m_connected);
+    // Begin a stream.
+  	m_streamer = m_stub->StreamingRecognize(&m_context);
+    m_connected = true;
+
+    // read thread is waiting on this
+    m_promise.set_value();
+
+  	// Write the first request, containing the config only.
+  	m_streamer->Write(m_request);
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p got stream ready\n", this);	
+  }
+
+  bool write(void* data, uint32_t datalen) {
+    if (m_writesDone) {
+      return false;
     }
 
-    std::vector<uint8_t> read(size_t len) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      size_t to_read = std::min(len, buffer_.size());
-      std::vector<uint8_t> result(buffer_.begin(), buffer_.begin() + to_read);
-      buffer_.erase(buffer_.begin(), buffer_.begin() + to_read);
-      return result;
+    // Send audio content.
+    StreamingRecognizeRequest request;
+    request.set_audio(data, datalen);
+    bool ok = m_streamer->Write(request);
+    if (!ok) {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "GStreamer %p stream Write failed\n", this);
     }
+    m_packets++;
+    return ok;
+  }
 
-    std::vector<uint8_t> readAll() {
-      std::lock_guard<std::mutex> lock(mutex_);
-      std::vector<uint8_t> result = buffer_;
-      buffer_.clear();
-      return result;
+	void writesDone() {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p writesDone\n", this);
+    m_writesDone = true;
+		m_streamer->WritesDone();
+	}
+
+  bool read(StreamingRecognizeResponse* response) {
+    return m_streamer->Read(response);
+  }
+
+  grpc::Status finish() {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p finish\n", this);
+    return m_streamer->Finish();
+  }
+
+  void startRead() {
+    m_future = std::async(std::launch::async, [this]{
+      return this->read_loop();
+    });
+  }
+
+  void finishRead() {
+    m_finishing = true;
+    if (m_future.valid()) {
+      m_future.get();
     }
+  }
 
-    size_t size() const {
-      std::lock_guard<std::mutex> lock(mutex_);
-      return buffer_.size();
-    }
+private:
 
-    void clear() {
-      std::lock_guard<std::mutex> lock(mutex_);
-      buffer_.clear();
-    }
+  void read_loop() {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p read_loop started\n", this);
+    
+    // wait for the read loop to be started
+    std::shared_future<void> sf(m_promise.get_future());
+    sf.wait();
 
-  private:
-    mutable std::mutex mutex_;
-    std::vector<uint8_t> buffer_;
-    size_t max_size_;
-  };
+    StreamingRecognizeResponse response;
+    while (!m_finishing && read(&response)) {  // Returns false when no more to read.
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
+        "GStreamer %p read_loop got a response with %d results\n", this, response.results_size());
 
-  /* ============================================================================
-   * Google Transcribe Session Class
-   * ============================================================================ */
-  class GoogleTranscribeSession {
-  public:
-    GoogleTranscribeSession(
-      switch_core_session_t* session,
-      responseHandler_t responseHandler,
-      uint32_t sample_rate,
-      uint32_t channels,
-      const char* lang,
-      bool interim,
-      const char* bugname,
-      const char* metadata)
-      : session_(session)
-      , responseHandler_(responseHandler)
-      , sample_rate_(sample_rate)
-      , channels_(channels)
-      , language_(lang ? lang : "en-US")
-      , interim_(interim)
-      , bugname_(bugname ? bugname : "google_transcribev2")
-      , metadata_(metadata ? metadata : "")
-      , is_finished_(false)
-      , result_id_(1)
-    {
-      // Get Google Cloud configuration from environment
-      project_id_ = std::getenv("GCP_PROJECT_ID");
-      if (!project_id_) project_id_ = "your-project-id";
+      for (int r = 0; r < response.results_size(); ++r) {
+        auto result = response.results(r);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
+          "GStreamer %p read_loop processing result %d, is_final: %s, alternatives: %d\n", 
+          this, r, result.is_final() ? "true" : "false", result.alternatives_size());
 
-      location_ = std::getenv("GCP_LOCATION");
-      if (!location_) location_ = "us-central1";
+        for (int a = 0; a < result.alternatives_size(); ++a) {
+          auto alternative = result.alternatives(a);
+          
+          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
+            "GStreamer %p read_loop alternative %d transcript: %s\n", 
+            this, a, alternative.transcript().c_str());
 
-      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-        "GoogleTranscribeSession created: project=%s, location=%s, lang=%s, rate=%d, channels=%d\n",
-        project_id_, location_, language_.c_str(), sample_rate_, channels_);
-    }
+          // Create JSON response
+          cJSON *jResult = cJSON_CreateObject();
+          cJSON *jAlternatives = cJSON_CreateArray();
+          cJSON *jAlternative = cJSON_CreateObject();
 
-    ~GoogleTranscribeSession() {
-      stop();
-    }
-
-    bool start() {
-      try {
-        // Create Google Speech client
-        client_ = std::make_unique<speech::SpeechClient>(speech::MakeSpeechConnection());
-
-        // Build recognizer name: projects/{project}/locations/{location}/recognizers/_
-        std::string recognizer = "projects/" + std::string(project_id_) +
-                                "/locations/" + std::string(location_) +
-                                "/recognizers/_";
-
-        // Create recognition config
-        speech::v2::RecognitionConfig config;
-
-        // Set explicit decoding config
-        auto* decoding_config = config.mutable_explicit_decoding_config();
-        decoding_config->set_encoding(speech::v2::ExplicitDecodingConfig::LINEAR16);
-        decoding_config->set_sample_rate_hertz(sample_rate_);
-        decoding_config->set_audio_channel_count(channels_);
-
-        // Set language codes
-        config.add_language_codes(language_);
-
-        // Set model
-        config.set_model("long");
-
-        // Set features
-        auto* features = config.mutable_features();
-        features->set_enable_word_time_offsets(true);
-        features->set_enable_word_confidence(true);
-
-        // Multi-channel mode (stereo)
-        if (channels_ > 1) {
-          features->set_multi_channel_mode(
-            speech::v2::RecognitionFeatures::SEPARATE_RECOGNITION_PER_CHANNEL);
-          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-            "Enabled separate recognition per channel (stereo mode)\n");
-        }
-
-        // Create streaming config
-        speech::v2::StreamingRecognitionConfig streaming_config;
-        *streaming_config.mutable_config() = config;
-        streaming_config.set_streaming_features(
-          speech::v2::StreamingRecognitionFeatures::ENABLE_VOICE_ACTIVITY_EVENTS);
-
-        // Create initial request with recognizer
-        speech::v2::StreamingRecognizeRequest initial_request;
-        initial_request.set_recognizer(recognizer);
-        *initial_request.mutable_streaming_config() = streaming_config;
-
-        // Start streaming
-        stream_ = client_->StreamingRecognize();
-
-        // Send initial config
-        if (!stream_->Write(initial_request)) {
-          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
-            "Failed to write initial config to Google Speech API\n");
-          return false;
-        }
-
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-          "Google Speech streaming started successfully\n");
-
-        // Start response reader thread
-        response_thread_ = std::thread(&GoogleTranscribeSession::responseReader, this);
-
-        return true;
-
-      } catch (const std::exception& e) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
-          "Failed to start Google transcription: %s\n", e.what());
-        return false;
-      }
-    }
-
-    void stop() {
-      if (is_finished_.exchange(true)) {
-        return; // Already stopped
-      }
-
-      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-        "Stopping Google transcription session\n");
-
-      // Close write stream
-      if (stream_) {
-        stream_->WritesDone();
-      }
-
-      // Wait for response thread to finish
-      if (response_thread_.joinable()) {
-        response_thread_.join();
-      }
-
-      // Cleanup
-      stream_.reset();
-      client_.reset();
-    }
-
-    bool processAudioFrame(const uint8_t* data, size_t len) {
-      if (is_finished_ || !stream_) {
-        return false;
-      }
-
-      // Buffer audio
-      for (size_t ch = 0; ch < channels_; ++ch) {
-        if (ch < 2) { // Max 2 channels
-          buffers_[ch].write(data + (ch * len / channels_), len / channels_);
-        }
-      }
-
-      // Send audio chunks (4KB at a time)
-      const size_t chunk_size = 4096;
-      for (size_t ch = 0; ch < channels_; ++ch) {
-        while (buffers_[ch].size() >= chunk_size) {
-          auto chunk = buffers_[ch].read(chunk_size);
-
-          speech::v2::StreamingRecognizeRequest audio_request;
-          audio_request.set_audio(chunk.data(), chunk.size());
-
-          if (!stream_->Write(audio_request)) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
-              "Failed to write audio chunk to Google Speech API\n");
-            return false;
-          }
-        }
-      }
-
-      return true;
-    }
-
-  private:
-    void responseReader() {
-      try {
-        speech::v2::StreamingRecognizeResponse response;
-        while (stream_->Read(&response)) {
-          processResponse(response);
-        }
-
-        auto status = stream_->Finish();
-        if (!status.ok()) {
-          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
-            "Google Speech streaming error: %s\n", status.message().c_str());
-        }
-
-      } catch (const std::exception& e) {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
-          "Response reader exception: %s\n", e.what());
-      }
-    }
-
-    void processResponse(const speech::v2::StreamingRecognizeResponse& response) {
-      for (const auto& result : response.results()) {
-        if (result.alternatives().empty()) continue;
-
-        const auto& alternative = result.alternatives(0);
-        bool is_final = result.is_final();
-
-        // Get channel tag (0 or 1)
-        int channel = result.has_channel_tag() ? result.channel_tag() : 0;
-
-        // Map channel to speaker ID
-        std::string speaker_id = getSpeak  erIdForChannel(channel);
-
-        // Build JSON response (aligned with AWS/Deepgram format)
-        cJSON* root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "event", is_final ? "final_transcript" : "partial_transcript");
-        cJSON_AddStringToObject(root, "uuid", switch_core_session_get_uuid(session_));
-        cJSON_AddNumberToObject(root, "channel", channel);
-        cJSON_AddStringToObject(root, "speaker_id", speaker_id.c_str());
-        cJSON_AddStringToObject(root, "text", alternative.transcript().c_str());
-        cJSON_AddStringToObject(root, "timestamp", getCurrentTimestamp().c_str());
-        cJSON_AddBoolToObject(root, "is_final", is_final);
-
-        if (is_final) {
-          cJSON_AddNumberToObject(root, "confidence", alternative.confidence());
-
-          // Add word-level details
-          cJSON* words = cJSON_CreateArray();
-          for (const auto& word : alternative.words()) {
-            cJSON* item = cJSON_CreateObject();
-            cJSON_AddStringToObject(item, "content", word.word().c_str());
-            cJSON_AddNumberToObject(item, "start_time",
-              word.start_offset().seconds() + word.start_offset().nanos() / 1e9);
-            cJSON_AddNumberToObject(item, "end_time",
-              word.end_offset().seconds() + word.end_offset().nanos() / 1e9);
-            cJSON_AddNumberToObject(item, "confidence", word.confidence());
-            cJSON_AddArrayToObject(root, "words", words);
-            cJSON_AddItemToArray(words, item);
-          }
-        } else {
-          cJSON_AddNullToObject(root, "confidence");
-        }
-
-        char* json_str = cJSON_PrintUnformatted(root);
-        if (json_str) {
-          // Log the transcript
-          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
-            "[%s %d] Channel %d: %s\n",
-            is_final ? "FINAL" : "PARTIAL",
-            is_final ? result_id_++ : 0,
-            channel,
-            alternative.transcript().c_str());
-
-          // Call response handler
-          if (responseHandler_) {
-            responseHandler_(session_, TRANSCRIBE_EVENT_RESULTS, json_str, bugname_.c_str(), is_final ? 1 : 0);
+          cJSON_AddStringToObject(jAlternative, "transcript", alternative.transcript().c_str());
+          if (alternative.confidence() > 0.0) {
+            cJSON_AddNumberToObject(jAlternative, "confidence", alternative.confidence());
           }
 
-          free(json_str);
+          cJSON_AddItemToArray(jAlternatives, jAlternative);
+          cJSON_AddItemToObject(jResult, "alternatives", jAlternatives);
+
+          cJSON_AddBoolToObject(jResult, "is_final", result.is_final());
+          if (result.stability() > 0.0) {
+            cJSON_AddNumberToObject(jResult, "stability", result.stability());
+          }
+
+          // Add channel info if available
+          if (result.channel_tag() > 0) {
+            cJSON_AddNumberToObject(jResult, "channel", result.channel_tag());
+          }
+
+          if (!result.language_code().empty()) {
+            cJSON_AddStringToObject(jResult, "language_code", result.language_code().c_str());
+          }
+
+          char *json_string = cJSON_Print(jResult);
+          if (json_string) {
+            m_responseHandler(m_session, TRANSCRIBE_EVENT_RESULTS, (const char*)json_string, m_bugname, result.is_final() ? 1 : 0);
+            free(json_string);
+          }
+          cJSON_Delete(jResult);
         }
-        cJSON_Delete(root);
       }
     }
 
-    std::string getSpeakerIdForChannel(int channel) {
-      switch_channel_t *chan = switch_core_session_get_channel(session_);
-
-      if (channel == 0) {
-        // Caller (Channel 0)
-        const char* caller_name = switch_channel_get_variable(chan, "caller_id_name");
-        const char* caller_number = switch_channel_get_variable(chan, "caller_id_number");
-        if (!caller_name) caller_name = "Unknown";
-        if (!caller_number) caller_number = "Unknown";
-
-        std::ostringstream oss;
-        oss << caller_name << "(" << caller_number << ")";
-        return oss.str();
-
-      } else {
-        // Callee (Channel 1)
-        const char* callee_name = switch_channel_get_variable(chan, "callee_id_name");
-        const char* callee_number = switch_channel_get_variable(chan, "callee_id_number");
-        if (!callee_name) callee_name = "Unknown";
-        if (!callee_number) callee_number = "Unknown";
-
-        std::ostringstream oss;
-        oss << callee_name << "(" << callee_number << ")";
-        return oss.str();
-      }
+    grpc::Status status = finish();
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p read_loop finished\n", this);
+    
+    if (status.ok()) {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p read_loop finished successfully\n", this);
+    } else {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "GStreamer %p read_loop finished with error: %s\n", 
+        this, status.error_message().c_str());
     }
+  }
 
-    std::string getCurrentTimestamp() {
-      auto now = std::chrono::system_clock::now();
-      auto time_t = std::chrono::system_clock::to_time_t(now);
-      auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()) % 1000;
+private:
+	switch_core_session_t* m_session;
+	grpc::ClientContext m_context;
+	std::shared_ptr<grpc::ClientReaderWriterInterface<StreamingRecognizeRequest, StreamingRecognizeResponse>> m_streamer;
+	std::unique_ptr<Speech::Stub> m_stub;
+	StreamingRecognizeRequest m_request;
+  bool m_writesDone;
+  bool m_connected;
+  bool m_interim;
+  bool m_finishing;
+  int m_packets;
+  std::promise<void> m_promise;
+  std::future<void> m_future;
 
-      std::ostringstream oss;
-      char buf[32];
-      std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", std::gmtime(&time_t));
-      oss << buf << "." << std::setfill('0') << std::setw(3) << ms.count() << "Z";
-      return oss.str();
-    }
+public:
+  responseHandler_t m_responseHandler;
+  char* m_bugname;
+};
 
-  private:
-    switch_core_session_t* session_;
-    responseHandler_t responseHandler_;
-    uint32_t sample_rate_;
-    uint32_t channels_;
-    std::string language_;
-    bool interim_;
-    std::string bugname_;
-    std::string metadata_;
-    std::atomic<bool> is_finished_;
-    int result_id_;
-
-    const char* project_id_;
-    const char* location_;
-
-    std::unique_ptr<speech::SpeechClient> client_;
-    std::unique_ptr<grpc::ClientReaderWriterInterface<
-      speech::v2::StreamingRecognizeRequest,
-      speech::v2::StreamingRecognizeResponse>> stream_;
-
-    std::thread response_thread_;
-    AudioBuffer buffers_[2];  // Max 2 channels
-  };
-
-  /* ============================================================================
-   * Reaper function - cleanup session
-   * ============================================================================ */
-  static void reaper(private_t *tech_pvt) {
-    if (tech_pvt && tech_pvt->pGoogleSession) {
-      GoogleTranscribeSession* session = (GoogleTranscribeSession*)tech_pvt->pGoogleSession;
-      std::thread t([session]{
-        session->stop();
-        delete session;
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Google session cleaned up\n");
-      });
-      t.detach();
+/*
+static void reaper(private_t *tech_pvt) {
+  if (tech_pvt->pGoogleSession) {
+    GStreamer* pGStreamer = (GStreamer*) tech_pvt->pGoogleSession;
+    std::thread t([pGStreamer, tech_pvt]{
+      pGStreamer->finishRead();
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "google session finished\n");
+      delete pGStreamer;
       tech_pvt->pGoogleSession = nullptr;
-    }
+    });
+    t.detach();
   }
+}
+*/
 
-  static void destroy_tech_pvt(private_t *tech_pvt) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s destroy_tech_pvt\n", tech_pvt->sessionId);
-    if (tech_pvt) {
-      if (tech_pvt->pGoogleSession) {
-        GoogleTranscribeSession* session = (GoogleTranscribeSession*)tech_pvt->pGoogleSession;
-        delete session;
-        tech_pvt->pGoogleSession = nullptr;
-      }
-      if (tech_pvt->resampler) {
-        speex_resampler_destroy(tech_pvt->resampler);
-        tech_pvt->resampler = NULL;
-      }
-    }
-  }
-
-} // anonymous namespace
-
-/* ============================================================================
- * C API Implementation
- * ============================================================================ */
-
-extern "C" {
-
-switch_status_t google_transcribe_init() {
-  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Google transcribe init\n");
-  return SWITCH_STATUS_SUCCESS;
+static void destroy_tech_pvt(private_t *tech_pvt) {
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s destroy_tech_pvt\n", tech_pvt->sessionId);
+	if (tech_pvt) {
+		if (tech_pvt->pGoogleSession) {
+			GStreamer* pGStreamer = (GStreamer*) tech_pvt->pGoogleSession;
+			delete pGStreamer;
+			tech_pvt->pGoogleSession = nullptr;
+		}
+    if (tech_pvt->resampler) {
+  		speex_resampler_destroy(tech_pvt->resampler);
+  		tech_pvt->resampler = nullptr;
+  	}
+	}
 }
 
-switch_status_t google_transcribe_cleanup() {
-  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Google transcribe cleanup\n");
-  return SWITCH_STATUS_SUCCESS;
-}
+extern "C" switch_status_t google_transcribe_session_init(switch_core_session_t *session, responseHandler_t responseHandler, 
+		uint32_t samples_per_second, uint32_t channels, char* lang, int interim, char* bugname, char* metadata, void **ppUserData) {
 
-switch_status_t google_transcribe_session_init(
-  switch_core_session_t *session,
-  responseHandler_t responseHandler,
-  uint32_t samples_per_second,
-  uint32_t channels,
-  char* lang,
-  int interim,
-  char* bugname,
-  char* metadata,
-  void **ppUserData)
-{
-  switch_channel_t *channel = switch_core_session_get_channel(session);
-  private_t *tech_pvt = NULL;
-  switch_codec_implementation_t read_impl = { 0 };
+	private_t *tech_pvt = NULL;
+	switch_codec_implementation_t read_impl;
+	memset(&read_impl, 0, sizeof(read_impl));
 
-  switch_core_session_get_read_impl(session, &read_impl);
+	switch_core_session_get_read_impl(session, &read_impl);
 
-  // Allocate private data
-  tech_pvt = (private_t *) switch_core_session_alloc(session, sizeof(private_t));
-  memset(tech_pvt, 0, sizeof(private_t));
+	//allocate the private data
+	tech_pvt = (private_t *) switch_core_session_alloc(session, sizeof(private_t));
+	memset(tech_pvt, 0, sizeof(private_t));
 
-  strncpy(tech_pvt->sessionId, switch_core_session_get_uuid(session), MAX_SESSION_ID);
-  strncpy(tech_pvt->bugname, bugname, MAX_BUG_LEN);
+	strncpy(tech_pvt->sessionId, switch_core_session_get_uuid(session), MAX_SESSION_ID);
+	strncpy(tech_pvt->bugname, bugname, MAX_BUG_LEN);
   if (metadata) {
     strncpy(tech_pvt->metadata, metadata, MAX_METADATA_LEN);
   }
+  
+	tech_pvt->sampling = samples_per_second;
+	tech_pvt->channels = channels;
+	tech_pvt->id = tech_pvt->id + 1;
+	tech_pvt->responseHandler = responseHandler;
 
-  tech_pvt->sampling = samples_per_second;
-  tech_pvt->channels = channels;
-  tech_pvt->id = idxCallCount++;
-  tech_pvt->responseHandler = responseHandler;
-
-  // Setup resampler if needed
+  // setup resampler
   if (read_impl.actual_samples_per_second != samples_per_second) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
-      "(%u) resampling from %u to %u\n", tech_pvt->id,
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
+      "(%u) resampling from %u to %u\n", tech_pvt->id, 
       read_impl.actual_samples_per_second, samples_per_second);
-
-    tech_pvt->resampler = speex_resampler_init(channels,
-      read_impl.actual_samples_per_second,
-      samples_per_second, SWITCH_RESAMPLE_QUALITY,
-      NULL);
-
-    if (!tech_pvt->resampler) {
-      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
-        "(%u) error initializing resampler\n", tech_pvt->id);
+    
+    int err;
+    tech_pvt->resampler = speex_resampler_init(channels, 
+      read_impl.actual_samples_per_second, samples_per_second, 
+      SWITCH_RESAMPLE_QUALITY, &err);
+      
+    if (0 != err) {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, 
+        "Error initializing resampler: %s.\n", speex_resampler_strerror(err));
       return SWITCH_STATUS_FALSE;
     }
+  } else {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
+      "(%u) no resampling needed for this call\n", tech_pvt->id);
   }
 
-  // Create Google transcribe session
-  GoogleTranscribeSession* google_session = new GoogleTranscribeSession(
-    session, responseHandler, samples_per_second, channels,
-    lang, interim, bugname, metadata);
+  // Get Google Cloud credentials from environment or channel variables
+  char *project_id = (char*) "freeswitch-project";  // default
+  char *location_id = (char*) "us-central1";  // default
 
-  if (!google_session->start()) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
-      "Failed to start Google transcribe session\n");
-    delete google_session;
-    destroy_tech_pvt(tech_pvt);
-    return SWITCH_STATUS_FALSE;
-  }
-
-  tech_pvt->pGoogleSession = google_session;
-  *ppUserData = tech_pvt;
-
-  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-    "(%u) Google transcribe session initialized\n", tech_pvt->id);
-
-  return SWITCH_STATUS_SUCCESS;
-}
-
-switch_status_t google_transcribe_session_stop(
-  switch_core_session_t *session,
-  int channelIsClosing,
-  char* bugname)
-{
   switch_channel_t *channel = switch_core_session_get_channel(session);
-  switch_media_bug_t *bug = switch_channel_get_private(channel, bugname);
-
-  if (!bug) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
-      "google_transcribe_session_stop: no bug found for %s\n", bugname);
-    return SWITCH_STATUS_FALSE;
+  const char* var;
+  if ((var = switch_channel_get_variable(channel, "GOOGLE_PROJECT_ID"))) {
+    project_id = (char*) var;
+  }
+  if ((var = switch_channel_get_variable(channel, "GOOGLE_LOCATION_ID"))) {
+    location_id = (char*) var;
   }
 
-  private_t *tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
-  if (!tech_pvt) {
-    return SWITCH_STATUS_FALSE;
-  }
+  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "(%u) google_transcribe_session_init\n", tech_pvt->id);
 
-  switch_mutex_lock(tech_pvt->mutex);
-  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-    "(%u) google_transcribe_session_stop\n", tech_pvt->id);
+	GStreamer* pGStreamer = new GStreamer(session, channels, lang, interim, samples_per_second, project_id, location_id);
+	pGStreamer->m_responseHandler = responseHandler;
+  pGStreamer->m_bugname = tech_pvt->bugname;
 
-  // Stop Google session
-  if (tech_pvt->pGoogleSession) {
-    reaper(tech_pvt);
-  }
+	tech_pvt->pGoogleSession = pGStreamer;
 
-  // Cleanup
+	switch_mutex_init(&tech_pvt->mutex, SWITCH_MUTEX_NESTED, switch_core_session_get_pool(session));
+	if (switch_mutex_trylock(tech_pvt->mutex) == SWITCH_STATUS_SUCCESS) {
+		switch_mutex_unlock(tech_pvt->mutex);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error initializing mutex\n");
+	}
+
+	*ppUserData = tech_pvt;
+
+	pGStreamer->connect();
+  pGStreamer->startRead();
+
+	return SWITCH_STATUS_SUCCESS;
+}
+
+extern "C" switch_status_t google_transcribe_session_stop(switch_core_session_t *session, int channelIsClosing, char* bugname) {
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	switch_media_bug_t *bug = (switch_media_bug_t*) switch_channel_get_private(channel, bugname);
+	
+	if (!bug) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "google_transcribe_session_stop: no bug found\n");
+		return SWITCH_STATUS_FALSE;
+	}
+
+	private_t *tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
+	if (!tech_pvt) {
+		return SWITCH_STATUS_FALSE;
+	}
+
+	switch_mutex_lock(tech_pvt->mutex);
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "(%u) google_transcribe_session_stop\n", tech_pvt->id);
+
+	// Close the session
+	if (tech_pvt->pGoogleSession) {
+		GStreamer* pGStreamer = (GStreamer*) tech_pvt->pGoogleSession;
+		pGStreamer->writesDone();
+		
+    // start the reaper thread to clean up
+    std::thread reaper_thread([tech_pvt](){
+			if (tech_pvt->pGoogleSession) {
+				GStreamer* pGStreamer = (GStreamer*) tech_pvt->pGoogleSession;
+				pGStreamer->finishRead();
+				delete pGStreamer;
+				tech_pvt->pGoogleSession = nullptr;
+			}
+		});
+		reaper_thread.detach();
+	}
+
   destroy_tech_pvt(tech_pvt);
+	
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "(%u) google_transcribe_session_stop\n", tech_pvt->id);
+	switch_mutex_unlock(tech_pvt->mutex);
 
-  switch_mutex_unlock(tech_pvt->mutex);
-  return SWITCH_STATUS_SUCCESS;
+	return SWITCH_STATUS_SUCCESS;
 }
 
-switch_bool_t google_transcribe_frame(
-  switch_core_session_t *session,
-  switch_media_bug_t *bug)
-{
-  private_t *tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
-  if (!tech_pvt || tech_pvt->is_finished) {
-    return SWITCH_TRUE;
-  }
+extern "C" switch_bool_t google_transcribe_frame(switch_media_bug_t *bug, void* user_data) {
+	private_t *tech_pvt = (private_t *) user_data;
 
-  GoogleTranscribeSession* google_session = (GoogleTranscribeSession*)tech_pvt->pGoogleSession;
-  if (!google_session) {
-    return SWITCH_TRUE;
-  }
+	if (!tech_pvt || !tech_pvt->pGoogleSession) return SWITCH_TRUE;
 
-  // Get audio frame
-  switch_frame_t frame = { 0 };
-  frame.data = NULL;
-  frame.buflen = 0;
+	GStreamer* pGStreamer = (GStreamer*) tech_pvt->pGoogleSession;
+	uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
+	switch_frame_t frame = {};
+	frame.data = data;
+	frame.buflen = SWITCH_RECOMMENDED_BUFFER_SIZE;
 
-  while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS && !switch_test_flag((&frame), SFF_CNG)) {
-    if (frame.datalen > 0) {
-      // Resample if needed
-      if (tech_pvt->resampler) {
-        int16_t resampled[SWITCH_RECOMMENDED_BUFFER_SIZE];
-        uint32_t in_len = frame.samples;
-        uint32_t out_len = sizeof(resampled) / sizeof(int16_t);
+	if (switch_mutex_trylock(tech_pvt->mutex) == SWITCH_STATUS_SUCCESS) {
+		while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS && !switch_test_flag((&frame), SFF_CNG)) {
+			if (frame.datalen) {
+				// resample if necessary
+				if (tech_pvt->resampler) {
+					spx_int16_t out[SWITCH_RECOMMENDED_BUFFER_SIZE];
+					spx_uint32_t out_len = SWITCH_RECOMMENDED_BUFFER_SIZE;
+					spx_uint32_t in_len = frame.samples;
+					
+					speex_resampler_process_interleaved_int(tech_pvt->resampler, 
+						(const spx_int16_t *) frame.data, &in_len, out, &out_len);
+					
+					pGStreamer->write(out, out_len * sizeof(spx_int16_t));
+				} else {
+					pGStreamer->write(frame.data, frame.datalen);
+				}
+			}
+		}
+		switch_mutex_unlock(tech_pvt->mutex);
+	}
 
-        speex_resampler_process_interleaved_int(tech_pvt->resampler,
-          (int16_t*)frame.data, &in_len,
-          resampled, &out_len);
-
-        google_session->processAudioFrame((uint8_t*)resampled, out_len * sizeof(int16_t));
-      } else {
-        google_session->processAudioFrame((uint8_t*)frame.data, frame.datalen);
-      }
-    }
-  }
-
-  return SWITCH_TRUE;
+	return SWITCH_TRUE;
 }
 
-} // extern "C"
+// Export functions with C linkage
+extern "C" {
+
+switch_status_t google_transcribe_init() {
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "google_transcribe_init\n");
+	return SWITCH_STATUS_SUCCESS;
+}
+
+switch_status_t google_transcribe_cleanup() {
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "google_transcribe_cleanup\n");
+	return SWITCH_STATUS_SUCCESS;
+}
+
+}

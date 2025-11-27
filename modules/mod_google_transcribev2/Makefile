@@ -21,14 +21,26 @@ LDFLAGS = -shared -Wl,-rpath,/usr/local/lib -lcurl -lssl -lcrypto -lspeex -lspee
 # Source files
 SOURCES_C = mod_google_transcribev2.c
 SOURCES_CPP = google_transcribe_glue.cpp
-OBJECTS = $(SOURCES_C:.c=.o) $(SOURCES_CPP:.cpp=.o)
+PROTO_SOURCES = speech.grpc.pb.cc speech.pb.cc
+PROTO_OBJECTS = $(PROTO_SOURCES:.cc=.o)
+OBJECTS = $(SOURCES_C:.c=.o) $(SOURCES_CPP:.cpp=.o) $(PROTO_OBJECTS)
 
 # Target module
 TARGET = mod_google_transcribev2.so
 
-.PHONY: all clean install
+.PHONY: all clean install proto
 
-all: $(TARGET)
+all: proto $(TARGET)
+
+proto: speech.pb.h speech.grpc.pb.h
+
+speech.pb.h speech.pb.cc: speech.proto
+	@echo "Generating protobuf files..."
+	protoc --cpp_out=. speech.proto
+
+speech.grpc.pb.h speech.grpc.pb.cc: speech.proto
+	@echo "Generating gRPC files..."
+	protoc --grpc_out=. --plugin=protoc-gen-grpc=$(shell which grpc_cpp_plugin) speech.proto
 
 $(TARGET): $(OBJECTS)
 	@echo "Linking $(TARGET)..."
@@ -43,6 +55,10 @@ $(TARGET): $(OBJECTS)
 	@echo "Compiling $<..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+%.o: %.cc
+	@echo "Compiling $<..."
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 install: $(TARGET)
 	@echo "Installing $(TARGET) to ${FS_PREFIX}/lib/freeswitch/mod/"
 	install -d ${FS_PREFIX}/lib/freeswitch/mod
@@ -51,7 +67,7 @@ install: $(TARGET)
 
 clean:
 	@echo "Cleaning..."
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(TARGET) speech.pb.h speech.pb.cc speech.grpc.pb.h speech.grpc.pb.cc
 	@echo "Clean complete!"
 
 # Help target

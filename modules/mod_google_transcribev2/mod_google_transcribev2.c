@@ -353,7 +353,7 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
 
 	case SWITCH_ABC_TYPE_READ:
 
-		return google_transcribe_frame(session, bug);
+		return google_transcribe_frame(bug, user_data);
 		break;
 
 	case SWITCH_ABC_TYPE_WRITE:
