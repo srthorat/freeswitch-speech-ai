@@ -7,6 +7,7 @@
 #include "google_transcribe_glue.h"
 #include <curl/curl.h>
 #include <openssl/hmac.h>
+#include <openssl/evp.h>
 #include <openssl/md5.h>
 #include <time.h>
 
@@ -65,7 +66,11 @@ static void hmac_sha256_hex(const char* key, const char* data, char* out) {
 // MD5 hex
 static void md5_hex(const char* data, char* out) {
 	unsigned char digest[MD5_DIGEST_LENGTH];
-	MD5((unsigned char*)data, strlen(data), digest);
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	EVP_DigestInit_ex(ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(ctx, data, strlen(data));
+	EVP_DigestFinal_ex(ctx, digest, NULL);
+	EVP_MD_CTX_free(ctx);
 	bin_to_hex(digest, MD5_DIGEST_LENGTH, out);
 }
 
