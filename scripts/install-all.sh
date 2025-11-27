@@ -7,7 +7,6 @@
 #   --module mod_audio_fork          Install only mod_audio_fork dependencies + module
 #   --module mod_aws_transcribe      Install only mod_aws_transcribe dependencies + module
 #   --module mod_deepgram_transcribe Install only mod_deepgram_transcribe dependencies + module
-#   --module mod_google_transcribe   Install only mod_google_transcribe dependencies + module
 #   --module mod_google_transcribev2 Install only mod_google_transcribev2 dependencies + module
 #   --module all                     Install everything (default)
 #
@@ -24,7 +23,7 @@
 #
 # Examples:
 #   sudo ./install-all.sh --module freeswitch
-#   sudo ./install-all.sh --module mod_google_transcribe
+#   sudo ./install-all.sh --module mod_google_transcribev2
 #   sudo ./install-all.sh --module all --build-cpus 8
 # ============================================================================
 
@@ -42,7 +41,7 @@ NC='\033[0m'
 # Default values
 MODULE="all"
 FS_PREFIX="/usr/local/freeswitch"
-BUILD_CPUS=4
+BUILD_CPUS=$(nproc)
 AUTO_YES=false
 NO_VALIDATION=false
 VERBOSE=false
@@ -51,7 +50,7 @@ MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 LOG_DIR="/tmp/freeswitch-install-logs"
 
 # Valid module names
-VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe" "mod_google_transcribev2")
+VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribev2")
 
 # Create log directory
 mkdir -p "$LOG_DIR"
@@ -199,7 +198,6 @@ while [[ $# -gt 0 ]]; do
             echo "  mod_audio_fork           Install only mod_audio_fork and dependencies"
             echo "  mod_aws_transcribe       Install only mod_aws_transcribe and dependencies"
             echo "  mod_deepgram_transcribe  Install only mod_deepgram_transcribe and dependencies"
-            echo "  mod_google_transcribe    Install only mod_google_transcribe and dependencies"
             echo "  mod_google_transcribev2  Install only mod_google_transcribev2 and dependencies"
             echo ""
             echo "Options:"
@@ -212,7 +210,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Examples:"
             echo "  sudo $0 --module freeswitch"
-            echo "  sudo $0 --module mod_google_transcribe --build-cpus 8"
+            echo "  sudo $0 --module mod_google_transcribev2 --build-cpus 8"
             echo "  sudo $0 --module all"
             exit 0
             ;;
@@ -263,9 +261,6 @@ fi
 if should_install_module "mod_deepgram_transcribe"; then
     echo "  Install mod_deepgram_transcribe: Yes"
 fi
-if should_install_module "mod_google_transcribe"; then
-    echo "  Install mod_google_transcribe: Yes"
-fi
 if should_install_module "mod_google_transcribev2"; then
     echo "  Install mod_google_transcribev2: Yes"
 fi
@@ -297,7 +292,7 @@ fi
 # Step 1: Install System Dependencies
 # ============================================================================
 
-log_step "[Step 1/8] Installing System Dependencies"
+log_step "[Step 1/7] Installing System Dependencies"
 
 log_substep "Updating package lists..."
 apt-get update > /dev/null 2>&1
@@ -353,7 +348,7 @@ log_success "Core dependencies installed"
 # Step 2: Install Module-Specific Dependencies
 # ============================================================================
 
-log_step "[Step 2/8] Installing Module-Specific Dependencies"
+log_step "[Step 2/7] Installing Module-Specific Dependencies"
 
 # libwebsockets (for mod_audio_fork and mod_deepgram_transcribe)
 if should_install_module "mod_audio_fork" || should_install_module "mod_deepgram_transcribe"; then
@@ -436,8 +431,8 @@ if should_install_module "mod_aws_transcribe"; then
     fi
 fi
 
-# gRPC (for mod_google_transcribe and mod_google_transcribev2)
-if should_install_module "mod_google_transcribe" || should_install_module "mod_google_transcribev2"; then
+# gRPC (for mod_google_transcribev2)
+if should_install_module "mod_google_transcribev2"; then
     if ! command -v protoc &> /dev/null || ! command -v grpc_cpp_plugin &> /dev/null; then
         log_substep "Installing gRPC from system packages..."
 
@@ -515,7 +510,7 @@ fi
 # ============================================================================
 
 if should_install_freeswitch; then
-    log_step "[Step 3/8] Installing FreeSWITCH 1.10.11"
+    log_step "[Step 3/7] Installing FreeSWITCH 1.10.11"
 
     # Check if FreeSWITCH is already installed in any standard location
     DETECTED_FS_PATH=$(detect_freeswitch_installation)
@@ -702,7 +697,7 @@ EOF
 # Library Path (required for modules)
 Environment="LD_LIBRARY_PATH=/usr/local/lib"
 
-# Google Cloud Configuration (for mod_google_transcribe and mod_google_transcribev2)
+# Google Cloud Configuration (for mod_google_transcribev2)
 # Uncomment and set your values:
 #Environment="GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json"
 #Environment="GCP_PROJECT_ID=your-project-id"
@@ -755,7 +750,7 @@ EOF
         log_success "FreeSWITCH binaries configured for system-wide access"
     fi
 else
-    log_step "[Step 3/8] Skipping FreeSWITCH Installation"
+    log_step "[Step 3/7] Skipping FreeSWITCH Installation"
     log_substep "Module-only installation (FreeSWITCH not selected)"
 
     # Detect existing FreeSWITCH installation
@@ -789,7 +784,7 @@ fi
 # ============================================================================
 
 if should_install_module "mod_audio_fork"; then
-    log_step "[Step 4/8] Building mod_audio_fork"
+    log_step "[Step 4/7] Building mod_audio_fork"
 
     cd ${SCRIPT_DIR}/../modules/mod_audio_fork || exit 1
 
@@ -812,7 +807,7 @@ if should_install_module "mod_audio_fork"; then
 
     log_success "mod_audio_fork built and installed"
 else
-    log_step "[Step 4/8] Skipping mod_audio_fork"
+    log_step "[Step 4/7] Skipping mod_audio_fork"
 fi
 
 # ============================================================================
@@ -820,7 +815,7 @@ fi
 # ============================================================================
 
 if should_install_module "mod_aws_transcribe"; then
-    log_step "[Step 5/8] Building mod_aws_transcribe"
+    log_step "[Step 5/7] Building mod_aws_transcribe"
 
     cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe || exit 1
 
@@ -845,7 +840,7 @@ if should_install_module "mod_aws_transcribe"; then
 
     log_success "mod_aws_transcribe built and installed"
 else
-    log_step "[Step 5/8] Skipping mod_aws_transcribe"
+    log_step "[Step 5/7] Skipping mod_aws_transcribe"
 fi
 
 # ============================================================================
@@ -853,7 +848,7 @@ fi
 # ============================================================================
 
 if should_install_module "mod_deepgram_transcribe"; then
-    log_step "[Step 6/8] Building mod_deepgram_transcribe"
+    log_step "[Step 6/7] Building mod_deepgram_transcribe"
 
     cd ${SCRIPT_DIR}/../modules/mod_deepgram_transcribe || exit 1
 
@@ -876,51 +871,15 @@ if should_install_module "mod_deepgram_transcribe"; then
 
     log_success "mod_deepgram_transcribe built and installed"
 else
-    log_step "[Step 6/8] Skipping mod_deepgram_transcribe"
+    log_step "[Step 6/7] Skipping mod_deepgram_transcribe"
 fi
 
 # ============================================================================
-# Step 7: Build mod_google_transcribe
-# ============================================================================
-
-if should_install_module "mod_google_transcribe"; then
-    log_step "[Step 7/8] Building mod_google_transcribe"
-
-    cd ${SCRIPT_DIR}/../modules/mod_google_transcribe || exit 1
-
-    # Generate protobuf files if needed
-    if [ ! -f "speech.pb.h" ] || [ "speech.proto" -nt "speech.pb.h" ]; then
-        log_substep "Generating protobuf files..."
-        log_command "protobuf generation" "${LOG_DIR}/mod_google_transcribe_proto.log" \
-            protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=$(which grpc_cpp_plugin) speech.proto
-        check_success "Failed to generate protobuf files" "${LOG_DIR}/mod_google_transcribe_proto.log"
-    fi
-
-    # Build using Makefile
-    log_substep "Cleaning previous build..."
-    make clean > /dev/null 2>&1
-
-    log_substep "Building mod_google_transcribe..."
-    log_command "mod_google_transcribe build" "${LOG_DIR}/mod_google_transcribe_make.log" \
-        make -j ${BUILD_CPUS}
-    check_success "Failed to build mod_google_transcribe" "${LOG_DIR}/mod_google_transcribe_make.log"
-
-    log_substep "Installing mod_google_transcribe..."
-    log_command "mod_google_transcribe install" "${LOG_DIR}/mod_google_transcribe_install.log" \
-        make install
-    check_success "Failed to install mod_google_transcribe" "${LOG_DIR}/mod_google_transcribe_install.log"
-
-    log_success "mod_google_transcribe built and installed"
-else
-    log_step "[Step 7/8] Skipping mod_google_transcribe"
-fi
-
-# ============================================================================
-# Step 8: Build mod_google_transcribev2
+# Step 7: Build mod_google_transcribev2
 # ============================================================================
 
 if should_install_module "mod_google_transcribev2"; then
-    log_step "[Step 8/8] Building mod_google_transcribev2"
+    log_step "[Step 7/7] Building mod_google_transcribev2"
 
     cd ${SCRIPT_DIR}/../modules/mod_google_transcribev2 || exit 1
 
@@ -940,7 +899,7 @@ if should_install_module "mod_google_transcribev2"; then
 
     log_success "mod_google_transcribev2 built and installed"
 else
-    log_step "[Step 8/8] Skipping mod_google_transcribev2"
+    log_step "[Step 7/7] Skipping mod_google_transcribev2"
 fi
 
 # ============================================================================
@@ -965,9 +924,6 @@ if [ "$MODULE" != "freeswitch" ]; then
         fi
         if should_install_module "mod_deepgram_transcribe" && ! grep -q "mod_deepgram_transcribe" "$MODULES_CONF"; then
             sed -i '/<\/modules>/i \    <load module="mod_deepgram_transcribe"/>' "$MODULES_CONF"
-        fi
-        if should_install_module "mod_google_transcribe" && ! grep -q "mod_google_transcribe" "$MODULES_CONF"; then
-            sed -i '/<\/modules>/i \    <load module="mod_google_transcribe"/>' "$MODULES_CONF"
         fi
         if should_install_module "mod_google_transcribev2" && ! grep -q "mod_google_transcribev2" "$MODULES_CONF"; then
             sed -i '/<\/modules>/i \    <load module="mod_google_transcribev2"/>' "$MODULES_CONF"
@@ -1012,18 +968,6 @@ if [ "$NO_VALIDATION" = false ] && [ "$MODULE" != "freeswitch" ]; then
             log_success "mod_deepgram_transcribe.so exists"
         else
             echo -e "${RED}✗ mod_deepgram_transcribe.so NOT FOUND${NC}"
-        fi
-    fi
-
-    if should_install_module "mod_google_transcribe"; then
-        if [ -f "${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so" ]; then
-            log_success "mod_google_transcribe.so exists"
-            # Ensure no duplicate binaries
-            if [ -f "${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so.1" ]; then
-                echo -e "${YELLOW}⚠ Found duplicate: mod_google_transcribe.so.1${NC}"
-            fi
-        else
-            echo -e "${RED}✗ mod_google_transcribe.so NOT FOUND${NC}"
         fi
     fi
 

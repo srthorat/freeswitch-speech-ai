@@ -7,7 +7,6 @@
 #   --module mod_audio_fork          Remove only mod_audio_fork
 #   --module mod_aws_transcribe      Remove only mod_aws_transcribe and AWS SDK
 #   --module mod_deepgram_transcribe Remove only mod_deepgram_transcribe
-#   --module mod_google_transcribe   Remove only mod_google_transcribe and gRPC
 #   --module mod_google_transcribev2 Remove only mod_google_transcribev2 and Google Cloud C++
 #   --module all                     Remove everything (default)
 #
@@ -21,7 +20,7 @@
 #   --help             Show this help message
 #
 # Examples:
-#   sudo ./cleanup-all.sh --module mod_google_transcribe
+#   sudo ./cleanup-all.sh --module mod_google_transcribev2
 #   sudo ./cleanup-all.sh --module freeswitch
 #   sudo ./cleanup-all.sh --module all --yes
 # ============================================================================
@@ -44,7 +43,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 
 # Valid module names
-VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe" "mod_google_transcribev2")
+VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribev2")
 
 # ============================================================================
 # Helper Functions
@@ -100,7 +99,6 @@ while [[ $# -gt 0 ]]; do
             echo "  mod_audio_fork           Remove only mod_audio_fork"
             echo "  mod_aws_transcribe       Remove only mod_aws_transcribe and AWS SDK dependencies"
             echo "  mod_deepgram_transcribe  Remove only mod_deepgram_transcribe"
-            echo "  mod_google_transcribe    Remove only mod_google_transcribe and gRPC dependencies"
             echo "  mod_google_transcribev2  Remove only mod_google_transcribev2 and Google Cloud C++ dependencies"
             echo ""
             echo "Options:"
@@ -109,7 +107,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --help            Show this help message"
             echo ""
             echo "Examples:"
-            echo "  sudo $0 --module mod_google_transcribe"
+            echo "  sudo $0 --module mod_google_transcribev2"
             echo "  sudo $0 --module freeswitch"
             echo "  sudo $0 --module all --yes"
             exit 0
@@ -165,10 +163,6 @@ fi
 
 if should_remove_module "mod_deepgram_transcribe"; then
     echo "  ✗ mod_deepgram_transcribe module and binary"
-fi
-
-if should_remove_module "mod_google_transcribe"; then
-    echo "  ✗ mod_google_transcribe module and binary"
 fi
 
 if should_remove_module "mod_google_transcribev2"; then
@@ -230,12 +224,6 @@ if should_remove_module "mod_deepgram_transcribe"; then
     log_success "mod_deepgram_transcribe removed"
 fi
 
-if should_remove_module "mod_google_transcribe"; then
-    log_remove "mod_google_transcribe"
-    rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so*
-    log_success "mod_google_transcribe removed"
-fi
-
 if should_remove_module "mod_google_transcribev2"; then
     log_remove "mod_google_transcribev2"
     rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribev2.so
@@ -290,17 +278,6 @@ if should_remove_module "mod_aws_transcribe"; then
     fi
 fi
 
-if should_remove_module "mod_google_transcribe"; then
-    if grep -q "grpc=installed" "$MANIFEST_FILE" 2>/dev/null; then
-        log_remove "gRPC and Protocol Buffers (system packages)"
-        apt-get remove -y libgrpc++-dev libgrpc-dev protobuf-compiler protobuf-compiler-grpc libprotobuf-dev > /dev/null 2>&1 || true
-        apt-get autoremove -y > /dev/null 2>&1 || true
-        log_success "gRPC removed"
-    else
-        log_skip "gRPC (was pre-existing or not installed)"
-    fi
-fi
-
 if should_remove_module "mod_google_transcribev2"; then
     if grep -q "google_cloud_cpp=installed" "$MANIFEST_FILE" 2>/dev/null; then
         log_remove "Google Cloud C++ libraries"
@@ -332,11 +309,6 @@ if ! $KEEP_SOURCES; then
         rm -rf /usr/local/src/aws-sdk-cpp
     fi
 
-    if should_remove_module "mod_google_transcribe"; then
-        rm -rf /usr/local/src/grpc
-        rm -rf /usr/local/src/googleapis
-    fi
-
     if should_remove_module "mod_google_transcribev2"; then
         rm -rf /usr/local/src/google-cloud-cpp
     fi
@@ -364,10 +336,6 @@ else
         fi
         if should_remove_module "mod_aws_transcribe"; then
             sed -i '/^aws-sdk-cpp=/d' "$MANIFEST_FILE" 2>/dev/null || true
-        fi
-        if should_remove_module "mod_google_transcribe"; then
-            sed -i '/^grpc=/d' "$MANIFEST_FILE" 2>/dev/null || true
-            sed -i '/^googleapis=/d' "$MANIFEST_FILE" 2>/dev/null || true
         fi
         if should_remove_module "mod_google_transcribev2"; then
             sed -i '/^google_cloud_cpp=/d' "$MANIFEST_FILE" 2>/dev/null || true

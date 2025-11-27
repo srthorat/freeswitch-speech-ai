@@ -24,7 +24,7 @@ NC='\033[0m'
 
 # Default values
 FS_PREFIX="/usr/local/freeswitch"
-BUILD_CPUS=4
+BUILD_CPUS=$(nproc)
 NO_RESTART=false
 AUTO_YES=false
 VERBOSE=false
@@ -130,7 +130,7 @@ fi
 if [ "$AUTO_YES" = false ]; then
     echo "This will:"
     echo "  1. Pull latest code from repository"
-    echo "  2. Rebuild all modules (mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe, mod_google_transcribe, mod_google_transcribev2)"
+    echo "  2. Rebuild all modules (mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe, mod_google_transcribev2)"
     echo "  3. Replace existing modules"
     if [ "$NO_RESTART" = false ]; then
         echo "  4. Restart FreeSWITCH"
@@ -174,7 +174,7 @@ echo "Backing up existing modules..."
 BACKUP_DIR="${FS_PREFIX}/lib/freeswitch/mod/.backup.$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
-for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe mod_google_transcribev2; do
+for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribev2; do
     if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
         cp "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" "$BACKUP_DIR/"
         echo -e "${GREEN}✓${NC} Backed up ${module}.so"
@@ -260,34 +260,6 @@ check_success "Failed to link mod_deepgram_transcribe" "${LOG_DIR}/update_mod_de
 
 echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
 
-# Build mod_google_transcribe
-echo "Building mod_google_transcribe..."
-cd ${SCRIPT_DIR}/../modules/mod_google_transcribe
-
-# Generate protobuf files if needed
-if [ ! -f "speech.pb.h" ] || [ "speech.proto" -nt "speech.pb.h" ]; then
-    echo "  Generating protobuf files..."
-    log_command "protobuf generation" "${LOG_DIR}/update_mod_google_transcribe_proto.log" \
-        protoc --cpp_out=. --grpc_out=. --plugin=protoc-gen-grpc=$(which grpc_cpp_plugin) speech.proto
-    check_success "Failed to generate protobuf files" "${LOG_DIR}/update_mod_google_transcribe_proto.log"
-fi
-
-# Build using Makefile
-echo "  Cleaning previous build..."
-make clean > /dev/null 2>&1
-
-echo "  Building mod_google_transcribe..."
-log_command "mod_google_transcribe build" "${LOG_DIR}/update_mod_google_transcribe_make.log" \
-    make -j ${BUILD_CPUS}
-check_success "Failed to build mod_google_transcribe" "${LOG_DIR}/update_mod_google_transcribe_make.log"
-
-echo "  Installing mod_google_transcribe..."
-log_command "mod_google_transcribe install" "${LOG_DIR}/update_mod_google_transcribe_install.log" \
-    make install
-check_success "Failed to install mod_google_transcribe" "${LOG_DIR}/update_mod_google_transcribe_install.log"
-
-echo -e "${GREEN}✓ mod_google_transcribe${NC}"
-
 # Build mod_google_transcribev2
 echo "Building mod_google_transcribev2..."
 cd ${SCRIPT_DIR}/../modules/mod_google_transcribev2
@@ -347,7 +319,6 @@ echo "Updated modules:"
 echo "  ✓ mod_audio_fork"
 echo "  ✓ mod_aws_transcribe"
 echo "  ✓ mod_deepgram_transcribe"
-echo "  ✓ mod_google_transcribe"
 echo "  ✓ mod_google_transcribev2"
 echo ""
 echo "Backup location: $BACKUP_DIR"

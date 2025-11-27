@@ -29,7 +29,7 @@ sudo ./scripts/cleanup-all.sh --module <module-name>
 | `mod_audio_fork` | Audio fork module | libwebsockets |
 | `mod_aws_transcribe` | AWS Transcribe module | AWS SDK C++ |
 | `mod_deepgram_transcribe` | Deepgram module | libwebsockets |
-| `mod_google_transcribe` | Google Speech V2 module | gRPC, protobuf (system packages) |
+| `mod_google_transcribev2` | Google Speech V2 module | gRPC, protobuf, Google Cloud C++ |
 | `all` | Everything (default) | All dependencies |
 
 ## 📁 Script Categories
@@ -92,7 +92,7 @@ sudo ./scripts/install-all.sh --module all
 sudo ./scripts/install-all.sh --module freeswitch
 
 # Install only Google module (requires FreeSWITCH to be installed)
-sudo ./scripts/install-all.sh --module mod_google_transcribe
+sudo ./scripts/install-all.sh --module mod_google_transcribev2
 
 # Install only AWS module
 sudo ./scripts/install-all.sh --module mod_aws_transcribe --build-cpus 8
@@ -103,8 +103,8 @@ sudo ./scripts/install-all.sh --module mod_deepgram_transcribe
 
 ### Modular Cleanup Examples
 ```bash
-# Remove only Google module and its dependencies (gRPC)
-sudo ./scripts/cleanup-all.sh --module mod_google_transcribe
+# Remove only Google module and its dependencies (gRPC, Google Cloud C++)
+sudo ./scripts/cleanup-all.sh --module mod_google_transcribev2
 
 # Remove only FreeSWITCH (keeps modules)
 sudo ./scripts/cleanup-all.sh --module freeswitch
@@ -201,7 +201,7 @@ sudo ./scripts/cleanup-all.sh --yes
 - `--module mod_audio_fork` - Audio fork module only
 - `--module mod_aws_transcribe` - AWS module only
 - `--module mod_deepgram_transcribe` - Deepgram module only
-- `--module mod_google_transcribe` - Google V2 module only
+- `--module mod_google_transcribev2` - Google V2 module only
 
 **Other Options:**
 - `--freeswitch-prefix PATH` - Installation directory (default: /usr/local/freeswitch)
@@ -211,7 +211,7 @@ sudo ./scripts/cleanup-all.sh --yes
 
 **Installation times:**
 - `--module freeswitch`: 15-20 minutes
-- `--module mod_google_transcribe`: 2-3 minutes (with system gRPC!)
+- `--module mod_google_transcribev2`: 12-15 minutes (Google Cloud C++ SDK)
 - `--module mod_aws_transcribe`: 20-25 minutes (AWS SDK compilation)
 - `--module all`: 30-35 minutes
 
@@ -223,8 +223,8 @@ sudo ./scripts/install-all.sh --module all
 # Install only FreeSWITCH
 sudo ./scripts/install-all.sh --module freeswitch
 
-# Install only Google module (fast!)
-sudo ./scripts/install-all.sh --module mod_google_transcribe --build-cpus 8
+# Install only Google module
+sudo ./scripts/install-all.sh --module mod_google_transcribev2 --build-cpus 8
 
 # Install only AWS module
 sudo ./scripts/install-all.sh --module mod_aws_transcribe
@@ -247,7 +247,7 @@ sudo ./scripts/install-all.sh --module all --yes
   - mod_audio_fork
   - mod_aws_transcribe
   - mod_deepgram_transcribe
-  - mod_google_transcribe (Google Speech-to-Text V2 API)
+  - mod_google_transcribev2 (Google Speech-to-Text V2 API)
 - Generates Google proto files locally from speech.proto
 - Does NOT copy dialplan (preserves your configuration)
 
@@ -312,7 +312,7 @@ sudo ./scripts/update-modules.sh --no-restart
 - `--module mod_audio_fork` - Remove audio fork module only
 - `--module mod_aws_transcribe` - Remove AWS module and AWS SDK
 - `--module mod_deepgram_transcribe` - Remove Deepgram module only
-- `--module mod_google_transcribe` - Remove Google module and gRPC
+- `--module mod_google_transcribev2` - Remove Google V2 module, gRPC, and Google Cloud C++
 
 **Other Options:**
 - `--keep-sources` - Keep source directories in /usr/local/src
@@ -527,7 +527,7 @@ fs_cli -x "uuid_google_transcribe <uuid> stop"
 ### Module Features
 
 - **Unified API:** Matches AWS/Deepgram pattern for consistency across modules
-- **Single v2-only binary:** One `mod_google_transcribe.so` with single API registration
+- **Single v2-only binary:** One `mod_google_transcribev2.so` with single API registration
 - **Google Speech-to-Text V2 API:** Latest API with improved accuracy
 - **Speaker identification:** Automatic channel-based speaker mapping (0=caller, 1=callee)
 - **Multichannel support:** Separate recognition per channel enabled by default in stereo mode
@@ -538,7 +538,7 @@ fs_cli -x "uuid_google_transcribe <uuid> stop"
 ### Build System
 
 The module uses a self-contained build system:
-- **Makefile-based build** in `modules/mod_google_transcribe/`
+- **Makefile-based build** in `modules/mod_google_transcribev2/`
 - **Local speech.proto** (Google Speech V2 API definitions)
 - **Generated protobuf files** created during build
 - **System gRPC libraries** (installed via apt-get)
@@ -549,13 +549,13 @@ After installation, verify the module:
 
 ```bash
 # Check module file exists
-ls -l /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribe.so
+ls -l /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so
 
 # Verify single API registration (not uuid_google_transcribe2)
 /usr/local/freeswitch/bin/fs_cli -x "show api" | grep google
 
 # Expected output:
-# uuid_google_transcribe,mod_google_transcribe,Google Speech-to-Text V2 API
+# uuid_google_transcribe,mod_google_transcribev2,Google Speech-to-Text V2 API
 ```
 
 ---
