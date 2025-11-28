@@ -1,0 +1,516 @@
+# ============================================================================
+# FreeSWITCH 1.10.11 + mod_google_transcribev2 - Complete Build on Ubuntu 24.04
+# ============================================================================
+#
+# This Dockerfile builds FreeSWITCH and mod_google_transcribev2 from scratch
+# on Ubuntu 24.04, providing a clean, single-OS environment with modern
+# dependencies (gRPC 1.51, protobuf 3.21, GCC 13.2).
+#
+# What's built:
+#   - FreeSWITCH 1.10.11 with all standard modules
+#   - spandsp and sofia-sip (FreeSWITCH dependencies)
+#   - Google Cloud C++ Speech SDK v2.30.0
+#   - mod_google_transcribev2 (real-time Speech-to-Text v2)
+#
+# Build time: 25-35 minutes (FreeSWITCH: 15-20 min, Google Cloud SDK: 10-15 min)
+# Final size: ~800MB (single-stage), ~600MB (multi-stage with runtime optimization)
+#
+# Usage:
+#   docker build -f dockerfiles/Dockerfile.mod_google_transcribev2.new \
+#     -t freeswitch:mod-google-transcribev2 .
+#
+# Or use the build script:
+#   ./dockerfiles/docker-build-mod-google-transcribev2.sh
+# ============================================================================
+
+# Build arguments
+ARG UBUNTU_VERSION=24.04
+ARG DEBIAN_VERSION=bullseye-slim
+ARG FREESWITCH_VERSION=v1.10.11
+ARG SPANDSP_VERSION=0d2e6ac
+ARG SOFIA_VERSION=1.13.17
+ARG GOOGLE_CLOUD_CPP_VERSION=2.30.0
+ARG BUILD_CPUS=8
+
+# ============================================================================
+# Stage 1: Builder - Build FreeSWITCH and mod_google_transcribev2
+# ============================================================================
+FROM ubuntu:${UBUNTU_VERSION} AS builder
+
+# Re-declare ARGs for this stage
+ARG FREESWITCH_VERSION
+ARG SPANDSP_VERSION
+ARG SOFIA_VERSION
+ARG GOOGLE_CLOUD_CPP_VERSION
+ARG BUILD_CPUS
+
+# Print build configuration
+RUN echo "=============================================" \
+    && echo "Building FreeSWITCH + mod_google_transcribev2" \
+    && echo "=============================================" \
+    && echo "Base OS: Ubuntu ${UBUNTU_VERSION}" \
+    && echo "FreeSWITCH Version: ${FREESWITCH_VERSION}" \
+    && echo "Google Cloud C++ SDK: v${GOOGLE_CLOUD_CPP_VERSION}" \
+    && echo "Build CPUs: ${BUILD_CPUS}" \
+    && echo "============================================="
+
+# ============================================================================
+# Install ALL build dependencies (FreeSWITCH + Google Cloud SDK)
+# ============================================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build tools
+    build-essential \
+    cmake \
+    autoconf \
+    automake \
+    libtool \
+    libtool-bin \
+    pkg-config \
+    nasm \
+    git \
+    wget \
+    ca-certificates \
+    python3 \
+    python-is-python3 \
+    # FreeSWITCH core dependencies
+    libssl-dev \
+    libcurl4-openssl-dev \
+    libpcre3-dev \
+    libspeex1 \
+    libspeexdsp-dev \
+    libedit-dev \
+    libtiff-dev \
+    libldns-dev \
+    uuid-dev \
+    # Codecs and media
+    libopus-dev \
+    libsndfile1-dev \
+    libshout3-dev \
+    libmpg123-dev \
+    libmp3lame-dev \
+    # Database
+    libsqlite3-dev \
+    libpq-dev \
+    unixodbc-dev \
+    # SIP dependencies
+    libsofia-sip-ua-dev \
+    # WebRTC dependencies
+    libsrtp2-dev \
+    # Video support
+    libavformat-dev \
+    libswscale-dev \
+    # XML processing
+    libxml2-dev \
+    # Lua scripting
+    liblua5.2-dev \
+    # Performance
+    libgoogle-perftools-dev \
+    # Utilities
+    zlib1g-dev \
+    libjpeg-dev \
+    # gRPC and protobuf (Ubuntu 24.04 has modern versions)
+    libgrpc++-dev \
+    libgrpc-dev \
+    protobuf-compiler \
+    protobuf-compiler-grpc \
+    libprotobuf-dev \
+    # Google Cloud C++ dependencies
+    nlohmann-json3-dev \
+    libabsl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+WORKDIR /usr/local/src
+
+# ============================================================================
+# Build spandsp (FreeSWITCH dependency)
+# ============================================================================
+RUN echo "=========================================" \
+    && echo "Building spandsp ${SPANDSP_VERSION}..." \
+    && echo "=========================================" \
+    && git clone https://github.com/freeswitch/spandsp.git \
+    && cd spandsp \
+    && git checkout ${SPANDSP_VERSION} \
+    && ./bootstrap.sh \
+    && ./configure \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && echo "✅ spandsp installed"
+
+# ============================================================================
+# Build sofia-sip (FreeSWITCH dependency)
+# ============================================================================
+RUN echo "=========================================" \
+    && echo "Building sofia-sip v${SOFIA_VERSION}..." \
+    && echo "=========================================" \
+    && git clone --depth 1 -b v${SOFIA_VERSION} https://github.com/freeswitch/sofia-sip.git \
+    && cd sofia-sip \
+    && ./bootstrap.sh \
+    && ./configure \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && echo "✅ sofia-sip installed"
+
+# ============================================================================
+# Build FreeSWITCH
+# ============================================================================
+RUN echo "=========================================" \
+    && echo "Building FreeSWITCH ${FREESWITCH_VERSION}..." \
+    && echo "=========================================" \
+    && git clone -b ${FREESWITCH_VERSION} --depth 1 https://github.com/signalwire/freeswitch.git \
+    && cd freeswitch \
+    && ./bootstrap.sh -j \
+    && echo "✅ FreeSWITCH bootstrapped"
+
+WORKDIR /usr/local/src/freeswitch
+
+# Ensure critical modules are enabled
+RUN grep -q "^event_handlers/mod_event_socket$" modules.conf || \
+    echo "event_handlers/mod_event_socket" >> modules.conf \
+    && echo "✅ Ensured mod_event_socket is enabled"
+
+# Disable modules that require unavailable dependencies
+RUN sed -i 's|^endpoints/mod_verto$|#endpoints/mod_verto|' modules.conf \
+    && sed -i 's|^endpoints/mod_skinny$|#endpoints/mod_skinny|' modules.conf \
+    && sed -i 's|^applications/mod_signalwire$|#applications/mod_signalwire|' modules.conf \
+    && sed -i 's|^applications/mod_av$|#applications/mod_av|' modules.conf \
+    && sed -i 's|^languages/mod_python$|#languages/mod_python|' modules.conf \
+    && sed -i 's|^languages/mod_python3$|#languages/mod_python3|' modules.conf \
+    && sed -i 's|^languages/mod_java$|#languages/mod_java|' modules.conf \
+    && sed -i 's|^languages/mod_perl$|#languages/mod_perl|' modules.conf \
+    && sed -i 's|^languages/mod_php$|#languages/mod_php|' modules.conf \
+    && echo "✅ Disabled optional modules"
+
+# Configure FreeSWITCH
+RUN ./configure \
+    --prefix=/usr/local/freeswitch \
+    --enable-core-pgsql-support \
+    --enable-core-odbc-support \
+    --enable-tcmalloc \
+    --without-python \
+    --without-python3 \
+    --without-java \
+    --without-perl \
+    && echo "✅ FreeSWITCH configured"
+
+# Build and install FreeSWITCH
+RUN make -j ${BUILD_CPUS} && echo "✅ FreeSWITCH compiled" \
+    && make install && echo "✅ FreeSWITCH installed" \
+    && make cd-sounds-install cd-moh-install && echo "✅ Sounds installed"
+
+# Install sample configuration
+RUN mkdir -p /usr/local/freeswitch/conf \
+    && cp -r /usr/local/src/freeswitch/conf/vanilla/* /usr/local/freeswitch/conf/ \
+    && echo "✅ Sample configuration installed"
+
+# Update library cache
+RUN ldconfig
+
+# ============================================================================
+# Build Google Cloud C++ Speech SDK
+# ============================================================================
+WORKDIR /usr/local/src
+
+RUN echo "=========================================" \
+    && echo "Building Google Cloud C++ SDK v${GOOGLE_CLOUD_CPP_VERSION}..." \
+    && echo "This will take 10-15 minutes..." \
+    && echo "=========================================" \
+    && git clone --depth 1 -b v${GOOGLE_CLOUD_CPP_VERSION} https://github.com/googleapis/google-cloud-cpp.git \
+    && cd google-cloud-cpp \
+    && mkdir -p build && cd build \
+    && cmake .. \
+        -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGOOGLE_CLOUD_CPP_ENABLE=speech \
+        -DBUILD_TESTING=OFF \
+        -DGOOGLE_CLOUD_CPP_WITH_MOCKS=OFF \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && ldconfig \
+    && echo "✅ Google Cloud C++ Speech SDK v${GOOGLE_CLOUD_CPP_VERSION} installed"
+
+# Verify Google Cloud C++ installation
+RUN echo "=========================================" \
+    && echo "Verifying Google Cloud C++ installation..." \
+    && echo "=========================================" \
+    && ls -lh /usr/local/lib/libgoogle_cloud_cpp_speech.so* || echo "⚠️ speech library not found" \
+    && ls -lh /usr/local/lib/libgoogle_cloud_cpp_common.so* || echo "⚠️ common library not found" \
+    && ls -ld /usr/local/include/google/cloud/speech/ || echo "⚠️ speech headers not found" \
+    && echo "========================================="
+
+# ============================================================================
+# Build mod_google_transcribev2
+# ============================================================================
+WORKDIR /usr/local/src
+COPY ./modules/mod_google_transcribev2 /usr/local/src/mod_google_transcribev2
+
+RUN echo "=========================================" \
+    && echo "Building mod_google_transcribev2..." \
+    && echo "=========================================" \
+    && cd /usr/local/src/mod_google_transcribev2 \
+    && ls -lh *.c *.cpp *.proto 2>/dev/null || true \
+    && echo "" \
+    && echo "Building with Makefile..." \
+    && make clean > /dev/null 2>&1 || true \
+    && make -j ${BUILD_CPUS} FS_PREFIX=/usr/local/freeswitch \
+    && make install FS_PREFIX=/usr/local/freeswitch \
+    && echo "✅ mod_google_transcribev2 built and installed"
+
+# Verify module
+RUN echo "=========================================" \
+    && echo "Verifying mod_google_transcribev2..." \
+    && echo "=========================================" \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so \
+    && echo "" \
+    && echo "Module dependencies:" \
+    && ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so \
+    && echo "" \
+    && echo "Checking for missing dependencies..." \
+    && ! ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so | grep "not found" \
+    && echo "✅ All dependencies satisfied" \
+    && echo "========================================="
+
+# ============================================================================
+# Stage 2: Runtime - Clean production image
+# ============================================================================
+FROM ubuntu:${UBUNTU_VERSION} AS runtime
+
+# Install ONLY runtime dependencies (no build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Core runtime libraries
+    libssl3 \
+    libcurl4 \
+    libpcre3 \
+    libspeex1 \
+    libspeexdsp1 \
+    libedit2 \
+    libtiff6 \
+    libldns3 \
+    libuuid1 \
+    # Codecs
+    libopus0 \
+    libsndfile1 \
+    libshout3 \
+    libmpg123-0 \
+    libmp3lame0 \
+    # Database
+    libsqlite3-0 \
+    libpq5 \
+    unixodbc \
+    # SIP
+    libsofia-sip-ua0 \
+    # WebRTC
+    libsrtp2-1 \
+    # Video
+    libavformat60 \
+    libswscale7 \
+    # XML
+    libxml2 \
+    # Lua
+    liblua5.2-0 \
+    # Performance
+    libtcmalloc-minimal4 \
+    # gRPC runtime (Ubuntu 24.04)
+    libgrpc++1.51 \
+    libgrpc29 \
+    # Protobuf runtime
+    libprotobuf32 \
+    # Abseil runtime
+    libabsl20220623 \
+    # Utilities
+    procps \
+    net-tools \
+    iputils-ping \
+    iproute2 \
+    lsof \
+    vim \
+    curl \
+    wget \
+    ca-certificates \
+    # Process management
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built dependencies from builder
+COPY --from=builder /usr/local/lib/ /usr/local/lib/
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
+COPY --from=builder /usr/local/share/sofia-sip/ /usr/local/share/sofia-sip/
+
+# Copy FreeSWITCH installation
+COPY --from=builder /usr/local/freeswitch /usr/local/freeswitch
+
+# Update library cache
+RUN ldconfig
+
+# ============================================================================
+# Configure FreeSWITCH
+# ============================================================================
+
+# Fix NAT settings (use local_ip_v4 instead of STUN)
+RUN sed -i 's|value="\$\${external_rtp_ip}"|value="\$\${local_ip_v4}"|' /usr/local/freeswitch/conf/sip_profiles/internal.xml && \
+    sed -i 's|value="\$\${external_sip_ip}"|value="\$\${local_ip_v4}"|'  /usr/local/freeswitch/conf/sip_profiles/internal.xml
+
+# Create FreeSWITCH user and group
+RUN groupadd -r freeswitch && useradd -r -g freeswitch freeswitch
+
+# Configure extensions 1000 and 1001
+RUN cat > /usr/local/freeswitch/conf/directory/default/1000.xml <<'EOF'
+<include>
+  <user id="1000">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1000"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1000"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1000"/>
+      <variable name="effective_caller_id_number" value="1000"/>
+      <variable name="outbound_caller_id_name" value="FreeSWITCH"/>
+      <variable name="outbound_caller_id_number" value="0000000000"/>
+      <variable name="callgroup" value="techsupport"/>
+    </variables>
+  </user>
+</include>
+EOF
+
+RUN cat > /usr/local/freeswitch/conf/directory/default/1001.xml <<'EOF'
+<include>
+  <user id="1001">
+    <params>
+      <param name="password" value="1234"/>
+      <param name="vm-password" value="1001"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="1001"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Extension 1001"/>
+      <variable name="effective_caller_id_number" value="1001"/>
+      <variable name="outbound_caller_id_name" value="FreeSWITCH"/>
+      <variable name="outbound_caller_id_number" value="0000000000"/>
+      <variable name="callgroup" value="techsupport"/>
+    </variables>
+  </user>
+</include>
+EOF
+
+# Configure Event Socket for IPv4 binding
+RUN cat > /usr/local/freeswitch/conf/autoload_configs/event_socket.conf.xml <<'EOF'
+<configuration name="event_socket.conf" description="Socket Client">
+  <settings>
+    <param name="nat-map" value="false"/>
+    <param name="listen-ip" value="0.0.0.0"/>
+    <param name="listen-port" value="8021"/>
+    <param name="password" value="ClueCon"/>
+  </settings>
+</configuration>
+EOF
+
+# Enable mod_google_transcribev2 in modules.conf.xml
+RUN MODULES_CONF="/usr/local/freeswitch/conf/autoload_configs/modules.conf.xml" \
+    && if [ -f "$MODULES_CONF" ]; then \
+        if ! grep -q "mod_google_transcribev2" "$MODULES_CONF"; then \
+            sed -i '/<\/modules>/i \    <!-- Google Speech-to-Text v2 -->' "$MODULES_CONF" && \
+            sed -i '/<\/modules>/i \    <load module="mod_google_transcribev2"/>' "$MODULES_CONF" && \
+            echo "✅ Added mod_google_transcribev2 to modules.conf.xml"; \
+        fi \
+    fi
+
+# Set ownership
+RUN mkdir -p /usr/local/freeswitch/log /usr/local/freeswitch/db \
+    && chown -R freeswitch:freeswitch /usr/local/freeswitch
+
+# ============================================================================
+# Configure Supervisor
+# ============================================================================
+
+RUN mkdir -p /etc/supervisor/conf.d && cat > /etc/supervisor/conf.d/freeswitch.conf <<'EOF'
+[program:freeswitch]
+command=/usr/local/freeswitch/bin/freeswitch -nonat -nc -nf -conf /usr/local/freeswitch/conf -log /usr/local/freeswitch/log -db /usr/local/freeswitch/db
+autostart=true
+autorestart=true
+user=freeswitch
+stdout_logfile=/var/log/supervisor/freeswitch.log
+stderr_logfile=/var/log/supervisor/freeswitch_err.log
+environment=LD_LIBRARY_PATH="/usr/local/lib:/usr/local/freeswitch/lib",GOOGLE_APPLICATION_CREDENTIALS="%(ENV_GOOGLE_APPLICATION_CREDENTIALS)s",GOOGLE_PROJECT_ID="%(ENV_GOOGLE_PROJECT_ID)s",GOOGLE_LOCATION_ID="%(ENV_GOOGLE_LOCATION_ID)s"
+EOF
+
+# Create entrypoint script
+RUN cat > /entrypoint.sh <<'EOF'
+#!/bin/bash
+set -e
+
+echo "========================================="
+echo "FreeSWITCH 1.10.11 + mod_google_transcribev2"
+echo "========================================="
+echo ""
+echo " FS Home   : /usr/local/freeswitch"
+echo " Config    : /usr/local/freeswitch/conf"
+echo " Logs      : /usr/local/freeswitch/log"
+echo " DB        : /usr/local/freeswitch/db"
+echo " ESL       : 0.0.0.0:8021 (password: ClueCon)"
+echo ""
+echo "Modules Loaded:"
+echo "  - mod_google_transcribev2 (Google Speech-to-Text v2)"
+echo ""
+echo "Pre-configured Extensions:"
+echo "  - 1000 (password: 1234)"
+echo "  - 1001 (password: 1234)"
+echo ""
+echo "Google Cloud Configuration:"
+echo "  Set these environment variables:"
+echo "    GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json"
+echo "    GOOGLE_PROJECT_ID=your-project-id"
+echo "    GOOGLE_LOCATION_ID=us-central1"
+echo ""
+echo "========================================="
+echo ""
+
+# If no command specified, start supervisor
+if [ $# -eq 0 ]; then
+    echo "Starting FreeSWITCH via supervisor..."
+    exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
+else
+    exec "$@"
+fi
+EOF
+
+RUN chmod +x /entrypoint.sh
+
+# Create supervisor log directory
+RUN mkdir -p /var/log/supervisor
+
+# ============================================================================
+# Final Configuration
+# ============================================================================
+
+# Environment variables
+ENV PATH="/usr/local/freeswitch/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/freeswitch/lib"
+
+# Expose ports
+EXPOSE 5060/tcp 5060/udp 5080/tcp 5080/udp
+EXPOSE 5061/tcp 5061/udp 5081/tcp 5081/udp
+EXPOSE 8021/tcp
+EXPOSE 7443/tcp
+EXPOSE 5066/tcp
+EXPOSE 16384-32768/udp
+
+# Volumes
+VOLUME ["/usr/local/freeswitch/conf", "/usr/local/freeswitch/log", "/usr/local/freeswitch/db"]
+
+WORKDIR /usr/local/freeswitch
+
+# Labels
+LABEL maintainer="FreeSWITCH Speech AI"
+LABEL description="FreeSWITCH 1.10.11 + mod_google_transcribev2 (Ubuntu 24.04)"
+LABEL freeswitch.version="1.10.11"
+LABEL google.cloud.cpp.version="2.30.0"
+LABEL base.os="Ubuntu 24.04"
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []
