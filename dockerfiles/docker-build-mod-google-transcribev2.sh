@@ -115,7 +115,8 @@ echo -e "${BLUE}Checking for base image: ${BASE_IMAGE}${NC}"
 if docker image inspect "${BASE_IMAGE}" > /dev/null 2>&1; then
     echo -e "${GREEN}✅ Base image found${NC}"
     docker image inspect "${BASE_IMAGE}" --format '  Created: {{.Created}}' | head -1
-    docker image inspect "${BASE_IMAGE}" --format '  Size: {{.Size}}' | numfmt --to=iec
+    BASE_SIZE=$(docker image inspect "${BASE_IMAGE}" --format '{{.Size}}')
+    echo "  Size: $(echo $BASE_SIZE | numfmt --to=iec)"
 else
     echo -e "${YELLOW}⚠️  Base image not found locally${NC}"
     echo ""
@@ -228,7 +229,8 @@ echo ""
 # Show image details
 echo "Image details:"
 docker image inspect "${IMAGE_TAG}" --format '  Created: {{.Created}}'
-docker image inspect "${IMAGE_TAG}" --format '  Size: {{.Size}}' | awk '{printf "  Size: %.2f GB\n", $1/1024/1024/1024}'
+IMAGE_SIZE=$(docker image inspect "${IMAGE_TAG}" --format '{{.Size}}')
+echo "  Size: $(echo $IMAGE_SIZE | awk '{printf "%.2f GB", $1/1024/1024/1024}')"
 docker image inspect "${IMAGE_TAG}" --format '  Google Cloud C++ Version: {{index .Config.Labels "google.cloud.cpp.version"}}'
 echo ""
 
