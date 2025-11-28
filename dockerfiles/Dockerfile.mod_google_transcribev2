@@ -64,29 +64,19 @@ RUN echo "=============================================" \
 # ============================================================================
 # Install build dependencies
 # ============================================================================
+# Note: Base image already includes build-essential, cmake, git, wget,
+# ca-certificates, pkg-config, libssl-dev, libcurl4-openssl-dev, zlib1g-dev,
+# and libspeexdsp-dev. We only add Google Cloud C++ specific dependencies.
 RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
-    # Build tools
-    build-essential \
-    git \
-    cmake \
-    ca-certificates \
-    wget \
-    pkg-config \
-    # Core dependencies
-    libcurl4-openssl-dev \
-    libssl-dev \
-    zlib1g-dev \
-    # gRPC and protobuf
+    # gRPC and protobuf (for Google Cloud C++)
     libgrpc++-dev \
     libgrpc-dev \
     protobuf-compiler \
     protobuf-compiler-grpc \
     libprotobuf-dev \
-    # Google Cloud C++ dependencies
+    # Google Cloud C++ specific dependencies
     nlohmann-json3-dev \
     libabsl-dev \
-    # Audio processing (for mod_google_transcribev2)
-    libspeexdsp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set library path
@@ -250,11 +240,9 @@ FROM ${BASE_IMAGE} AS runtime
 ARG GOOGLE_CLOUD_CPP_VERSION=2.30.0
 
 # Install runtime dependencies for Google Cloud SDK and mod_google_transcribev2
+# Note: Base image already includes libssl1.1, libcurl4, and libspeexdsp1.
+# We only add Google Cloud C++ specific runtime dependencies.
 RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
-    # Core runtime libraries
-    libcurl4 \
-    libssl1.1 \
-    zlib1g \
     # gRPC runtime
     libgrpc++1 \
     libgrpc10 \
@@ -262,10 +250,6 @@ RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
     libprotobuf23 \
     # Abseil (required by Google Cloud C++)
     libabsl20200923 \
-    # Audio processing
-    libspeexdsp1 \
-    # JSON library
-    nlohmann-json3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV LD_LIBRARY_PATH=/usr/local/lib
