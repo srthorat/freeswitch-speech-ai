@@ -4,22 +4,24 @@
 # ============================================================================
 #
 # Usage:
-#   ./run-on-macbook.sh <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] [AWS_SESSION_TOKEN]
+#   ./run-on-macbook.sh <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] [AWS_SESSION_TOKEN] [GOOGLE_PROJECT_ID] [GCP_LOCATION]
 #
 # Examples:
 #   ./run-on-macbook.sh srt2011/freeswitch-base:latest
-#   ./run-on-macbook.sh srt2011/freeswitch-speech-ai:latest  # All modules (audio_fork, AWS, Deepgram)
+#   ./run-on-macbook.sh srt2011/freeswitch-speech-ai:latest  # All modules (audio_fork, AWS, Deepgram, Google)
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-audio-fork:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-google-transcribev2:latest
 #
 # With API keys for transcription:
-#   ./run-on-macbook.sh srt2011/freeswitch-speech-ai:latest YOUR_DEEPGRAM_KEY "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1
+#   ./run-on-macbook.sh srt2011/freeswitch-speech-ai:latest YOUR_DEEPGRAM_KEY "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1 "" YOUR_GOOGLE_PROJECT_ID us-central1
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-azure-transcribe:latest "" YOUR_AZURE_KEY eastus
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1
 #   ./run-on-macbook.sh srt2011/freeswitch-mod-aws-transcribe:latest "" "" "" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1 YOUR_SESSION_TOKEN
+#   ./run-on-macbook.sh srt2011/freeswitch-mod-google-transcribev2:latest "" "" "" "" "" "" "" YOUR_GOOGLE_PROJECT_ID us-central1
 #
 # ============================================================================
 
@@ -33,38 +35,41 @@ AWS_ACCESS_KEY_ID=${5:-""}
 AWS_SECRET_ACCESS_KEY=${6:-""}
 AWS_REGION=${7:-"us-east-1"}
 AWS_SESSION_TOKEN=${8:-""}
+GOOGLE_PROJECT_ID=${9:-""}
+GCP_LOCATION=${10:-"us-central1"}
 CONTAINER_NAME="freeswitch"
 
 # Validation
 if [ -z "$REMOTE_IMAGE" ]; then
     echo "❌ Error: Docker image name is required"
     echo ""
-    echo "Usage: $0 <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] [AWS_SESSION_TOKEN]"
+    echo "Usage: $0 <docker-image-name> [DEEPGRAM_KEY] [AZURE_KEY] [AZURE_REGION] [AWS_ACCESS_KEY_ID] [AWS_SECRET_ACCESS_KEY] [AWS_REGION] [AWS_SESSION_TOKEN] [GOOGLE_PROJECT_ID] [GCP_LOCATION]"
     echo ""
     echo "Examples:"
     echo "  $0 srt2011/freeswitch-base:latest"
-    echo "  $0 srt2011/freeswitch-speech-ai:latest  # All modules (audio_fork, AWS, Deepgram)"
+    echo "  $0 srt2011/freeswitch-speech-ai:latest  # All modules"
     echo "  $0 srt2011/freeswitch-mod-audio-fork:latest"
     echo "  $0 srt2011/freeswitch-mod-deepgram-transcribe:latest"
     echo "  $0 srt2011/freeswitch-mod-azure-transcribe:latest"
     echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest"
+    echo "  $0 srt2011/freeswitch-mod-google-transcribev2:latest"
     echo ""
     echo "With API keys:"
-    echo "  All-modules image (Deepgram + AWS):"
-    echo "    $0 srt2011/freeswitch-speech-ai:latest YOUR_DEEPGRAM_KEY \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1"
-    echo ""
-    echo "  Individual modules:"
+    echo "  Deepgram:"
     echo "    $0 srt2011/freeswitch-mod-deepgram-transcribe:latest YOUR_DEEPGRAM_KEY"
+    echo ""
+    echo "  Azure:"
     echo "    $0 srt2011/freeswitch-mod-azure-transcribe:latest \"\" YOUR_AZURE_KEY eastus"
     echo ""
-    echo "AWS Transcribe - Permanent credentials (AKIA*):"
-    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1"
+    echo "  AWS (Permanent - AKIA*):"
+    echo "    $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1"
     echo ""
-    echo "AWS Transcribe - Temporary credentials (ASIA*):"
-    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1 YOUR_SESSION_TOKEN"
+    echo "  AWS (Temporary - ASIA*):"
+    echo "    $0 srt2011/freeswitch-mod-aws-transcribe:latest \"\" \"\" \"\" YOUR_AWS_ACCESS_KEY_ID YOUR_AWS_SECRET_ACCESS_KEY us-east-1 YOUR_SESSION_TOKEN"
     echo ""
-    echo "AWS Transcribe - IAM Role (on EC2/ECS):"
-    echo "  $0 srt2011/freeswitch-mod-aws-transcribe:latest"
+    echo "  Google (requires credentials file):"
+    echo "    $0 srt2011/freeswitch-mod-google-transcribev2:latest \"\" \"\" \"\" \"\" \"\" \"\" \"\" YOUR_GOOGLE_PROJECT_ID us-central1"
+    echo "    Note: Mount credentials file separately: -v /path/to/creds.json:/etc/freeswitch/google-creds.json"
     exit 1
 fi
 
@@ -101,6 +106,12 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
     if [ -n "$AWS_SESSION_TOKEN" ]; then
         echo "  Session Token: ${AWS_SESSION_TOKEN:0:20}... (present)"
     fi
+fi
+if [ -n "$GOOGLE_PROJECT_ID" ]; then
+    echo "Google Cloud Credentials:"
+    echo "  Project ID: $GOOGLE_PROJECT_ID"
+    echo "  Location: $GCP_LOCATION"
+    echo "  ⚠️  Note: Credentials file must be mounted separately"
 fi
 echo ""
 
@@ -163,6 +174,10 @@ if [ -n "$AWS_ACCESS_KEY_ID" ]; then
         DOCKER_CMD="$DOCKER_CMD -e AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN"
     fi
 fi
+if [ -n "$GOOGLE_PROJECT_ID" ]; then
+    DOCKER_CMD="$DOCKER_CMD -e GOOGLE_PROJECT_ID=$GOOGLE_PROJECT_ID"
+    DOCKER_CMD="$DOCKER_CMD -e GCP_LOCATION=$GCP_LOCATION"
+fi
 
 DOCKER_CMD="$DOCKER_CMD $REMOTE_IMAGE"
 
@@ -215,7 +230,7 @@ echo ""
 echo "============================================="
 echo "Transcription Modules"
 echo "============================================="
-MODULE_CHECK=$(docker exec "$CONTAINER_NAME" /usr/local/freeswitch/bin/fs_cli -x "show modules" 2>/dev/null | grep -E "audio_fork|deepgram|azure|aws" || echo "")
+MODULE_CHECK=$(docker exec "$CONTAINER_NAME" /usr/local/freeswitch/bin/fs_cli -x "show modules" 2>/dev/null | grep -E "audio_fork|deepgram|azure|aws|google" || echo "")
 if [ -z "$MODULE_CHECK" ]; then
     echo "No transcription modules detected (base image)"
 else
@@ -230,6 +245,7 @@ else
     DEEPGRAM=$(echo "$MODULE_CHECK" | grep "deepgram" || echo "")
     AZURE=$(echo "$MODULE_CHECK" | grep "azure" || echo "")
     AWS=$(echo "$MODULE_CHECK" | grep "aws" || echo "")
+    GOOGLE=$(echo "$MODULE_CHECK" | grep "google" || echo "")
 
     echo "Module Status:"
     if [ -n "$AUDIO_FORK" ]; then
@@ -256,6 +272,13 @@ else
             echo "  ⚠️  mod_aws_transcribe loaded (credentials not configured)"
         fi
     fi
+    if [ -n "$GOOGLE" ]; then
+        if [ -n "$GOOGLE_PROJECT_ID" ]; then
+            echo "  ✅ mod_google_transcribev2 loaded and configured"
+        else
+            echo "  ⚠️  mod_google_transcribev2 loaded (credentials not configured)"
+        fi
+    fi
 
     echo ""
     echo "Total transcription modules loaded: $MODULE_COUNT"
@@ -267,12 +290,13 @@ echo "============================================="
 echo "Module Verification Command"
 echo "============================================="
 echo "To verify all modules are loaded, run:"
-echo "  docker exec $CONTAINER_NAME fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram|aws'"
+echo "  docker exec $CONTAINER_NAME fs_cli -x 'show modules' | grep -E 'audio_fork|deepgram|aws|google'"
 echo ""
 echo "Expected output (for all-modules image):"
 echo "  api,uuid_audio_fork,mod_audio_fork,/usr/local/freeswitch/lib/freeswitch/mod/mod_audio_fork.so"
 echo "  api,uuid_aws_transcribe,mod_aws_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_aws_transcribe.so"
 echo "  api,uuid_deepgram_transcribe,mod_deepgram_transcribe,/usr/local/freeswitch/lib/freeswitch/mod/mod_deepgram_transcribe.so"
+echo "  api,uuid_google_transcribev2,mod_google_transcribev2,/usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so"
 echo ""
 
 # Get MacBook IP
@@ -362,6 +386,29 @@ if [ -n "$MODULE_CHECK" ]; then
             echo ""
             echo "    Then start transcription:"
             echo "    freeswitch@internal> uuid_aws_transcribe <uuid> start en-US interim stereo"
+        fi
+    fi
+    if echo "$MODULE_CHECK" | grep -q "google"; then
+        echo "  Google Speech-to-Text v2:"
+        if [ -n "$GOOGLE_PROJECT_ID" ]; then
+            echo "    ✓ Project ID configured via environment variables"
+            echo "    ⚠️  Note: Credentials file must be mounted at container runtime"
+            echo "    docker exec -it $CONTAINER_NAME fs_cli"
+            echo "    freeswitch@internal> uuid_google_transcribev2 <uuid> start en-US"
+        else
+            echo "    ⚠️  Credentials not configured"
+            echo "    To configure:"
+            echo "    1. Restart container with Google credentials:"
+            echo "       docker stop $CONTAINER_NAME && docker rm $CONTAINER_NAME"
+            echo "       docker run -d --name $CONTAINER_NAME \\"
+            echo "         -e GOOGLE_PROJECT_ID=your-project-id \\"
+            echo "         -e GOOGLE_APPLICATION_CREDENTIALS=/etc/freeswitch/google-creds.json \\"
+            echo "         -v /path/to/creds.json:/etc/freeswitch/google-creds.json:ro \\"
+            echo "         $REMOTE_IMAGE"
+            echo ""
+            echo "    2. Then use the module:"
+            echo "       docker exec -it $CONTAINER_NAME fs_cli"
+            echo "       freeswitch@internal> uuid_google_transcribev2 <uuid> start en-US"
         fi
     fi
 fi
