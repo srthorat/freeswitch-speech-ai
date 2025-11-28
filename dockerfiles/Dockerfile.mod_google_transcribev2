@@ -35,13 +35,14 @@
 ARG BASE_IMAGE=srt2011/freeswitch-base:latest
 
 # Google Cloud C++ Speech SDK Version Configuration
-# - Current default: 2.30.0 (tested and stable)
+# - Current default: 2.25.0 (tested and stable with Debian Bullseye gRPC)
+# - v2.30.0 has compatibility issues with older gRPC versions
 # - Minimum required: 2.0.0+
 # - Latest available: Check https://github.com/googleapis/google-cloud-cpp/releases
 #
 # To use a different version, pass as build arg:
-#   --build-arg GOOGLE_CLOUD_CPP_VERSION=2.31.0
-ARG GOOGLE_CLOUD_CPP_VERSION=2.30.0
+#   --build-arg GOOGLE_CLOUD_CPP_VERSION=2.28.0
+ARG GOOGLE_CLOUD_CPP_VERSION=2.25.0
 ARG BUILD_CPUS=4
 
 # ============================================================================
@@ -50,7 +51,7 @@ ARG BUILD_CPUS=4
 FROM ${BASE_IMAGE} AS builder
 
 ARG BUILD_CPUS=4
-ARG GOOGLE_CLOUD_CPP_VERSION=2.30.0
+ARG GOOGLE_CLOUD_CPP_VERSION=2.25.0
 
 # Print build configuration
 RUN echo "=============================================" \
@@ -249,7 +250,7 @@ RUN echo "=========================================" \
 FROM ${BASE_IMAGE} AS runtime
 
 # Re-declare ARG for runtime stage (ARGs don't persist across stages)
-ARG GOOGLE_CLOUD_CPP_VERSION=2.30.0
+ARG GOOGLE_CLOUD_CPP_VERSION=2.25.0
 
 # Install runtime dependencies for Google Cloud SDK and mod_google_transcribev2
 # Note: Base image already includes libssl1.1, libcurl4, and libspeexdsp1.

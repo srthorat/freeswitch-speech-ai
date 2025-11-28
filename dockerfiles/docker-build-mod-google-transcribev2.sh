@@ -43,7 +43,7 @@ NC='\033[0m' # No Color
 
 # Default values
 BASE_IMAGE="srt2011/freeswitch-base:latest"
-GOOGLE_VERSION="2.30.0"
+GOOGLE_VERSION="2.25.0"
 BUILD_CPUS=4
 IMAGE_TAG="freeswitch:mod-google-transcribev2"
 NO_CACHE=""
