@@ -47,6 +47,11 @@ ARG BUILD_CPUS=4
 ARG UBUNTU_VERSION=24.04
 
 # ============================================================================
+# Base Stage: Import FreeSWITCH headers and libraries
+# ============================================================================
+FROM ${BASE_IMAGE} AS freeswitch-base
+
+# ============================================================================
 # Builder Stage: Compile mod_google_transcribev2 with Google Cloud C++ SDK
 # Uses Ubuntu 24.04 for modern gRPC, protobuf, and GCC
 # ============================================================================
@@ -97,8 +102,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
 # Copy FreeSWITCH headers from base image (needed for module compilation)
-COPY --from=${BASE_IMAGE} /usr/local/freeswitch/include /usr/local/freeswitch/include
-COPY --from=${BASE_IMAGE} /usr/local/freeswitch/lib /usr/local/freeswitch/lib
+COPY --from=freeswitch-base /usr/local/freeswitch/include /usr/local/freeswitch/include
+COPY --from=freeswitch-base /usr/local/freeswitch/lib /usr/local/freeswitch/lib
 
 # Verify gRPC tools are available
 RUN echo "=========================================" \
