@@ -1,0 +1,420 @@
+# ============================================================================
+# Dockerfile for FreeSWITCH with mod_google_transcribev2
+# ============================================================================
+#
+# ASSUMPTIONS:
+#   - FreeSWITCH source location: /usr/local/src/freeswitch
+#   - FreeSWITCH runtime install path: /usr/local/freeswitch
+#   - Module install path: /usr/local/freeswitch/lib/freeswitch/mod/
+#
+# This Dockerfile builds mod_google_transcribev2 on top of the freeswitch-base
+# image, adding Google Cloud C++ Speech SDK and Google Speech-to-Text v2 integration.
+#
+# Base image includes:
+#   - FreeSWITCH 1.10.11 fully built and configured
+#   - All required configs for SIP calls
+#   - Event Socket configured for fs_cli
+#   - Production patches and optimizations
+#
+# This image adds:
+#   - gRPC and Protocol Buffers (protobuf)
+#   - Google Cloud C++ Speech library v2.30.0
+#   - mod_google_transcribev2 (Google Speech-to-Text v2 real-time transcription)
+#
+# Build time: 15-20 minutes (includes Google Cloud C++ build)
+# Final size: ~1.1 GB (adds Google Cloud SDK ~200MB)
+#
+# Usage:
+#   docker build -f dockerfiles/Dockerfile.mod_google_transcribev2 \
+#     -t freeswitch:mod-google-transcribev2 .
+#
+# Or use the build script:
+#   ./dockerfiles/docker-build-mod-google-transcribev2.sh
+# ============================================================================
+
+ARG BASE_IMAGE=srt2011/freeswitch-base:latest
+
+# Google Cloud C++ Speech SDK Version Configuration
+# - Current default: 2.30.0 (tested and stable)
+# - Minimum required: 2.0.0+
+# - Latest available: Check https://github.com/googleapis/google-cloud-cpp/releases
+#
+# To use a different version, pass as build arg:
+#   --build-arg GOOGLE_CLOUD_CPP_VERSION=2.31.0
+ARG GOOGLE_CLOUD_CPP_VERSION=2.30.0
+ARG BUILD_CPUS=4
+
+# ============================================================================
+# Builder Stage: Compile mod_google_transcribev2 with Google Cloud C++ SDK
+# ============================================================================
+FROM ${BASE_IMAGE} AS builder
+
+ARG BUILD_CPUS=4
+ARG GOOGLE_CLOUD_CPP_VERSION=2.30.0
+
+# Print build configuration
+RUN echo "=============================================" \
+    && echo "Building mod_google_transcribev2" \
+    && echo "=============================================" \
+    && echo "Base Image: ${BASE_IMAGE}" \
+    && echo "Google Cloud C++ Version: ${GOOGLE_CLOUD_CPP_VERSION}" \
+    && echo "Build CPUs: ${BUILD_CPUS}" \
+    && echo "============================================="
+
+# ============================================================================
+# Install build dependencies
+# ============================================================================
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    # Build tools
+    build-essential \
+    git \
+    cmake \
+    ca-certificates \
+    wget \
+    pkg-config \
+    # Core dependencies
+    libcurl4-openssl-dev \
+    libssl-dev \
+    zlib1g-dev \
+    # gRPC and protobuf
+    libgrpc++-dev \
+    libgrpc-dev \
+    protobuf-compiler \
+    protobuf-compiler-grpc \
+    libprotobuf-dev \
+    # Google Cloud C++ dependencies
+    nlohmann-json3-dev \
+    libabsl-dev \
+    # Audio processing (for mod_google_transcribev2)
+    libspeexdsp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set library path
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# Verify gRPC tools are available
+RUN echo "=========================================" \
+    && echo "Verifying gRPC and protobuf installation..." \
+    && echo "=========================================" \
+    && which protoc && protoc --version \
+    && which grpc_cpp_plugin && echo "✅ grpc_cpp_plugin found" \
+    && ls -la /usr/lib/*/libgrpc++.so* && echo "✅ grpc++ library found" \
+    && ls -la /usr/lib/*/libprotobuf.so* && echo "✅ protobuf library found" \
+    && echo "========================================="
+
+# ============================================================================
+# Build Google Cloud C++ Speech library
+# ============================================================================
+WORKDIR /usr/local/src
+
+RUN echo "=========================================" \
+    && echo "Installing additional dependencies for Google Cloud C++..." \
+    && echo "=========================================" \
+    && apt-get update \
+    && apt-get install -y --quiet --no-install-recommends \
+        nlohmann-json3-dev \
+        libcurl4-openssl-dev \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "✅ Additional dependencies installed"
+
+RUN echo "=========================================" \
+    && echo "Cloning Google Cloud C++ ${GOOGLE_CLOUD_CPP_VERSION}..." \
+    && echo "=========================================" \
+    && git clone --depth 1 -b v${GOOGLE_CLOUD_CPP_VERSION} https://github.com/googleapis/google-cloud-cpp.git \
+    && echo "✅ Google Cloud C++ source downloaded"
+
+RUN echo "=========================================" \
+    && echo "Building Google Cloud C++ Speech library ${GOOGLE_CLOUD_CPP_VERSION}..." \
+    && echo "This will take 10-15 minutes..." \
+    && echo "=========================================" \
+    && cd /usr/local/src/google-cloud-cpp \
+    && mkdir -p build && cd build \
+    && cmake .. \
+        -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGOOGLE_CLOUD_CPP_ENABLE=speech \
+        -DBUILD_TESTING=OFF \
+        -DGOOGLE_CLOUD_CPP_WITH_MOCKS=OFF \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+    && make -j ${BUILD_CPUS} \
+    && make install \
+    && ldconfig \
+    && echo "✅ Google Cloud C++ Speech library ${GOOGLE_CLOUD_CPP_VERSION} built and installed"
+
+# Verify Google Cloud C++ installation
+RUN echo "=========================================" \
+    && echo "Verifying Google Cloud C++ installation..." \
+    && echo "=========================================" \
+    && echo "Libraries:" \
+    && ls -lh /usr/local/lib/libgoogle_cloud_cpp_*.so* 2>/dev/null | head -20 || echo "⚠️ No Google Cloud libraries found" \
+    && echo "" \
+    && echo "Headers:" \
+    && ls -ld /usr/local/include/google/cloud/speech/ 2>/dev/null || echo "⚠️ Speech headers not found" \
+    && echo "" \
+    && echo "Checking for required components:" \
+    && ls -1 /usr/local/lib/libgoogle_cloud_cpp_speech.so* 2>/dev/null && echo "  ✅ speech" || echo "  ❌ speech NOT FOUND" \
+    && ls -1 /usr/local/lib/libgoogle_cloud_cpp_grpc_utils.so* 2>/dev/null && echo "  ✅ grpc_utils" || echo "  ⚠️  grpc_utils not found (optional)" \
+    && ls -1 /usr/local/lib/libgoogle_cloud_cpp_common.so* 2>/dev/null && echo "  ✅ common" || echo "  ❌ common NOT FOUND" \
+    && echo "========================================="
+
+# ============================================================================
+# Build mod_google_transcribev2
+# ============================================================================
+WORKDIR /usr/local/src
+COPY ./modules/mod_google_transcribev2 /usr/local/src/mod_google_transcribev2
+
+RUN echo "=========================================" \
+    && echo "Building mod_google_transcribev2..." \
+    && echo "=========================================" \
+    && cd /usr/local/src/mod_google_transcribev2 \
+    && echo "" \
+    && echo "Source files:" \
+    && ls -lh *.c *.cpp *.proto 2>/dev/null || true \
+    && echo "" \
+    && echo "Checking for pre-generated protobuf files..." \
+    && if [ -f "speech.pb.cc" ] && [ -f "speech.grpc.pb.cc" ]; then \
+        echo "✅ Pre-generated protobuf files found"; \
+    else \
+        echo "⚠️  Protobuf files not found, will generate from speech.proto"; \
+    fi \
+    && echo "" \
+    && echo "Building module using Makefile..." \
+    && make clean > /dev/null 2>&1 || true \
+    && make -j ${BUILD_CPUS} FS_PREFIX=/usr/local/freeswitch \
+    && echo "✅ mod_google_transcribev2 compiled" \
+    && echo "" \
+    && echo "Installing module..." \
+    && mkdir -p /usr/local/freeswitch/lib/freeswitch/mod \
+    && make install FS_PREFIX=/usr/local/freeswitch \
+    && echo "✅ mod_google_transcribev2 installed"
+
+# Verify module was built
+RUN echo "=========================================" \
+    && echo "Build Verification..." \
+    && echo "=========================================" \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so \
+    && echo "" \
+    && echo "Checking module dependencies..." \
+    && ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so \
+    && echo ""
+
+# ============================================================================
+# Validation Stage: Verify module dependencies
+# ============================================================================
+RUN echo "=========================================" \
+    && echo "Module Validation" \
+    && echo "=========================================" \
+    && MODULE_PATH="/usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so" \
+    && echo "" \
+    && echo "1. Check module file exists:" \
+    && if [ -f "$MODULE_PATH" ]; then \
+        echo "✅ Module file exists"; ls -lh "$MODULE_PATH"; \
+    else \
+        echo "❌ ERROR: Module file not found: $MODULE_PATH"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "2. Check module dependencies with ldd:" \
+    && ldd "$MODULE_PATH" \
+    && echo "" \
+    && echo "3. Verify Google Cloud SDK linkage:" \
+    && if ldd "$MODULE_PATH" | grep -q "libgoogle_cloud_cpp_speech"; then \
+        echo "✅ Module correctly linked with Google Cloud C++ Speech"; \
+        ldd "$MODULE_PATH" | grep libgoogle_cloud_cpp; \
+    else \
+        echo "❌ ERROR: Module not linked with Google Cloud C++ SDK"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "4. Verify gRPC linkage:" \
+    && if ldd "$MODULE_PATH" | grep -q "libgrpc++"; then \
+        echo "✅ Module correctly linked with gRPC++"; \
+        ldd "$MODULE_PATH" | grep libgrpc; \
+    else \
+        echo "❌ ERROR: Module not linked with gRPC"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "5. Verify protobuf linkage:" \
+    && if ldd "$MODULE_PATH" | grep -q "libprotobuf"; then \
+        echo "✅ Module correctly linked with protobuf"; \
+        ldd "$MODULE_PATH" | grep libprotobuf; \
+    else \
+        echo "❌ ERROR: Module not linked with protobuf"; exit 1; \
+    fi \
+    && echo "" \
+    && echo "6. Check for missing dependencies:" \
+    && if ldd "$MODULE_PATH" | grep -q "not found"; then \
+        echo "❌ ERROR: Missing dependencies:"; \
+        ldd "$MODULE_PATH" | grep "not found"; exit 1; \
+    else \
+        echo "✅ No missing dependencies"; \
+    fi \
+    && echo "=========================================" \
+    && echo "✅ Static validation passed!" \
+    && echo "========================================="
+
+# ============================================================================
+# Runtime Stage: Clean image with mod_google_transcribev2
+# ============================================================================
+FROM ${BASE_IMAGE} AS runtime
+
+# Re-declare ARG for runtime stage (ARGs don't persist across stages)
+ARG GOOGLE_CLOUD_CPP_VERSION=2.30.0
+
+# Install runtime dependencies for Google Cloud SDK and mod_google_transcribev2
+RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
+    # Core runtime libraries
+    libcurl4 \
+    libssl1.1 \
+    zlib1g \
+    # gRPC runtime
+    libgrpc++1 \
+    libgrpc10 \
+    # Protobuf runtime
+    libprotobuf23 \
+    # Abseil (required by Google Cloud C++)
+    libabsl20200923 \
+    # Audio processing
+    libspeexdsp1 \
+    # JSON library
+    nlohmann-json3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+
+# Copy Google Cloud C++ libraries from builder
+COPY --from=builder /usr/local/lib/libgoogle_cloud_cpp_*.so* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libabsl_*.so* /usr/local/lib/
+
+# Copy mod_google_transcribev2 module from builder
+COPY --from=builder /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so \
+    /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so
+
+# Update library cache
+RUN ldconfig
+
+# ============================================================================
+# Configure FreeSWITCH to load mod_google_transcribev2
+# ============================================================================
+
+# Enable mod_google_transcribev2 in modules.conf.xml
+RUN echo "=========================================" \
+    && echo "Configuring FreeSWITCH modules.conf.xml..." \
+    && echo "=========================================" \
+    && MODULES_CONF="/usr/local/freeswitch/conf/autoload_configs/modules.conf.xml" \
+    && if [ -f "$MODULES_CONF" ]; then \
+        if ! grep -q "mod_google_transcribev2" "$MODULES_CONF"; then \
+            sed -i '/<\/modules>/i \    <!-- Google Speech-to-Text v2 -->' "$MODULES_CONF" && \
+            sed -i '/<\/modules>/i \    <load module="mod_google_transcribev2"/>' "$MODULES_CONF" && \
+            echo "✅ Added mod_google_transcribev2 to modules.conf.xml"; \
+        else \
+            echo "✅ mod_google_transcribev2 already in modules.conf.xml"; \
+        fi \
+    else \
+        echo "⚠️  WARNING: modules.conf.xml not found at $MODULES_CONF"; \
+    fi \
+    && echo "========================================="
+
+# Copy example configuration files
+COPY examples/freeswitch-config/dialplan/default.xml \
+    /usr/local/freeswitch/conf/dialplan/default.xml
+COPY examples/freeswitch-config/directory/1000.xml \
+    /usr/local/freeswitch/conf/directory/default/1000.xml
+COPY examples/freeswitch-config/directory/1001.xml \
+    /usr/local/freeswitch/conf/directory/default/1001.xml
+COPY examples/freeswitch-config/directory/1002.xml \
+    /usr/local/freeswitch/conf/directory/default/1002.xml
+
+# Set ownership
+RUN chown -R freeswitch:freeswitch /usr/local/freeswitch
+
+# ============================================================================
+# Configure Supervisor to pass Google Cloud environment variables
+# ============================================================================
+
+RUN cat > /etc/supervisor/conf.d/freeswitch-google.conf <<'EOF'
+[program:freeswitch]
+command=/usr/local/freeswitch/bin/freeswitch -nonat -nc -nf -conf /usr/local/freeswitch/conf -log /usr/local/freeswitch/log -db /usr/local/freeswitch/db
+autostart=true
+autorestart=true
+user=freeswitch
+stdout_logfile=/var/log/supervisor/freeswitch.log
+stderr_logfile=/var/log/supervisor/freeswitch_err.log
+environment=LD_LIBRARY_PATH="/usr/local/lib:/usr/local/freeswitch/lib",GOOGLE_APPLICATION_CREDENTIALS="%(ENV_GOOGLE_APPLICATION_CREDENTIALS)s",GOOGLE_PROJECT_ID="%(ENV_GOOGLE_PROJECT_ID)s",GCP_LOCATION="%(ENV_GCP_LOCATION)s"
+EOF
+
+# ============================================================================
+# Runtime Validation: Verify installation
+# ============================================================================
+
+RUN echo "=========================================" \
+    && echo "Runtime Validation..." \
+    && echo "=========================================" \
+    && echo "1. Checking Google Cloud C++ libraries..." \
+    && ls -lh /usr/local/lib/libgoogle_cloud_cpp_speech.so* \
+    && ls -lh /usr/local/lib/libgoogle_cloud_cpp_common.so* \
+    && echo "" \
+    && echo "2. Checking module file..." \
+    && ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so \
+    && echo "" \
+    && echo "3. Checking module dependencies..." \
+    && ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so \
+    && echo "" \
+    && echo "4. Verifying no missing dependencies..." \
+    && if ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so | grep "not found"; then \
+        echo "❌ ERROR: Missing dependencies found!"; exit 1; \
+    else \
+        echo "✅ All dependencies satisfied"; \
+    fi \
+    && echo "" \
+    && echo "5. Checking configuration files..." \
+    && ls -lh /usr/local/freeswitch/conf/dialplan/default.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1000.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1001.xml \
+    && ls -lh /usr/local/freeswitch/conf/directory/default/1002.xml \
+    && echo "✅ Configuration files installed" \
+    && echo "" \
+    && echo "6. Verifying modules.conf.xml..." \
+    && if grep -q "mod_google_transcribev2" /usr/local/freeswitch/conf/autoload_configs/modules.conf.xml; then \
+        echo "✅ mod_google_transcribev2 is enabled in modules.conf.xml"; \
+    else \
+        echo "⚠️  WARNING: mod_google_transcribev2 not found in modules.conf.xml"; \
+    fi \
+    && echo "" \
+    && echo "=========================================" \
+    && echo "Available modules in this image:" \
+    && echo "  ✅ mod_google_transcribev2 (Google Speech-to-Text v2)" \
+    && echo "=========================================" \
+    && echo "Included configuration files:" \
+    && echo "  ✅ dialplan/default.xml (with transcription examples)" \
+    && echo "  ✅ directory/default/1000.xml, 1001.xml, 1002.xml" \
+    && echo "=========================================" \
+    && echo "" \
+    && echo "Environment variables required at runtime:" \
+    && echo "  - GOOGLE_APPLICATION_CREDENTIALS (path to service account JSON)" \
+    && echo "  - GOOGLE_PROJECT_ID (your GCP project ID)" \
+    && echo "  - GCP_LOCATION (e.g., us-central1)" \
+    && echo "========================================="
+
+# Labels
+LABEL maintainer="FreeSWITCH Speech AI"
+LABEL description="FreeSWITCH 1.10.11 with mod_google_transcribev2"
+LABEL google.cloud.cpp.version="${GOOGLE_CLOUD_CPP_VERSION}"
+LABEL base.image="srt2011/freeswitch-base:latest"
+LABEL module="mod_google_transcribev2"
+
+# Expose FreeSWITCH ports
+EXPOSE 5060/tcp 5060/udp 5080/tcp 5080/udp 8021/tcp
+EXPOSE 16384-16484/udp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD /usr/local/freeswitch/bin/fs_cli -x "status" | grep -q "UP" || exit 1
+
+# Set environment defaults
+ENV PATH="/usr/local/freeswitch/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/freeswitch/lib:${LD_LIBRARY_PATH}"
+ENV GOOGLE_APPLICATION_CREDENTIALS="/etc/freeswitch/google-creds.json"
+ENV GOOGLE_PROJECT_ID=""
+ENV GCP_LOCATION="us-central1"
+
+# Inherit CMD from base image (supervisord or freeswitch)
