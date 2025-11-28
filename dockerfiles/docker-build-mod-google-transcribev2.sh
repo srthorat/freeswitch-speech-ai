@@ -43,7 +43,8 @@ NC='\033[0m' # No Color
 
 # Default values
 BASE_IMAGE="srt2011/freeswitch-base:latest"
-GOOGLE_VERSION="2.25.0"
+GOOGLE_VERSION="2.30.0"
+UBUNTU_VERSION="24.04"
 BUILD_CPUS=4
 IMAGE_TAG="freeswitch:mod-google-transcribev2"
 NO_CACHE=""
@@ -191,6 +192,7 @@ echo "    -f dockerfiles/Dockerfile.mod_google_transcribev2 \\"
 echo "    -t ${IMAGE_TAG} \\"
 echo "    --build-arg BASE_IMAGE=${BASE_IMAGE} \\"
 echo "    --build-arg GOOGLE_CLOUD_CPP_VERSION=${GOOGLE_VERSION} \\"
+echo "    --build-arg UBUNTU_VERSION=${UBUNTU_VERSION} \\"
 echo "    --build-arg BUILD_CPUS=${BUILD_CPUS} \\"
 echo "    ${NO_CACHE} \\"
 echo "    ."
@@ -206,6 +208,7 @@ docker build \
     -t "${IMAGE_TAG}" \
     --build-arg BASE_IMAGE="${BASE_IMAGE}" \
     --build-arg GOOGLE_CLOUD_CPP_VERSION="${GOOGLE_VERSION}" \
+    --build-arg UBUNTU_VERSION="${UBUNTU_VERSION}" \
     --build-arg BUILD_CPUS="${BUILD_CPUS}" \
     ${NO_CACHE} \
     .

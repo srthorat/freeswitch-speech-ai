@@ -23,8 +23,8 @@ Complete Docker solution for running FreeSWITCH 1.10.11 with Google Speech-to-Te
 
 - **Base**: FreeSWITCH 1.10.11 fully built from source
 - **Module**: mod_google_transcribev2 for real-time speech-to-text
-- **SDK**: Google Cloud C++ Speech library v2.25.0
-- **Dependencies**: gRPC, Protocol Buffers, Abseil
+- **SDK**: Google Cloud C++ Speech library v2.30.0 (built on Ubuntu 24.04)
+- **Dependencies**: gRPC 1.51, Protocol Buffers 3.21, Abseil
 - **Management**: Supervisor for process management
 - **Configuration**: Pre-configured SIP extensions (1000, 1001, 1002)
 
@@ -64,7 +64,7 @@ Stage 2 (runtime):
 
 | Component | Version | Purpose |
 |-----------|---------|---------|
-| Google Cloud C++ Speech | 2.25.0 | Speech-to-Text API client |
+| Google Cloud C++ Speech | 2.30.0 | Speech-to-Text API client |
 | gRPC | System package | RPC framework |
 | Protocol Buffers | System package | Data serialization |
 | Abseil | System package | Google utilities |
@@ -191,7 +191,8 @@ docker build \
   -f dockerfiles/Dockerfile.mod_google_transcribev2 \
   -t freeswitch:mod-google-transcribev2 \
   --build-arg BASE_IMAGE=srt2011/freeswitch-base:latest \
-  --build-arg GOOGLE_CLOUD_CPP_VERSION=2.25.0 \
+  --build-arg GOOGLE_CLOUD_CPP_VERSION=2.30.0 \
+  --build-arg UBUNTU_VERSION=24.04 \
   --build-arg BUILD_CPUS=4 \
   .
 ```
@@ -201,7 +202,8 @@ docker build \
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `BASE_IMAGE` | `srt2011/freeswitch-base:latest` | Base FreeSWITCH image |
-| `GOOGLE_CLOUD_CPP_VERSION` | `2.25.0` | Google Cloud SDK version |
+| `GOOGLE_CLOUD_CPP_VERSION` | `2.30.0` | Google Cloud SDK version |
+| `UBUNTU_VERSION` | `24.04` | Ubuntu version for builder stage |
 | `BUILD_CPUS` | `4` | CPU cores for compilation |
 
 ### Build Time Breakdown
@@ -221,13 +223,13 @@ Step 1/45 : ARG BASE_IMAGE=srt2011/freeswitch-base:latest
 ...
 Step 20/45 : RUN echo "Building Google Cloud C++ Speech library..."
 =============================================
-Building Google Cloud C++ Speech library 2.25.0...
+Building Google Cloud C++ Speech library 2.30.0...
 This will take 10-15 minutes...
 =============================================
 [  1%] Building CXX object google/cloud/CMakeFiles/google_cloud_cpp_common.dir/...
 ...
 [100%] Built target google_cloud_cpp_speech
-✅ Google Cloud C++ Speech library 2.25.0 built and installed
+✅ Google Cloud C++ Speech library 2.30.0 built and installed
 =============================================
 
 Step 25/45 : RUN echo "Building mod_google_transcribev2..."
