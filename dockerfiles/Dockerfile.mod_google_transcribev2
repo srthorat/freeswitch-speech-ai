@@ -64,19 +64,31 @@ RUN echo "=============================================" \
 # ============================================================================
 # Install build dependencies
 # ============================================================================
-# Note: Base image already includes build-essential, cmake, git, wget,
-# ca-certificates, pkg-config, libssl-dev, libcurl4-openssl-dev, zlib1g-dev,
-# and libspeexdsp-dev. We only add Google Cloud C++ specific dependencies.
+# Note: Base image runtime stage doesn't include build tools. We need to
+# install all build dependencies for compiling Google Cloud C++ and the module.
 RUN apt-get update && apt-get install -y --quiet --no-install-recommends \
-    # gRPC and protobuf (for Google Cloud C++)
+    # Build tools
+    build-essential \
+    git \
+    cmake \
+    ca-certificates \
+    wget \
+    pkg-config \
+    # Core dependencies
+    libcurl4-openssl-dev \
+    libssl-dev \
+    zlib1g-dev \
+    # gRPC and protobuf
     libgrpc++-dev \
     libgrpc-dev \
     protobuf-compiler \
     protobuf-compiler-grpc \
     libprotobuf-dev \
-    # Google Cloud C++ specific dependencies
+    # Google Cloud C++ dependencies
     nlohmann-json3-dev \
     libabsl-dev \
+    # Audio processing (for mod_google_transcribev2)
+    libspeexdsp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set library path
