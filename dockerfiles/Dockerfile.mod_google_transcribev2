@@ -108,17 +108,6 @@ RUN echo "=========================================" \
 WORKDIR /usr/local/src
 
 RUN echo "=========================================" \
-    && echo "Installing additional dependencies for Google Cloud C++..." \
-    && echo "=========================================" \
-    && apt-get update \
-    && apt-get install -y --quiet --no-install-recommends \
-        nlohmann-json3-dev \
-        libcurl4-openssl-dev \
-        libssl-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && echo "✅ Additional dependencies installed"
-
-RUN echo "=========================================" \
     && echo "Cloning Google Cloud C++ ${GOOGLE_CLOUD_CPP_VERSION}..." \
     && echo "=========================================" \
     && git clone --depth 1 -b v${GOOGLE_CLOUD_CPP_VERSION} https://github.com/googleapis/google-cloud-cpp.git \

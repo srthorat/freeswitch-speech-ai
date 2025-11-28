@@ -147,21 +147,37 @@ docker build -f dockerfiles/Dockerfile.mod_google_transcribev2 \
 ### Run the Container
 
 ```bash
-# Run with Google Cloud credentials
+# Start the container
 docker run -d --name freeswitch-google \
   -p 5060:5060/udp \
   -p 8021:8021/tcp \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/etc/freeswitch/google-creds.json \
-  -e GOOGLE_PROJECT_ID=your-project-id \
-  -e GCP_LOCATION=us-central1 \
-  -v $(pwd)/secrets/google-creds.json:/etc/freeswitch/google-creds.json:ro \
   freeswitch:mod-google-transcribev2
+```
+
+### Configure Google Credentials
+
+```bash
+# 1. Copy credentials file to container
+docker cp secrets/google-creds.json freeswitch-google:/etc/freeswitch/google-creds.json
+
+# 2. Edit supervisor config inside container
+docker exec -it freeswitch-google bash
+vi /etc/supervisor/conf.d/freeswitch-google.conf
+
+# 3. Update the environment line with your settings:
+# environment=LD_LIBRARY_PATH="/usr/local/lib:/usr/local/freeswitch/lib",GOOGLE_APPLICATION_CREDENTIALS="/etc/freeswitch/google-creds.json",GOOGLE_PROJECT_ID="your-project-id",GCP_LOCATION="us-central1"
+
+# 4. Restart FreeSWITCH process (not container)
+supervisorctl restart freeswitch
+exit
 ```
 
 ### Validate
 
 ```bash
-./dockerfiles/validate-mod-google-transcribev2.sh freeswitch-google
+# Check if module is loaded
+docker exec freeswitch-google fs_cli -x "module_exists mod_google_transcribev2"
+# Expected: true
 ```
 
 ---
@@ -279,40 +295,46 @@ Module Validation
 
 ## Running the Container
 
-### Method 1: Docker CLI
+### Step 1: Start the Container
 
 ```bash
 docker run -d --name freeswitch-google \
   --network host \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/etc/freeswitch/google-creds.json \
-  -e GOOGLE_PROJECT_ID=my-project-123 \
-  -e GCP_LOCATION=us-central1 \
-  -v $(pwd)/secrets/google-creds.json:/etc/freeswitch/google-creds.json:ro \
   freeswitch:mod-google-transcribev2
 ```
 
-### Method 2: Docker Compose
+### Step 2: Configure Google Cloud Credentials
 
 ```bash
-# Update docker-compose-mod-google-transcribev2.yml with your settings
-docker-compose -f dockerfiles/docker-compose-mod-google-transcribev2.yml up -d
+# Copy credentials file to container
+docker cp secrets/google-creds.json freeswitch-google:/etc/freeswitch/google-creds.json
+
+# Edit supervisor configuration
+docker exec -it freeswitch-google bash
+
+# Inside container, edit the supervisor config
+vi /etc/supervisor/conf.d/freeswitch-google.conf
+
+# Update the environment line with your Google Cloud settings:
+# environment=LD_LIBRARY_PATH="/usr/local/lib:/usr/local/freeswitch/lib",GOOGLE_APPLICATION_CREDENTIALS="/etc/freeswitch/google-creds.json",GOOGLE_PROJECT_ID="your-actual-project-id",GCP_LOCATION="us-central1"
+
+# Restart FreeSWITCH process (not the container)
+supervisorctl restart freeswitch
+exit
 ```
 
-### Environment Variables
+### Environment Variables (Configured via Supervisor)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GOOGLE_APPLICATION_CREDENTIALS` | **Yes** | `/etc/freeswitch/google-creds.json` | Path to service account JSON |
+| `GOOGLE_APPLICATION_CREDENTIALS` | **Yes** | `/etc/freeswitch/google-creds.json` | Path to service account JSON inside container |
 | `GOOGLE_PROJECT_ID` | **Yes** | - | GCP project ID |
 | `GCP_LOCATION` | No | `us-central1` | GCP region |
-| `LD_LIBRARY_PATH` | Auto-set | `/usr/local/lib` | Library search path |
+| `LD_LIBRARY_PATH` | Auto-set | `/usr/local/lib:/usr/local/freeswitch/lib` | Library search path |
 
-### Volume Mounts
+### Volume Mounts (Optional)
 
 ```bash
-# Credentials (required)
--v ./secrets/google-creds.json:/etc/freeswitch/google-creds.json:ro
-
 # Optional: Custom configuration
 -v ./custom-conf:/usr/local/freeswitch/conf
 
@@ -321,6 +343,8 @@ docker-compose -f dockerfiles/docker-compose-mod-google-transcribev2.yml up -d
 
 # Optional: Persist database
 -v ./db:/usr/local/freeswitch/db
+
+# Note: Credentials are copied using 'docker cp' instead of volume mount
 ```
 
 ### Port Mappings
@@ -340,97 +364,7 @@ docker-compose -f dockerfiles/docker-compose-mod-google-transcribev2.yml up -d
 
 ## Validation
 
-### Automated Validation Script
-
-```bash
-./dockerfiles/validate-mod-google-transcribev2.sh freeswitch-google
-```
-
-### Expected Validation Output
-
-```
-=============================================
-mod_google_transcribev2 Validation
-=============================================
-
-Container: freeswitch-google
-
-[0] Checking if container is running...
-✅ Container is running
-
-[1] Check module file exists
-Command: ls -lh /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so
-
-✅ PASS
--rwxr-xr-x 1 freeswitch freeswitch 450K Nov 28 12:34 /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so
-
-[2] Check module dependencies (ldd)
-Command: ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so
-
-✅ PASS
-	linux-vdso.so.1 (0x00007ffc...)
-	libgoogle_cloud_cpp_speech.so.2 => /usr/local/lib/libgoogle_cloud_cpp_speech.so.2
-	libgoogle_cloud_cpp_common.so.2 => /usr/local/lib/libgoogle_cloud_cpp_common.so.2
-	libgrpc++.so.1 => /usr/lib/x86_64-linux-gnu/libgrpc++.so.1
-	libprotobuf.so.23 => /usr/lib/x86_64-linux-gnu/libprotobuf.so.23
-	libcurl.so.4 => /usr/lib/x86_64-linux-gnu/libcurl.so.4
-	...
-
-[3] Verify no missing dependencies
-Command: ldd /usr/local/freeswitch/lib/freeswitch/mod/mod_google_transcribev2.so | grep -v 'not found'
-
-✅ PASS
-(no "not found" errors)
-
-[4] Check Google Cloud C++ Speech library
-Command: ls -lh /usr/local/lib/libgoogle_cloud_cpp_speech.so*
-
-✅ PASS
--rw-r--r-- 1 root root 2.3M /usr/local/lib/libgoogle_cloud_cpp_speech.so.2.30.0
-
-[5] Check if mod_google_transcribev2 is loaded
-Command: fs_cli -x 'module_exists mod_google_transcribev2'
-
-✅ PASS - Module is loaded
-true
-
-[6] Check FreeSWITCH version
-Command: /usr/local/freeswitch/bin/fs_cli -x 'version'
-
-✅ PASS
-FreeSWITCH Version 1.10.11-release~64bit
-
-[7] Check for module errors in logs
-Command: grep -i 'mod_google_transcribev2' /usr/local/freeswitch/log/freeswitch.log | tail -20
-
-✅ PASS - No errors found in module logs
-2025-11-28 12:35:01.234 [NOTICE] switch_loadable_module.c:1024 Successfully Loaded [mod_google_transcribev2]
-2025-11-28 12:35:01.234 [CONSOLE] switch_loadable_module.c:1071 Successfully Loaded [mod_google_transcribev2]
-
-[8] Check Google Cloud environment variables
-
-GOOGLE_APPLICATION_CREDENTIALS: /etc/freeswitch/google-creds.json
-GOOGLE_PROJECT_ID: my-project-123
-GCP_LOCATION: us-central1
-
-✅ Environment variables are set
-✅ Credentials file exists: /etc/freeswitch/google-creds.json
-
-=============================================
-Validation Summary
-=============================================
-
-✅ ALL VALIDATIONS PASSED
-
-mod_google_transcribev2 is properly installed and loaded!
-
-Next steps:
-  1. Configure Google Cloud credentials (if not already done)
-  2. Make a test call and use uuid_google_transcribev2 API
-  3. Check transcription output in logs
-```
-
-### Manual Validation Commands
+### Validation Commands
 
 ```bash
 # 1. Check module file
@@ -611,8 +545,6 @@ docker cp freeswitch-google:/usr/local/freeswitch/db ./backup/db-$(date +%Y%m%d)
 
 ✅ **Dockerfile**: `dockerfiles/Dockerfile.mod_google_transcribev2`
 ✅ **Build Script**: `dockerfiles/docker-build-mod-google-transcribev2.sh`
-✅ **Validation Script**: `dockerfiles/validate-mod-google-transcribev2.sh`
-✅ **Docker Compose**: `dockerfiles/docker-compose-mod-google-transcribev2.yml`
 ✅ **Documentation**: `dockerfiles/README-mod-google-transcribev2.md`
 
 ### Quick Commands Reference
@@ -624,13 +556,16 @@ docker cp freeswitch-google:/usr/local/freeswitch/db ./backup/db-$(date +%Y%m%d)
 # Run
 docker run -d --name freeswitch-google \
   --network host \
-  -e GOOGLE_PROJECT_ID=my-project \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/etc/freeswitch/google-creds.json \
-  -v $(pwd)/secrets/google-creds.json:/etc/freeswitch/google-creds.json:ro \
   freeswitch:mod-google-transcribev2
 
+# Configure Google credentials
+docker cp secrets/google-creds.json freeswitch-google:/etc/freeswitch/google-creds.json
+docker exec -it freeswitch-google bash
+# Edit /etc/supervisor/conf.d/freeswitch-google.conf and update environment line
+# Then: supervisorctl restart freeswitch && exit
+
 # Validate
-./dockerfiles/validate-mod-google-transcribev2.sh freeswitch-google
+docker exec freeswitch-google fs_cli -x "module_exists mod_google_transcribev2"
 
 # Access
 docker exec -it freeswitch-google fs_cli
