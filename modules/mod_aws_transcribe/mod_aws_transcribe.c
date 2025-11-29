@@ -5,6 +5,7 @@
  */
 #include "mod_aws_transcribe.h"
 #include "aws_transcribe_glue.h"
+#include "async_pusher.h"
 #include <curl/curl.h>
 #include <openssl/hmac.h>
 #include <openssl/md5.h>
@@ -503,10 +504,10 @@ static void responseHandler(switch_core_session_t* session, const char * json, c
     if (!error) {
     		switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, TRANSCRIBE_EVENT_RESULTS);
 
-    		// Send to Pusher (if configured) - only for actual transcription results
+    		// Send to Pusher asynchronously (if configured) - only for actual transcription results
     		const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
     		if (sip_call_id) {
-    			send_to_pusher(session, json, sip_call_id, is_final);
+    			async_send_to_pusher(session, json, sip_call_id, is_final);
     		}
     }
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "aws_transcribe message: %s\n", json);
@@ -843,6 +844,11 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aws_transcribe_load)
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "AWS Speech Transcription API loading..\n");
 
+  // Initialize async Pusher subsystem (4 worker threads for HTTP delivery)
+  if (SWITCH_STATUS_FALSE == async_pusher_init(4)) {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Failed to initialize async Pusher - will use sync fallback\n");
+  }
+
   if (SWITCH_STATUS_FALSE == aws_transcribe_init()) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Failed initializing aws speech interface\n");
 	}
@@ -862,6 +868,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aws_transcribe_load)
   Macro expands to: switch_status_t mod_aws_transcribe_shutdown() */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aws_transcribe_shutdown)
 {
+	// Shutdown async Pusher first (flush pending requests)
+	async_pusher_shutdown();
+
 	aws_transcribe_cleanup();
 	switch_event_free_subclass(TRANSCRIBE_EVENT_RESULTS);
 	switch_event_free_subclass(TRANSCRIBE_EVENT_SESSION_START);

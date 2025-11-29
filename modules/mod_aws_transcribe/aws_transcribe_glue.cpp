@@ -21,6 +21,7 @@
 #include <aws/transcribestreaming/model/StartStreamTranscriptionRequest.h>
 
 #include "mod_aws_transcribe.h"
+#include "async_pusher.h"
 
 #define BUFFER_SECS (3)
 // Pre-connection buffer size: 1 second of audio at 16kHz
@@ -210,7 +211,7 @@ public:
 				}
 
 				if (sip_call_id) {
-					send_session_start_to_pusher(psession, sip_call_id);
+					async_send_session_start_to_pusher(psession, sip_call_id);
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_ERROR,
 						"Cannot send session_start to Pusher: sip_call_id not available after %d retries (%dms total)\n",
