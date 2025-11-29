@@ -517,11 +517,7 @@ if should_install_freeswitch; then
     if [ $? -eq 0 ]; then
         log_substep "FreeSWITCH already installed at $DETECTED_FS_PATH"
         
-        # Update FS_PREFIX if detected path is different
-        if [ "$DETECTED_FS_PATH" != "$FS_PREFIX" ]; then
-            log_substep "Using detected FreeSWITCH installation instead of $FS_PREFIX"
-            FS_PREFIX="$DETECTED_FS_PATH"
-        fi
+        log_substep "Keeping FS_PREFIX=$FS_PREFIX (ignoring detected path)"
         
         grep -q "^freeswitch=" "$MANIFEST_FILE" || echo "freeswitch=existing" >> "$MANIFEST_FILE"
         log_success "Skipping FreeSWITCH installation - using existing installation"
@@ -816,7 +812,7 @@ else
 fi
 
 # ============================================================================
-# Step 5: Build mod_aws_transcribe
+# Step 5: Build mod_aws_transcribe (FIXED INCLUDE PATH LOGIC)
 # ============================================================================
 
 if should_install_module "mod_aws_transcribe"; then
@@ -824,26 +820,72 @@ if should_install_module "mod_aws_transcribe"; then
 
     cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe || exit 1
 
-    log_substep "Compiling mod_aws_transcribe.c..."
+    # ----------------------------------------------------------------------
+    # FIX: Ensure FS_PREFIX/include/freeswitch actually exists
+    # ----------------------------------------------------------------------
+    if [ ! -d "${FS_PREFIX}/include/freeswitch" ]; then
+        echo -e "${YELLOW}⚠ WARNING: ${FS_PREFIX}/include/freeswitch not found.${NC}"
+
+        # Attempt automatic correction
+        if [ -d "/usr/local/freeswitch/include/freeswitch" ]; then
+            echo -e "${GREEN}✓ Auto-correcting FS_PREFIX → /usr/local/freeswitch${NC}"
+            FS_PREFIX="/usr/local/freeswitch"
+        elif [ -d "/opt/freeswitch/include/freeswitch" ]; then
+            echo -e "${GREEN}✓ Auto-correcting FS_PREFIX → /opt/freeswitch${NC}"
+            FS_PREFIX="/opt/freeswitch"
+        else
+            echo -e "${RED}✗ ERROR: Cannot locate FreeSWITCH include directory (switch.h)${NC}"
+            echo "Checked:"
+            echo "  - ${FS_PREFIX}/include/freeswitch"
+            echo "  - /usr/local/freeswitch/include/freeswitch"
+            echo "  - /opt/freeswitch/include/freeswitch"
+            exit 1
+        fi
+    fi
+
+    INCLUDE_FS="${FS_PREFIX}/include/freeswitch"
+    MODULE_DIR="${FS_PREFIX}/lib/freeswitch/mod"
+
+    # ----------------------------------------------------------------------
+    # Compile C source
+    # ----------------------------------------------------------------------
+    log_substep "Compiling mod_aws_transcribe.c using include: ${INCLUDE_FS}"
     log_command "mod_aws_transcribe.c" "${LOG_DIR}/mod_aws_transcribe_c.log" \
-        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c
+        gcc -fPIC -c -I${INCLUDE_FS} mod_aws_transcribe.c
     check_success "Failed to compile mod_aws_transcribe.c" "${LOG_DIR}/mod_aws_transcribe_c.log"
 
-    log_substep "Compiling C++ sources..."
-    log_command "mod_aws_transcribe C++" "${LOG_DIR}/mod_aws_transcribe_cpp.log" \
-        g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp
-    check_success "Failed to compile mod_aws_transcribe C++ sources" "${LOG_DIR}/mod_aws_transcribe_cpp.log"
+    # ----------------------------------------------------------------------
+    # Compile C++ glue file
+    # ----------------------------------------------------------------------
+    log_substep "Compiling aws_transcribe_glue.cpp"
+    log_command "mod_aws_transcribe_cpp" "${LOG_DIR}/mod_aws_transcribe_cpp.log" \
+        g++ -fPIC -c -std=c++11 \
+            -I${INCLUDE_FS} \
+            -I/usr/local/include \
+            aws_transcribe_glue.cpp
+    check_success "Failed to compile aws_transcribe_glue.cpp" "${LOG_DIR}/mod_aws_transcribe_cpp.log"
 
-    log_substep "Linking mod_aws_transcribe.so..."
+    mkdir -p ${MODULE_DIR}
+
+    # ----------------------------------------------------------------------
+    # Link shared module
+    # ----------------------------------------------------------------------
+    log_substep "Linking mod_aws_transcribe.so"
     log_command "mod_aws_transcribe link" "${LOG_DIR}/mod_aws_transcribe_link.log" \
-        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
+        g++ -shared -o ${MODULE_DIR}/mod_aws_transcribe.so \
             mod_aws_transcribe.o aws_transcribe_glue.o \
-            -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
-            -laws-c-event-stream -laws-checksums -laws-c-common \
+            -L/usr/local/lib \
+            -laws-cpp-sdk-transcribestreaming \
+            -laws-cpp-sdk-core \
+            -laws-c-event-stream \
+            -laws-checksums \
+            -laws-c-common \
             -lpthread -lcurl -lssl -lcrypto -lz
+
     check_success "Failed to link mod_aws_transcribe" "${LOG_DIR}/mod_aws_transcribe_link.log"
 
     log_success "mod_aws_transcribe built and installed"
+
 else
     log_step "[Step 5/7] Skipping mod_aws_transcribe"
 fi
@@ -859,12 +901,12 @@ if should_install_module "mod_deepgram_transcribe"; then
 
     log_substep "Compiling mod_deepgram_transcribe.c..."
     log_command "mod_deepgram_transcribe.c" "${LOG_DIR}/mod_deepgram_transcribe_c.log" \
-        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_deepgram_transcribe.c
+        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_deepgram_transcribe.c
     check_success "Failed to compile mod_deepgram_transcribe.c" "${LOG_DIR}/mod_deepgram_transcribe_c.log"
 
     log_substep "Compiling C++ sources..."
     log_command "mod_deepgram_transcribe C++" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log" \
-        g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp
+        g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch dg_transcribe_glue.cpp audio_pipe.cpp parser.cpp
     check_success "Failed to compile mod_deepgram_transcribe C++ sources" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log"
 
     log_substep "Linking mod_deepgram_transcribe.so..."
@@ -880,7 +922,7 @@ else
 fi
 
 # ============================================================================
-# Step 7: Build mod_google_transcribev2
+# Step 7: Build mod_google_transcribev2 (FIXED INCLUDE PATH LOGIC)
 # ============================================================================
 
 if should_install_module "mod_google_transcribev2"; then
@@ -888,21 +930,63 @@ if should_install_module "mod_google_transcribev2"; then
 
     cd ${SCRIPT_DIR}/../modules/mod_google_transcribev2 || exit 1
 
-    # Build using Makefile
+    # ----------------------------------------------------------------------
+    # FIX: Ensure FS_PREFIX/include/freeswitch actually exists
+    # ----------------------------------------------------------------------
+    if [ ! -d "${FS_PREFIX}/include/freeswitch" ]; then
+        echo -e "${YELLOW}⚠ WARNING: ${FS_PREFIX}/include/freeswitch not found.${NC}"
+        echo -e "${YELLOW}  Trying to auto-detect correct FreeSWITCH prefix...${NC}"
+
+        if [ -d "/usr/local/freeswitch/include/freeswitch" ]; then
+            echo -e "${GREEN}✓ Auto-corrected FS_PREFIX → /usr/local/freeswitch${NC}"
+            FS_PREFIX="/usr/local/freeswitch"
+        elif [ -d "/opt/freeswitch/include/freeswitch" ]; then
+            echo -e "${GREEN}✓ Auto-corrected FS_PREFIX → /opt/freeswitch${NC}"
+            FS_PREFIX="/opt/freeswitch"
+        else
+            echo -e "${RED}✗ ERROR: Cannot find FreeSWITCH include directory (switch.h)${NC}"
+            echo "Checked:"
+            echo "  - ${FS_PREFIX}/include/freeswitch"
+            echo "  - /usr/local/freeswitch/include/freeswitch"
+            echo "  - /opt/freeswitch/include/freeswitch"
+            exit 1
+        fi
+    fi
+
+    INCLUDE_FS="${FS_PREFIX}/include/freeswitch"
+    MODULE_DIR="${FS_PREFIX}/lib/freeswitch/mod"
+
+    log_substep "Using FreeSWITCH include: ${INCLUDE_FS}"
+    log_substep "Installing module to: ${MODULE_DIR}"
+
+    # ----------------------------------------------------------------------
+    # Clean previous build
+    # ----------------------------------------------------------------------
     log_substep "Cleaning previous build..."
     make clean > /dev/null 2>&1
 
+    # ----------------------------------------------------------------------
+    # Build module with correct FS_PREFIX
+    # ----------------------------------------------------------------------
     log_substep "Building mod_google_transcribev2..."
     log_command "mod_google_transcribev2 build" "${LOG_DIR}/mod_google_transcribev2_make.log" \
-        make -j ${BUILD_CPUS} FS_PREFIX=${FS_PREFIX}
+        make -j ${BUILD_CPUS} \
+            FS_PREFIX="${FS_PREFIX}" \
+            FS_INCLUDES="${INCLUDE_FS}"
     check_success "Failed to build mod_google_transcribev2" "${LOG_DIR}/mod_google_transcribev2_make.log"
 
+    # ----------------------------------------------------------------------
+    # Install module
+    # ----------------------------------------------------------------------
     log_substep "Installing mod_google_transcribev2..."
     log_command "mod_google_transcribev2 install" "${LOG_DIR}/mod_google_transcribev2_install.log" \
-        make install FS_PREFIX=${FS_PREFIX}
+        make install \
+            FS_PREFIX="${FS_PREFIX}" \
+            FS_INCLUDES="${INCLUDE_FS}"
     check_success "Failed to install mod_google_transcribev2" "${LOG_DIR}/mod_google_transcribev2_install.log"
 
     log_success "mod_google_transcribev2 built and installed"
+
 else
     log_step "[Step 7/7] Skipping mod_google_transcribev2"
 fi

@@ -16,6 +16,7 @@
 #define TRANSCRIBE_EVENT_DISCONNECT      "google_transcribev2::disconnect"
 #define TRANSCRIBE_EVENT_SESSION_START   "google_transcribev2::session_start"
 #define TRANSCRIBE_EVENT_SESSION_STOP    "google_transcribev2::session_stop"
+#define TRANSCRIBE_EVENT_ERROR           "google_transcribev2::error"
 
 #define MAX_LANG (12)
 #define MAX_SESSION_ID (256)
@@ -46,5 +47,25 @@ struct private_data {
 };
 
 typedef struct private_data private_t;
+
+/* ============================================================================
+ * C/C++ Glue Layer Interface
+ * These functions are implemented in google_transcribe_glue.cpp
+ * ============================================================================ */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+switch_status_t google_transcribe_init(void);
+switch_status_t google_transcribe_cleanup(void);
+switch_status_t google_transcribe_session_init(switch_core_session_t *session, responseHandler_t responseHandler,
+		uint32_t samples_per_second, uint32_t channels, char* lang, int interim, char* bugname, char* metadata, void **ppUserData);
+switch_status_t google_transcribe_session_stop(switch_core_session_t *session, int channelIsClosing, char* bugname);
+switch_bool_t google_transcribe_frame(switch_media_bug_t *bug, void* user_data);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

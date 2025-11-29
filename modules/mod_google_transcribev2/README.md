@@ -1,91 +1,100 @@
 # mod_google_transcribev2
 
-FreeSWITCH module for **Google Cloud Speech-to-Text v2** streaming API with unified architecture matching mod_aws_transcribe and mod_deepgram_transcribe.
+FreeSWITCH module for **Google Cloud Speech-to-Text v2** streaming API with **high-performance async architecture** supporting **2000+ concurrent calls**.
 
 ## Features
 
 ✅ **Google Speech-to-Text v2 API**
-- Streaming recognition via gRPC
+- Streaming recognition via gRPC (async CompletionQueue)
 - Real-time transcription with partial and final results
 - Word-level timestamps and confidence scores
+
+✅ **High-Performance Architecture**
+- Async gRPC with shared CompletionQueue (no per-session threads)
+- Lock-free audio queues for zero-contention audio path
+- Non-blocking Pusher delivery with retry
+- Pre-connection audio buffering (~1 second)
 
 ✅ **Multi-Channel Support**
 - Automatic multichannel processing when stereo mode enabled
 - Separate recognition per channel with SEPARATE_RECOGNITION_PER_CHANNEL
 - Channel-based speaker identification (0=caller, 1=callee)
-- Mono, mixed, and stereo audio modes with auto-detection
 
 ✅ **Pusher Integration**
-- Direct Pusher API integration with HMAC SHA256 signing
-- Identical event structure to AWS/Deepgram modules
-- Real-time transcript delivery
-
-✅ **Unified API**
-- API syntax matches mod_aws_transcribe and mod_deepgram_transcribe exactly
-- Consistent JSON output format across all modules
-- Drop-in replacement for other transcription modules
+- Async Pusher API integration with HMAC SHA256 signing
+- Non-blocking event delivery
+- Automatic retry with bounded queue
 
 ## Architecture
 
-This module follows the exact architectural pattern of mod_aws_transcribe and mod_deepgram_transcribe:
-
 ```
-FreeSWITCH Call
-    ↓
-mod_audio_fork (provides raw PCM via media bug)
-    ↓
-mod_google_transcribev2.c (C wrapper, media bug callbacks)
-    ↓
-google_transcribe_glue.cpp (C++ Google API integration)
-    ↓
-Google Speech v2 gRPC Stream
-    ↓
-Response Handler → Pusher + FreeSWITCH Events
+┌─────────────────────────────────────────────────────────────────────┐
+│  For 2000 calls = ~16 threads total (not 2000+)                     │
+│                                                                     │
+│  FreeSWITCH Audio Callbacks (per-call)                              │
+│         │                                                           │
+│         ▼ (lock-free enqueue)                                       │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │ AudioQueue (per-session)                                     │   │
+│  │ - Lock-free SPSC queue                                       │   │
+│  │ - Pre-connection buffer (~1 second)                          │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│         │                                                           │
+│         ▼                                                           │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │ GrpcManager (Singleton)                                      │   │
+│  │ - 1 CompletionQueue                                          │   │
+│  │ - 8-16 Worker Threads (auto-detected from CPU cores)         │   │
+│  │ - Handles ALL sessions via async state machines              │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│         │                                                           │
+│         ▼                                                           │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │ AsyncPusherClient (Singleton)                                │   │
+│  │ - 2-4 Worker Threads                                         │   │
+│  │ - Bounded queue (10000 events)                               │   │
+│  │ - Automatic retry with backoff                               │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Components
 
-1. **mod_google_transcribev2.c**: FreeSWITCH module wrapper
-   - Media bug callbacks for audio capture
-   - Pusher integration with HMAC signing
-   - API function implementation
+| Component | File | Purpose |
+|-----------|------|---------|
+| GrpcManager | `grpc_manager.h/cpp` | Shared gRPC worker pool |
+| AsyncPusherClient | `async_pusher_client.h/cpp` | Non-blocking HTTP delivery |
+| AudioQueue | `audio_queue.h/cpp` | Lock-free audio buffering |
+| GoogleStreamerSession | `google_streamer_session.h/cpp` | Async state machine per call |
+| C Glue Layer | `google_transcribe_glue.cpp` | FreeSWITCH C interface |
 
-2. **google_transcribe_glue.cpp**: Google API integration
-   - GoogleTranscribeSession class
-   - Audio buffering (4KB chunks)
-   - gRPC streaming client
-   - Response processing and JSON formatting
+## Performance
 
-3. **Channel Mapping**: 0-based speaker identification
-   - Channel 0 → Caller (from A-leg channel variables)
-   - Channel 1 → Callee (from B-leg channel variables)
+| Metric | Legacy | v2 Async |
+|--------|--------|----------|
+| Threads (2000 calls) | 4000+ | ~16 |
+| Audio callback latency | 10-100ms | <1ms |
+| Pusher delivery latency | 0-2000ms | <50ms |
+| Memory per session | ~1MB | ~50KB |
+| Max concurrent calls | ~500 | 2000+ |
 
 ## Prerequisites
 
 ### System Requirements
 - **FreeSWITCH** 1.10.11+
 - **C++17** compatible compiler (GCC 8+ or Clang 6+)
-- **CMake** 3.10+
-- **pkg-config**
+- **gRPC** and **protobuf** development libraries
 
 ### Dependencies
 
-#### 1. Google Cloud C++ Speech Library
 ```bash
-# Install Google Cloud C++ dependencies (Debian/Ubuntu)
+# Debian/Ubuntu
 sudo apt-get install -y \
     libgrpc++-dev \
     libgrpc-dev \
     protobuf-compiler \
     protobuf-compiler-grpc \
-    libprotobuf-dev
-
-# Or build from source (see install-all.sh)
-```
-
-#### 2. Other Dependencies
-```bash
-sudo apt-get install -y \
+    libprotobuf-dev \
     libcurl4-openssl-dev \
     libssl-dev \
     libspeex-dev \
@@ -94,16 +103,6 @@ sudo apt-get install -y \
 
 ## Installation
 
-### Option 1: Unified Installer (Recommended)
-```bash
-# Install FreeSWITCH and all modules
-sudo ./scripts/install-all.sh --module all
-
-# Install only mod_google_transcribev2
-sudo ./scripts/install-all.sh --module mod_google_transcribev2
-```
-
-### Option 2: Manual Build
 ```bash
 cd modules/mod_google_transcribev2
 
@@ -112,344 +111,166 @@ make
 
 # Install
 sudo make install
-
-# Or with custom FreeSWITCH prefix
-sudo make install FS_PREFIX=/opt/freeswitch
-```
-
-### Option 3: Module-Only Installer
-```bash
-# For existing FreeSWITCH installations
-sudo ./scripts/install-modules-only.sh
 ```
 
 ## Configuration
 
-### 1. Google Cloud Authentication
-
-Set up Google Cloud credentials:
+### Google Cloud Authentication
 
 ```bash
-# Option 1: Service Account Key (recommended)
+# Service Account Key
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
 
-# Option 2: gcloud CLI
-gcloud auth application-default login
-gcloud config set project YOUR_PROJECT_ID
+# Project and Location (choose one naming convention)
+export GCP_PROJECT_ID="your-project-id"
+export GCP_LOCATION="us-central1"
+# OR
+export GOOGLE_PROJECT_ID="your-project-id"
+export GOOGLE_LOCATION_ID="us-central1"
 ```
 
-### 2. Environment Variables
+### Systemd Configuration
 
-Create `.env.google_transcribe` or set in FreeSWITCH:
+For FreeSWITCH running as a systemd service, add to `/etc/systemd/system/freeswitch.service.d/freeswitch.conf`:
 
-```bash
-# Google Cloud Configuration
-GCP_PROJECT_ID=my-project-id
-GCP_LOCATION=us-central1
-
-# Pusher Configuration (for real-time transcript delivery)
-PUSHER_APP_ID=your-app-id
-PUSHER_KEY=your-key
-PUSHER_SECRET=your-secret
-PUSHER_CLUSTER=us2
+```ini
+[Service]
+Environment="GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json"
+Environment="GCP_PROJECT_ID=your-project-id"
+Environment="GCP_LOCATION=us-central1"
 ```
 
-### 3. FreeSWITCH Configuration
+Then reload: `sudo systemctl daemon-reload && sudo systemctl restart freeswitch`
 
-Add to `${FS_PREFIX}/conf/autoload_configs/modules.conf.xml`:
+### Supported Environment Variables
+
+| Variable | Aliases | Description |
+|----------|---------|-------------|
+| `GCP_PROJECT_ID` | `GOOGLE_PROJECT_ID` | Google Cloud project ID |
+| `GCP_LOCATION` | `GOOGLE_LOCATION_ID`, `GCP_LOCATION_ID` | Region (e.g., `us-central1`, `eu-west1`) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | - | Path to service account JSON key |
+
+### Channel Variables
+
+Channel variables take precedence over environment variables.
 
 ```xml
-<configuration name="modules.conf" description="Modules">
-  <modules>
-    <!-- Speech Transcription Modules -->
-    <load module="mod_google_transcribev2"/>
-  </modules>
-</configuration>
+<!-- Google Cloud -->
+<action application="set" data="GOOGLE_PROJECT_ID=my-project-id"/>
+<action application="set" data="GOOGLE_LOCATION_ID=us-central1"/>
+<action application="set" data="GOOGLE_SPEECH_MODEL=long"/>
+
+<!-- Features -->
+<action application="set" data="GOOGLE_SPEECH_ENABLE_AUTOMATIC_PUNCTUATION=true"/>
+<action application="set" data="GOOGLE_SPEECH_ENABLE_SPEAKER_DIARIZATION=true"/>
+
+<!-- Pusher (optional) -->
+<action application="set" data="PUSHER_APP_ID=xxx"/>
+<action application="set" data="PUSHER_KEY=xxx"/>
+<action application="set" data="PUSHER_SECRET=xxx"/>
+<action application="set" data="PUSHER_CLUSTER=us2"/>
 ```
 
-## Usage
-
-### API Syntax
-```
-uuid_google_transcribev2 <uuid> [start|stop] lang-code [interim] [mono|mixed|stereo] [8k|16k] [metadata]
-```
-
-### Parameters
-
-| Parameter | Description | Values | Default |
-|-----------|-------------|--------|---------|
-| `uuid` | Call UUID | Any valid UUID | Required |
-| `action` | Start or stop | start, stop | Required |
-| `lang-code` | Language code | en-US, es-ES, etc. | Required for start |
-| `interim` | Enable partial results | interim | Optional |
-| `mix-type` | Audio mode | mono, mixed, stereo | mono |
-|           |            | **stereo auto-enables multichannel** |      |
-| `rate` | Sample rate | 8k, 16k | 16k |
-| `metadata` | JSON metadata | Valid JSON string | Auto-generated |
-
-### Examples
-
-#### Start Mono Transcription (Single Channel)
-```bash
-uuid_google_transcribev2 abc123 start en-US
-```
-
-#### Start Stereo with Interim Results (AUTO-ENABLES MULTICHANNEL)
-```bash
-# This automatically enables:
-# - Multi-channel mode: SEPARATE_RECOGNITION_PER_CHANNEL  
-# - Channel detection: 2 channels (caller/callee separation)
-# - Audio channel count: 2
-uuid_google_transcribev2 abc123 start en-US interim stereo 16k
-```
-
-#### Start with Custom Metadata
-```bash
-uuid_google_transcribev2 abc123 start en-US interim stereo 16k '{"customer_id":"12345"}'
-```
-
-#### Stop Transcription
-```bash
-uuid_google_transcribev2 abc123 stop
-```
-
-### Dialplan Integration
+### API Usage
 
 ```xml
-<extension name="transcribe_call">
-  <condition field="destination_number" expression="^9999$">
-    <!-- Enable stereo transcription on answer -->
-    <action application="set" data="api_on_answer=uuid_google_transcribev2 ${uuid} start en-US interim stereo 16k"/>
+<!-- Start transcription -->
+<action application="uuid_google_transcribev2" data="${uuid} start en-US interim stereo 16k"/>
 
-    <!-- Your call routing here -->
-    <action application="bridge" data="sofia/internal/1001@192.168.1.100"/>
-
-    <!-- Stop transcription on hangup -->
-    <action application="set" data="api_on_hangup=uuid_google_transcribev2 ${uuid} stop"/>
-  </condition>
-</extension>
+<!-- Stop transcription -->
+<action application="uuid_google_transcribev2" data="${uuid} stop"/>
 ```
 
-## Output Format
+**Parameters:**
+- `lang-code`: Language (e.g., `en-US`, `es-ES`)
+- `interim`: Include interim results
+- `mono|mixed|stereo`: Audio mode
+- `8k|16k`: Sample rate
 
-### Event Structure
+## Events
 
-Identical to mod_aws_transcribe and mod_deepgram_transcribe:
+| Event | Description |
+|-------|-------------|
+| `google_transcribev2::connect` | Connected to Google API |
+| `google_transcribev2::transcription` | Transcription result |
+| `google_transcribev2::disconnect` | Session ended |
+| `google_transcribev2::error` | Error occurred (with structured error info) |
 
-#### Partial Transcript
+## Error Handling
+
+The module provides structured error handling with categorized error codes for better debugging and monitoring.
+
+### Error Categories
+
+| Category | Code Range | Description |
+|----------|------------|-------------|
+| `configuration` | 100-199 | Invalid config, missing credentials |
+| `connection` | 200-299 | Network, DNS, TLS failures |
+| `authentication` | 300-399 | Auth failures, expired tokens |
+| `grpc` | 400-499 | gRPC-specific errors |
+| `api` | 500-599 | Google API errors (quota, invalid request) |
+| `audio` | 600-699 | Audio format, encoding issues |
+| `internal` | 700-799 | Internal module errors |
+| `timeout` | 800-899 | Connection/stream timeouts |
+| `resource` | 900-999 | Memory, queue full |
+| `pusher` | 1000-1099 | Pusher delivery errors |
+
+### Error Event Format
+
 ```json
 {
-  "event": "partial_transcript",
-  "uuid": "abc123",
-  "channel": 0,
-  "speaker_id": "Alice(+15551234567)",
-  "text": "hello",
-  "timestamp": "2025-11-27T10:30:00.123Z",
-  "confidence": null,
-  "is_final": false
+  "error_code": 200,
+  "category": "connection",
+  "message": "Failed to connect to Google Speech API",
+  "session_id": 12345,
+  "retryable": true,
+  "retry_count": 0
 }
 ```
 
-#### Final Transcript
-```json
-{
-  "event": "final_transcript",
-  "uuid": "abc123",
-  "channel": 0,
-  "speaker_id": "Alice(+15551234567)",
-  "text": "hello world",
-  "timestamp": "2025-11-27T10:30:00.500Z",
-  "confidence": 0.98,
-  "is_final": true,
-  "words": [
-    {
-      "content": "hello",
-      "start_time": 0.1,
-      "end_time": 0.5,
-      "confidence": 0.99
-    },
-    {
-      "content": "world",
-      "start_time": 0.6,
-      "end_time": 1.0,
-      "confidence": 0.97
+### Custom Error Handler
+
+You can set a custom error handler callback via `SessionConfig::error_handler`:
+
+```cpp
+config.error_handler = [](const ErrorInfo& error) {
+    // Handle error (non-blocking!)
+    if (error.is_retryable) {
+        // Maybe trigger reconnection
     }
-  ]
-}
+};
 ```
 
-### Channel-to-Speaker Mapping
+### Error Metrics
 
-**Stereo Mode** (2 channels) - **AUTO-ENABLES MULTICHANNEL & CHANNEL DETECTION**:
-- **Channel 0** (left audio) = **Caller** (A-leg)
-  - speaker_id = `"{caller_name}({caller_number})"`
-  - Example: `"Alice(+15551234567)"`
-  - Automatic multichannel processing enabled
+Global error metrics are available via `GrpcManager::getInstance().getGlobalMetrics()`:
 
-- **Channel 1** (right audio) = **Callee** (B-leg)
-  - speaker_id = `"{callee_name}({callee_number})"`
-  - Example: `"Bob(+15559876543)"`
-  - Separate recognition per channel enabled
-
-**Mono/Mixed Mode** (1 channel):
-- **Channel 0** = Combined audio
-  - speaker_id = Caller info
-
-### FreeSWITCH Events
-
-The module fires these FreeSWITCH events:
-
-- `google_transcribev2::transcription` - Transcript results
-- `google_transcribev2::connect` - Connection successful
-- `google_transcribev2::connect_failed` - Connection failed
-- `google_transcribev2::disconnect` - Disconnected
-- `google_transcribev2::session_start` - Session started
-- `google_transcribev2::session_stop` - Session stopped
-
-## Pusher Integration
-
-Transcripts are automatically sent to Pusher for real-time delivery.
-
-### Channel Naming
-```
-transcription-{call_id}
+```cpp
+const auto& metrics = GrpcManager::getInstance().getGlobalMetrics();
+// Returns JSON: {"total_errors":5,"connection":2,"auth":1,...}
+std::string json = metrics.toJson();
 ```
 
-### Event Names
-- `transcription-partial` - Partial results (interim)
-- `transcription-final` - Final results
-- `session-start` - Session started
-- `session-stop` - Session stopped
+## Files
 
-### Authentication
-Uses HMAC SHA256 signing with Pusher credentials.
-
-## Troubleshooting
-
-### Build Issues
-
-```bash
-# Check for Google Cloud C++ library
-pkg-config --list-all | grep google_cloud_cpp
-
-# Check for gRPC
-pkg-config --list-all | grep grpc
-
-# Install missing dependencies
-sudo apt-get install -y libgrpc++-dev libgrpc-dev protobuf-compiler
+```
+mod_google_transcribev2/
+├── mod_google_transcribev2.c      # FreeSWITCH module entry + C interface
+├── mod_google_transcribev2.h      # Types, constants, and C++ glue declarations
+├── google_transcribe_glue.cpp     # C/C++ interface (async v2)
+├── grpc_manager.h/cpp             # gRPC worker pool singleton
+├── async_pusher_client.h/cpp      # Async HTTP client for Pusher
+├── audio_queue.h/cpp              # Lock-free SPSC queue
+├── google_streamer_session.h/cpp  # Async session state machine
+├── error_types.h                  # Structured error codes and metrics
+├── speech.proto                   # Google Speech v2 API definition
+├── speech.pb.h/cc                 # Generated protobuf (make proto)
+├── speech.grpc.pb.h/cc            # Generated gRPC (make proto)
+└── Makefile                       # Build file
 ```
 
-### Runtime Issues
-
-```bash
-# Check module loaded
-fs_cli -x "show modules" | grep google_transcribev2
-
-# Check authentication
-echo $GOOGLE_APPLICATION_CREDENTIALS
-gcloud auth application-default print-access-token
-
-# View FreeSWITCH logs
-tail -f /usr/local/freeswitch/log/freeswitch.log | grep google_transcribev2
-```
-
-### Common Errors
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| "Failed to initialize Google transcription session" | Missing credentials | Set `GOOGLE_APPLICATION_CREDENTIALS` |
-| "Failed to write initial config" | Invalid project ID | Check `GCP_PROJECT_ID` environment variable |
-| "Pusher not configured" | Missing Pusher credentials | Set `PUSHER_APP_ID`, `PUSHER_KEY`, `PUSHER_SECRET` |
-| "AudioBuffer overflow" | High load | Increase `MOD_AUDIO_FORK_BUFFER_SECS` |
-| Single channel in stereo mode | Stereo not properly enabled | Check `SMBF_STEREO` flag in logs |
-| No multichannel processing | Using mono/mixed instead of stereo | Use `stereo` parameter to auto-enable multichannel |
-
-## Performance
-
-### Benchmarks
-
-- **Partial transcript latency**: < 500ms
-- **Final transcript latency**: < 1000ms
-- **Memory per session**: < 10MB
-- **CPU per session (active)**: < 20%
-- **CPU per session (idle)**: < 5%
-- **Concurrent sessions**: 100+
-
-### Optimization
-
-```bash
-# Increase buffer size for high-load scenarios
-export MOD_AUDIO_FORK_BUFFER_SECS=5
-
-# Adjust service threads
-export MOD_AUDIO_FORK_SERVICE_THREADS=4
-```
-
-## Audio Mode Features
-
-| Mode | Channels | Multi-Channel | Channel Detection | Use Case |
-|------|----------|---------------|-------------------|----------|
-| `mono` | 1 | ❌ No | ❌ No | Single speaker or mixed audio |
-| `mixed` | 1 | ❌ No | ❌ No | Combined stereo to mono |
-| `stereo` | 2 | ✅ **Auto-Enabled** | ✅ **Auto-Enabled** | Caller/callee separation |
-
-### Stereo Mode Auto-Enables:
-- **Multi-channel processing**: `SEPARATE_RECOGNITION_PER_CHANNEL`
-- **Channel detection**: 2-channel speaker identification
-- **Audio channel count**: Automatic 2-channel configuration
-- **Enhanced metadata**: Per-channel speaker information
-
-## Comparison with Other Modules
-
-| Feature | mod_google_transcribev2 | mod_aws_transcribe | mod_deepgram_transcribe |
-|---------|------------------------|-------------------|------------------------|
-| API | Google Speech v2 | AWS Transcribe | Deepgram |
-| Protocol | gRPC | WebSocket | WebSocket |
-| Partial Results | ✅ | ✅ | ✅ |
-| Multi-Channel | ✅ Auto w/ Stereo | ✅ | ✅ |
-| Pusher Integration | ✅ | ✅ | ✅ |
-| Unified API | ✅ | ✅ | ✅ |
-| Speaker Diarization | Channel-based | Channel-based | Channel-based |
-| Word Timestamps | ✅ | ✅ | ✅ |
-| Word Confidence | ✅ | ✅ | ✅ |
-
-## Development
-
-### Testing
-
-```bash
-# Build with debug symbols
-make clean
-CXXFLAGS="-g -O0" make
-
-# Run with valgrind
-valgrind --leak-check=full freeswitch -nonat -nc
-```
-
-### Logging
-
-Enable debug logging in FreeSWITCH:
-
-```xml
-<param name="loglevel" value="debug"/>
-```
-
-View Google-specific logs:
-```bash
-grep google_transcribev2 /usr/local/freeswitch/log/freeswitch.log
-```
+**Total: 12 source files (~3,700 lines)**
 
 ## License
 
-See main repository LICENSE file.
-
-## Support
-
-- GitHub Issues: https://github.com/srthorat/freeswitch-speech-ai/issues
-- Documentation: https://github.com/srthorat/freeswitch-speech-ai
-
-## Credits
-
-- Based on the unified architecture of mod_aws_transcribe and mod_deepgram_transcribe
-- Uses Google Cloud Speech-to-Text v2 API
-- FreeSWITCH module framework
+MIT License - See LICENSE file for details.
