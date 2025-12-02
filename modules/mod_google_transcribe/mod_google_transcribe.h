@@ -20,6 +20,8 @@
 #define TRANSCRIBE_EVENT_PLAY_INTERRUPT "google_transcribe::play_interrupt"
 #define TRANSCRIBE_EVENT_VAD_DETECTED "google_transcribe::vad_detected"
 #define TRANSCRIBE_EVENT_ERROR      "jambonz_transcribe::error"
+#define TRANSCRIBE_EVENT_SESSION_START "google_transcribe::session_start"
+#define TRANSCRIBE_EVENT_SESSION_STOP "google_transcribe::session_stop"
 
 
 // simply write a wave file
@@ -58,6 +60,13 @@ struct cap_cb {
 	int play_file;
 	switch_vad_t * vad;
 	uint32_t samples_per_second;
+
+	// Call metadata (Sprint 2, Task 2.1)
+	char *caller_name;
+	char *caller_number;
+	char *callee_name;
+	char *callee_number;
+	char *sip_call_id;
 };
 #endif
 

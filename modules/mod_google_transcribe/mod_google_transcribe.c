@@ -7,6 +7,7 @@
 #include "google_glue.h"
 #include <stdlib.h>
 #include <switch.h>
+#include <switch_json.h>
 
 static const uint32_t DEFAULT_SAMPLE_RATE = 16000;
 
@@ -65,6 +66,32 @@ static speech_init_callback_t get_init_callback_from_version(GoogleCloudServiceV
 static void responseHandler(switch_core_session_t* session, const char * json, const char* bugname) {
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
+
+	// Session start event (Sprint 2, Task 2.2)
+	if (0 == strcmp("session-start", json)) {
+		switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, TRANSCRIBE_EVENT_SESSION_START);
+		switch_channel_event_set_data(channel, event);
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "transcription-vendor", "google");
+		if (bugname) {
+			switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "media-bugname", bugname);
+		}
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Transcription session started: %s\n", bugname ? bugname : "google_transcribe");
+		switch_event_fire(&event);
+		return;
+	}
+
+	// Session stop event (Sprint 2, Task 2.2)
+	if (0 == strcmp("session-stop", json)) {
+		switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, TRANSCRIBE_EVENT_SESSION_STOP);
+		switch_channel_event_set_data(channel, event);
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "transcription-vendor", "google");
+		if (bugname) {
+			switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "media-bugname", bugname);
+		}
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Transcription session stopped: %s\n", bugname ? bugname : "google_transcribe");
+		switch_event_fire(&event);
+		return;
+	}
 
 	if (0 == strcmp("vad_detected", json)) {
 		switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, TRANSCRIBE_EVENT_VAD_DETECTED);
@@ -152,6 +179,7 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
 	switch (type) {
 	case SWITCH_ABC_TYPE_INIT:
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Got SWITCH_ABC_TYPE_INIT.\n");
+		responseHandler(session, "session-start", cb->bugname);  // Sprint 2, Task 2.2
 		responseHandler(session, "start_of_transcript", cb->bugname);
 		break;
 
@@ -159,6 +187,7 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
 		{
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Got SWITCH_ABC_TYPE_CLOSE, calling google_speech_session_cleanup.\n");
 			responseHandler(session, "end_of_transcript", cb->bugname);
+			responseHandler(session, "session-stop", cb->bugname);  // Sprint 2, Task 2.2
 			cleanup_callback(session, 1, bug);
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Finished SWITCH_ABC_TYPE_CLOSE.\n");
 		}
@@ -209,6 +238,32 @@ static switch_status_t do_stop(switch_core_session_t *session, char *bugname, sp
 	}
 
 	return status;
+}
+
+static char* build_metadata_json(struct cap_cb *cb) {
+	cJSON *metadata = cJSON_CreateObject();
+	char *json_str = NULL;
+
+	if (cb->caller_name) {
+		cJSON_AddStringToObject(metadata, "callerName", cb->caller_name);
+	}
+	if (cb->caller_number) {
+		cJSON_AddStringToObject(metadata, "callerNumber", cb->caller_number);
+	}
+	if (cb->callee_name) {
+		cJSON_AddStringToObject(metadata, "calleeName", cb->callee_name);
+	}
+	if (cb->callee_number) {
+		cJSON_AddStringToObject(metadata, "calleeNumber", cb->callee_number);
+	}
+	if (cb->sip_call_id) {
+		cJSON_AddStringToObject(metadata, "call-Id", cb->sip_call_id);
+	}
+
+	json_str = cJSON_PrintUnformatted(metadata);
+	cJSON_Delete(metadata);
+
+	return json_str;
 }
 
 static switch_status_t start_capture(switch_core_session_t *session, switch_media_bug_flag_t flags,
@@ -280,6 +335,25 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 	  hints = var;
 	}
 
+	// Extract call metadata (Sprint 2, Task 2.1)
+	const char* caller_id_name = switch_channel_get_variable(channel, "caller_id_name");
+	const char* caller_id_number = switch_channel_get_variable(channel, "caller_id_number");
+	const char* callee_id_name = switch_channel_get_variable(channel, "callee_id_name");
+	if (!callee_id_name) {
+		callee_id_name = switch_channel_get_variable(channel, "effective_callee_id_name");
+	}
+	const char* destination_number = switch_channel_get_variable(channel, "destination_number");
+	const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+
+	// Log metadata for debugging
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+		"Call metadata: caller=%s (%s), callee=%s (%s), call-id=%s\n",
+		caller_id_name ? caller_id_name : "unknown",
+		caller_id_number ? caller_id_number : "unknown",
+		callee_id_name ? callee_id_name : "unknown",
+		destination_number ? destination_number : "unknown",
+		sip_call_id ? sip_call_id : "unknown");
+
 	switch_core_session_get_read_impl(session, &read_impl);
 
 	if (switch_channel_pre_answer(channel) != SWITCH_STATUS_SUCCESS) {
@@ -294,6 +368,17 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 	if (SWITCH_STATUS_FALSE == status) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error initializing google speech session.\n");
 		return SWITCH_STATUS_FALSE;
+	}
+
+	// Store metadata in cap_cb structure (Sprint 2, Task 2.1)
+	struct cap_cb *cb = (struct cap_cb *) pUserData;
+	if (cb) {
+		switch_memory_pool_t *pool = switch_core_session_get_pool(session);
+		cb->caller_name = caller_id_name ? switch_core_strdup(pool, caller_id_name) : NULL;
+		cb->caller_number = caller_id_number ? switch_core_strdup(pool, caller_id_number) : NULL;
+		cb->callee_name = callee_id_name ? switch_core_strdup(pool, callee_id_name) : NULL;
+		cb->callee_number = destination_number ? switch_core_strdup(pool, destination_number) : NULL;
+		cb->sip_call_id = sip_call_id ? switch_core_strdup(pool, sip_call_id) : NULL;
 	}
 
 	if ((status = switch_core_media_bug_add(session, bugname, NULL, get_bug_callback_from_version(version), pUserData, 0, flags, &bug)) != SWITCH_STATUS_SUCCESS) {
@@ -559,6 +644,16 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_transcribe_load)
 		return SWITCH_STATUS_TERM;
 	}
 
+	// Register session events (Sprint 2, Task 2.2)
+	if (switch_event_reserve_subclass(TRANSCRIBE_EVENT_SESSION_START) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't register subclass %s!\n", TRANSCRIBE_EVENT_SESSION_START);
+		return SWITCH_STATUS_TERM;
+	}
+	if (switch_event_reserve_subclass(TRANSCRIBE_EVENT_SESSION_STOP) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't register subclass %s!\n", TRANSCRIBE_EVENT_SESSION_STOP);
+		return SWITCH_STATUS_TERM;
+	}
+
 	/* connect my internal structure to the blank pointer passed to me */
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
@@ -595,5 +690,8 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_transcribe_shutdown)
 	switch_event_free_subclass(TRANSCRIBE_EVENT_MAX_DURATION_EXCEEDED);
 	switch_event_free_subclass(TRANSCRIBE_EVENT_END_OF_UTTERANCE);
 	switch_event_free_subclass(TRANSCRIBE_EVENT_PLAY_INTERRUPT);
+	// Free session events (Sprint 2, Task 2.2)
+	switch_event_free_subclass(TRANSCRIBE_EVENT_SESSION_START);
+	switch_event_free_subclass(TRANSCRIBE_EVENT_SESSION_STOP);
 	return SWITCH_STATUS_SUCCESS;
 }
