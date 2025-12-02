@@ -32,12 +32,12 @@ This is a high-level summary of tasks to align `mod_google_transcribe` with AWS/
 
 ---
 
-### Phase 2: Metadata & Sessions (Priority 2) 📋
-- [ ] **2.1** Extract call metadata (caller, callee, sip_call_id)
-- [ ] **2.2** Add session start/stop events
+### Phase 2: Metadata & Sessions (Priority 2) 📋 ✅ COMPLETE
+- [x] **2.1** Extract call metadata (caller, callee, sip_call_id)
+- [x] **2.2** Add session start/stop events
 
-**Files:** `modules/mod_google_transcribe/mod_google_transcribe.c`
-**Reference:** `mod_aws_transcribe.c:583-647` (build_session_metadata)
+**Files:** `modules/mod_google_transcribe/mod_google_transcribe.c`, `mod_google_transcribe.h`
+**Commit:** `ac7a135` - feat(mod_google_transcribe): Add metadata extraction and session events (Sprint 2)
 
 ---
 
