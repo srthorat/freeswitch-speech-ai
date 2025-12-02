@@ -7,7 +7,7 @@
 #   --module mod_audio_fork          Install only mod_audio_fork dependencies + module
 #   --module mod_aws_transcribe      Install only mod_aws_transcribe dependencies + module
 #   --module mod_deepgram_transcribe Install only mod_deepgram_transcribe dependencies + module
-#   --module mod_google_transcribev2 Install only mod_google_transcribev2 dependencies + module
+#   --module mod_google_transcribe   Install only mod_google_transcribe dependencies + module
 #   --module all                     Install everything (default)
 #
 # Usage:
@@ -23,7 +23,7 @@
 #
 # Examples:
 #   sudo ./install-all.sh --module freeswitch
-#   sudo ./install-all.sh --module mod_google_transcribev2
+#   sudo ./install-all.sh --module mod_google_transcribe
 #   sudo ./install-all.sh --module all --build-cpus 8
 # ============================================================================
 
@@ -50,7 +50,7 @@ MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 LOG_DIR="/tmp/freeswitch-install-logs"
 
 # Valid module names
-VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribev2")
+VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe")
 
 # Create log directory
 mkdir -p "$LOG_DIR"
@@ -202,7 +202,7 @@ while [[ $# -gt 0 ]]; do
             echo "  mod_audio_fork           Install only mod_audio_fork and dependencies"
             echo "  mod_aws_transcribe       Install only mod_aws_transcribe and dependencies"
             echo "  mod_deepgram_transcribe  Install only mod_deepgram_transcribe and dependencies"
-            echo "  mod_google_transcribev2  Install only mod_google_transcribev2 and dependencies"
+            echo "  mod_google_transcribe    Install only mod_google_transcribe and dependencies"
             echo ""
             echo "Options:"
             echo "  --freeswitch-prefix PATH  FreeSWITCH installation directory (default: /usr/local/freeswitch)"
@@ -214,7 +214,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Examples:"
             echo "  sudo $0 --module freeswitch"
-            echo "  sudo $0 --module mod_google_transcribev2 --build-cpus 8"
+            echo "  sudo $0 --module mod_google_transcribe --build-cpus 8"
             echo "  sudo $0 --module all"
             exit 0
             ;;
@@ -265,8 +265,8 @@ fi
 if should_install_module "mod_deepgram_transcribe"; then
     echo "  Install mod_deepgram_transcribe: Yes"
 fi
-if should_install_module "mod_google_transcribev2"; then
-    echo "  Install mod_google_transcribev2: Yes"
+if should_install_module "mod_google_transcribe"; then
+    echo "  Install mod_google_transcribe: Yes"
 fi
 echo ""
 
@@ -435,8 +435,8 @@ if should_install_module "mod_aws_transcribe"; then
     fi
 fi
 
-# gRPC (for mod_google_transcribev2)
-if should_install_module "mod_google_transcribev2"; then
+# gRPC (for mod_google_transcribe)
+if should_install_module "mod_google_transcribe"; then
     if ! command -v protoc &> /dev/null || ! command -v grpc_cpp_plugin &> /dev/null; then
         log_substep "Installing gRPC from system packages..."
 
@@ -465,47 +465,82 @@ if should_install_module "mod_google_transcribev2"; then
     fi
 fi
 
-# Google Cloud C++ Speech library (for mod_google_transcribev2)
-if should_install_module "mod_google_transcribev2"; then
-    if ! ldconfig -p | grep -q libgoogle_cloud_cpp_speech; then
-        log_substep "Building Google Cloud C++ Speech library v2.30.0 (10-15 minutes)..."
+# Google Cloud Speech API Proto Definitions (for mod_google_transcribe)
+if should_install_module "mod_google_transcribe"; then
+    if [ ! -d "/usr/local/include/googleapis/google" ]; then
+        log_substep "Downloading and generating Google Cloud Speech API proto files..."
         cd /usr/local/src || exit 1
 
-        # Install additional dependencies
-        apt-get install -y \
-            nlohmann-json3-dev \
-            libcurl4-openssl-dev \
-            libssl-dev \
-            > /dev/null 2>&1
-
-        if [ ! -d "google-cloud-cpp" ]; then
-            git clone --depth 1 -b v2.30.0 https://github.com/googleapis/google-cloud-cpp.git > /dev/null 2>&1
-            check_success "Failed to clone Google Cloud C++ SDK"
+        if [ ! -d "googleapis" ]; then
+            git clone --depth 1 https://github.com/googleapis/googleapis.git > /dev/null 2>&1
+            check_success "Failed to clone googleapis repository"
         fi
 
-        cd google-cloud-cpp
-        mkdir -p build && cd build
-        cmake .. \
-            -DBUILD_SHARED_LIBS=ON \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGOOGLE_CLOUD_CPP_ENABLE=speech \
-            -DBUILD_TESTING=OFF \
-            -DGOOGLE_CLOUD_CPP_WITH_MOCKS=OFF \
+        cd googleapis
+
+        log_substep "Generating C++ code from proto files..."
+        # Generate the main Speech API proto
+        protoc \
+            --cpp_out=. \
+            --grpc_out=. \
+            --plugin=protoc-gen-grpc=$(which grpc_cpp_plugin) \
+            -I. \
+            google/cloud/speech/v1p1beta1/cloud_speech.proto \
             > /dev/null 2>&1
-        check_success "Failed to configure Google Cloud C++ SDK"
+        check_success "Failed to generate Speech API proto code"
 
-        make -j ${BUILD_CPUS} > /dev/null 2>&1
-        check_success "Failed to compile Google Cloud C++ SDK"
+        # Generate common Google API protos
+        protoc \
+            --cpp_out=. \
+            -I. \
+            google/api/annotations.proto \
+            google/api/client.proto \
+            google/api/field_behavior.proto \
+            google/api/http.proto \
+            google/api/resource.proto \
+            > /dev/null 2>&1
+        check_success "Failed to generate Google API common protos"
 
-        make install > /dev/null 2>&1
-        check_success "Failed to install Google Cloud C++ SDK"
+        # Generate RPC status protos
+        protoc \
+            --cpp_out=. \
+            -I. \
+            google/rpc/status.proto \
+            > /dev/null 2>&1
+        check_success "Failed to generate RPC status protos"
 
-        ldconfig
-        echo "google_cloud_cpp=installed" >> "$MANIFEST_FILE"
-        log_success "Google Cloud C++ Speech library built and installed"
+        # Generate longrunning operation protos
+        protoc \
+            --cpp_out=. \
+            --grpc_out=. \
+            --plugin=protoc-gen-grpc=$(which grpc_cpp_plugin) \
+            -I. \
+            google/longrunning/operations.proto \
+            > /dev/null 2>&1
+        check_success "Failed to generate longrunning operation protos"
+
+        log_substep "Installing generated proto headers..."
+        mkdir -p /usr/local/include/googleapis
+        cp -r google /usr/local/include/googleapis/
+        check_success "Failed to install googleapis headers"
+
+        # Create a simple library directory structure for the module build
+        mkdir -p ${SCRIPT_DIR}/../libs/googleapis/gens
+        cp -r google ${SCRIPT_DIR}/../libs/googleapis/gens/
+        check_success "Failed to copy googleapis to libs directory"
+
+        echo "googleapis=installed" >> "$MANIFEST_FILE"
+        log_success "Google Cloud Speech API proto files generated and installed"
     else
-        log_success "Google Cloud C++ Speech library already installed"
-        grep -q "^google_cloud_cpp=" "$MANIFEST_FILE" || echo "google_cloud_cpp=existing" >> "$MANIFEST_FILE"
+        log_success "Google Cloud Speech API proto files already installed"
+
+        # Ensure libs directory exists even if googleapis is already installed
+        if [ ! -d "${SCRIPT_DIR}/../libs/googleapis/gens/google" ]; then
+            mkdir -p ${SCRIPT_DIR}/../libs/googleapis/gens
+            cp -r /usr/local/include/googleapis/google ${SCRIPT_DIR}/../libs/googleapis/gens/
+        fi
+
+        grep -q "^googleapis=" "$MANIFEST_FILE" || echo "googleapis=existing" >> "$MANIFEST_FILE"
     fi
 fi
 
@@ -706,7 +741,7 @@ EOF
 # Library Path (required for modules)
 Environment="LD_LIBRARY_PATH=/usr/local/lib"
 
-# Google Cloud Configuration (for mod_google_transcribev2)
+# Google Cloud Configuration (for mod_google_transcribe)
 # Uncomment and set your values:
 #Environment="GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json"
 #Environment="GCP_PROJECT_ID=your-project-id"
@@ -884,31 +919,61 @@ else
 fi
 
 # ============================================================================
-# Step 7: Build mod_google_transcribev2
+# Step 7: Build mod_google_transcribe
 # ============================================================================
 
-if should_install_module "mod_google_transcribev2"; then
-    log_step "[Step 7/7] Building mod_google_transcribev2"
+if should_install_module "mod_google_transcribe"; then
+    log_step "[Step 7/7] Building mod_google_transcribe"
 
-    cd ${SCRIPT_DIR}/../modules/mod_google_transcribev2 || exit 1
+    cd ${SCRIPT_DIR}/../modules/mod_google_transcribe || exit 1
 
-    # Build using Makefile
-    log_substep "Cleaning previous build..."
-    make clean > /dev/null 2>&1
+    log_substep "Compiling mod_google_transcribe.c..."
+    log_command "mod_google_transcribe.c" "${LOG_DIR}/mod_google_transcribe_c.log" \
+        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_google_transcribe.c
+    check_success "Failed to compile mod_google_transcribe.c" "${LOG_DIR}/mod_google_transcribe_c.log"
 
-    log_substep "Building mod_google_transcribev2..."
-    log_command "mod_google_transcribev2 build" "${LOG_DIR}/mod_google_transcribev2_make.log" \
-        make -j ${BUILD_CPUS} FS_PREFIX=${FS_PREFIX}
-    check_success "Failed to build mod_google_transcribev2" "${LOG_DIR}/mod_google_transcribev2_make.log"
+    log_substep "Compiling C++ glue sources..."
+    log_command "mod_google_transcribe C++" "${LOG_DIR}/mod_google_transcribe_cpp.log" \
+        g++ -fPIC -c -std=c++17 \
+            -I${FS_PREFIX}/include/freeswitch \
+            -I${SCRIPT_DIR}/../libs/googleapis/gens \
+            -I/usr/local/include \
+            $(pkg-config --cflags grpc++ protobuf) \
+            google_glue.cpp google_glue_v1.cpp google_glue_v2.cpp
+    check_success "Failed to compile mod_google_transcribe C++ sources" "${LOG_DIR}/mod_google_transcribe_cpp.log"
 
-    log_substep "Installing mod_google_transcribev2..."
-    log_command "mod_google_transcribev2 install" "${LOG_DIR}/mod_google_transcribev2_install.log" \
-        make install FS_PREFIX=${FS_PREFIX}
-    check_success "Failed to install mod_google_transcribev2" "${LOG_DIR}/mod_google_transcribev2_install.log"
+    # Compile the generated proto files
+    log_substep "Compiling generated proto files..."
+    cd ${SCRIPT_DIR}/../libs/googleapis/gens || exit 1
 
-    log_success "mod_google_transcribev2 built and installed"
+    log_command "proto files compile" "${LOG_DIR}/mod_google_transcribe_protos.log" \
+        g++ -fPIC -c -std=c++17 \
+            $(pkg-config --cflags grpc++ protobuf) \
+            google/cloud/speech/v1p1beta1/cloud_speech.pb.cc \
+            google/cloud/speech/v1p1beta1/cloud_speech.grpc.pb.cc \
+            google/api/*.pb.cc \
+            google/rpc/*.pb.cc \
+            google/longrunning/*.pb.cc \
+            google/longrunning/*.grpc.pb.cc
+    check_success "Failed to compile proto files" "${LOG_DIR}/mod_google_transcribe_protos.log"
+
+    cd ${SCRIPT_DIR}/../modules/mod_google_transcribe || exit 1
+
+    log_substep "Linking mod_google_transcribe.so..."
+    log_command "mod_google_transcribe link" "${LOG_DIR}/mod_google_transcribe_link.log" \
+        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so \
+            mod_google_transcribe.o google_glue.o google_glue_v1.o google_glue_v2.o \
+            ${SCRIPT_DIR}/../libs/googleapis/gens/google/cloud/speech/v1p1beta1/*.o \
+            ${SCRIPT_DIR}/../libs/googleapis/gens/google/api/*.o \
+            ${SCRIPT_DIR}/../libs/googleapis/gens/google/rpc/*.o \
+            ${SCRIPT_DIR}/../libs/googleapis/gens/google/longrunning/*.o \
+            $(pkg-config --libs grpc++ grpc protobuf) \
+            -lpthread -lssl -lcrypto
+    check_success "Failed to link mod_google_transcribe" "${LOG_DIR}/mod_google_transcribe_link.log"
+
+    log_success "mod_google_transcribe built and installed"
 else
-    log_step "[Step 7/7] Skipping mod_google_transcribev2"
+    log_step "[Step 7/7] Skipping mod_google_transcribe"
 fi
 
 # ============================================================================
@@ -934,8 +999,8 @@ if [ "$MODULE" != "freeswitch" ]; then
             if should_install_module "mod_deepgram_transcribe" && ! grep -q "mod_deepgram_transcribe" "$MODULES_CONF"; then
                 sed -i '/<\/modules>/i \    <load module="mod_deepgram_transcribe"/>' "$MODULES_CONF"
             fi
-            if should_install_module "mod_google_transcribev2" && ! grep -q "mod_google_transcribev2" "$MODULES_CONF"; then
-                sed -i '/<\/modules>/i \    <load module="mod_google_transcribev2"/>' "$MODULES_CONF"
+            if should_install_module "mod_google_transcribe" && ! grep -q "mod_google_transcribe" "$MODULES_CONF"; then
+                sed -i '/<\/modules>/i \    <load module="mod_google_transcribe"/>' "$MODULES_CONF"
             fi
 
             log_success "modules.conf.xml configured"
@@ -988,11 +1053,11 @@ if [ "$NO_VALIDATION" = false ] && [ "$MODULE" != "freeswitch" ]; then
         fi
     fi
 
-    if should_install_module "mod_google_transcribev2"; then
-        if [ -f "${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribev2.so" ]; then
-            log_success "mod_google_transcribev2.so exists"
+    if should_install_module "mod_google_transcribe"; then
+        if [ -f "${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so" ]; then
+            log_success "mod_google_transcribe.so exists"
         else
-            echo -e "${RED}✗ mod_google_transcribev2.so NOT FOUND${NC}"
+            echo -e "${RED}✗ mod_google_transcribe.so NOT FOUND${NC}"
         fi
     fi
 fi
