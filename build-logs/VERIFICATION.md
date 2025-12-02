@@ -296,13 +296,15 @@ fs_cli -x "load mod_google_transcribe"
 
 ```
 modified:   scripts/install-all.sh
+modified:   .gitignore
 deleted:    modules/mod_google_transcribev2/
 added:      modules/mod_google_transcribe/
 added:      docs/mod_google_transcribe-deps.md
 added:      build-logs/mod_google_transcribe-build.log
 added:      build-logs/VERIFICATION.md
-added:      libs/googleapis/
 ```
+
+**Note:** `libs/googleapis/` is generated during build and excluded from git via `.gitignore`
 
 ## Conclusion
 

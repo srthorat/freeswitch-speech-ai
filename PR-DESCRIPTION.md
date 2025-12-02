@@ -24,9 +24,11 @@ This PR replaces the `mod_google_transcribev2` module with the original `mod_goo
 | `modules/mod_google_transcribe/` | Added | Original module with direct gRPC API (11 files) |
 | `docs/mod_google_transcribe-deps.md` | Added | Complete dependency documentation |
 | `scripts/install-all.sh` | Modified | Updated build process for system packages |
+| `.gitignore` | Modified | Added libs/googleapis/ to ignore generated files |
 | `build-logs/VERIFICATION.md` | Added | Build verification report |
 | `build-logs/mod_google_transcribe-build.log` | Added | Installation log from Ubuntu 24.04 |
-| `libs/googleapis/gens/` | Added | Generated proto files from googleapis |
+
+**Note:** `libs/googleapis/` contains generated proto files and is created during build (excluded from git)
 
 ## Dependency Mapping (Ubuntu 24.04)
 

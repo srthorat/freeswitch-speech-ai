@@ -22,6 +22,9 @@
 build/
 .build/
 
+# Generated proto files (created during build)
+libs/googleapis/
+
 # Temporary files
 *.tmp
 .tmp/
