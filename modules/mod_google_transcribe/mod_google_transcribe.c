@@ -211,54 +211,6 @@ static switch_status_t do_stop(switch_core_session_t *session, char *bugname, sp
 	return status;
 }
 
-static switch_status_t start_capture2(switch_core_session_t *session, switch_media_bug_flag_t flags, 
-  uint32_t sample_rate, char* lang, int interim, int single_utterance, int separate_recognition, int max_alternatives,
-  int profanity_filter, int word_time_offset, int punctuation, const char* model, int enhanced, const char* hints,
-  char* play_file, GoogleCloudServiceVersion version)
-{
-	switch_channel_t *channel = switch_core_session_get_channel(session);
-	switch_media_bug_t *bug;
-	switch_status_t status;
-	switch_codec_implementation_t read_impl = { 0 };
-	void *pUserData;
-	uint32_t samples_per_second;
-	switch_input_args_t args = { 0 };
-
-	if (switch_channel_get_private(channel, MY_BUG_NAME)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "removing bug from previous transcribe\n");
-		do_stop(session, MY_BUG_NAME, get_cleanup_callback_from_version(version));
-	}
-
-	switch_core_session_get_read_impl(session, &read_impl);
-
-	if (switch_channel_pre_answer(channel) != SWITCH_STATUS_SUCCESS) {
-		return SWITCH_STATUS_FALSE;
-	}
-
-	samples_per_second = !strcasecmp(read_impl.iananame, "g722") ? read_impl.actual_samples_per_second : read_impl.samples_per_second;
-	status = get_init_callback_from_version(version)(session, responseHandler, sample_rate, samples_per_second, flags & SMBF_STEREO ? 2 : 1, lang, interim, MY_BUG_NAME, single_utterance,
-			separate_recognition, max_alternatives, profanity_filter, word_time_offset, punctuation, model, enhanced, hints, play_file, &pUserData);
-
-	if (SWITCH_STATUS_FALSE == status) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error initializing google speech session.\n");
-		return SWITCH_STATUS_FALSE;
-	}
-
-	if ((status = switch_core_media_bug_add(session, "google_transcribe", NULL, get_bug_callback_from_version(version), pUserData, 0, flags, &bug)) != SWITCH_STATUS_SUCCESS) {
-		return status;
-	}
-
-	switch_channel_set_private(channel, MY_BUG_NAME, bug);	
-
-	/* play the prompt, looking for detection result */
-	if (play_file != NULL){
-		args.input_callback = transcribe_input_callback;
-		switch_ivr_play_file(session, NULL, play_file, &args);
-	}
-
-	return SWITCH_STATUS_SUCCESS;
-}
-
 static switch_status_t start_capture(switch_core_session_t *session, switch_media_bug_flag_t flags,
   char* lang, int interim, char* bugname, int sampling, char* metadata, GoogleCloudServiceVersion version)
 {
@@ -354,31 +306,26 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 }
 
 // #define TRANSCRIBE_API_SYNTAX "<uuid> [start|stop] [lang-code] [interim] [single-utterance](bool) [seperate-recognition](bool) [max-alternatives](int) [profinity-filter](bool) [word-time](bool) [punctuation](bool) [model](string) [enhanced](true) [hints](string without space) [play-file]"
-#define TRANSCRIBE2_API_SYNTAX "<uuid> [start|stop] [lang-code] [interim]  [single-utterance] [separate-recognition] [max-alternatives] [profanity-filter] [word-time] [punctuation] [sample-rate] [model] [enhanced] [hints] [play-file]"
+#define TRANSCRIBE2_API_SYNTAX "<uuid> [start|stop] lang-code [interim] [mono|mixed|stereo] [8k|16k] [metadata]"
 SWITCH_STANDARD_API(transcribe2_function)
 {
-	char *mycmd = NULL, *argv[20] = { 0 };
-	int argc = 0, enhanced = 0;
-	uint32_t sample_rate = DEFAULT_SAMPLE_RATE;
-	const char* hints = NULL;
-	const char* model = NULL;
-	char* play_file = NULL;
-	
+	char *mycmd = NULL, *argv[8] = { 0 };
+	int argc = 0;
 	switch_status_t status = SWITCH_STATUS_FALSE;
-	switch_media_bug_flag_t flags = SMBF_READ_STREAM /* | SMBF_WRITE_STREAM | SMBF_READ_PING */;
+	switch_media_bug_flag_t flags = SMBF_READ_STREAM;
 	switch_channel_t *channel;
 	const char* var;
-	GoogleCloudServiceVersion version = GoogleCloudServiceVersion_v1;
+	GoogleCloudServiceVersion version = GoogleCloudServiceVersion_v2;  // Default to v2 for this command
 
 	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
 		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
 	}
 
-	if (zstr(cmd) || 
-      (argc < 2) ||
-      (!strcasecmp(argv[1], "start") && argc < 10) ||
+	if (zstr(cmd) ||
+      (!strcasecmp(argv[1], "stop") && argc < 2) ||
+      (!strcasecmp(argv[1], "start") && argc < 3) ||
       zstr(argv[0])) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error with command %s %s.\n", cmd, argv[0]);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error with command %s %s %s.\n", cmd, argv[0], argv[1]);
 		stream->write_function(stream, "-USAGE: %s\n", TRANSCRIBE2_API_SYNTAX);
 		goto done;
 	} else {
@@ -394,33 +341,59 @@ SWITCH_STANDARD_API(transcribe2_function)
 			}
 
 			if (!strcasecmp(argv[1], "stop")) {
+				char *bugname = argc > 2 ? argv[2] : MY_BUG_NAME;
     		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "stop transcribing\n");
-				status = do_stop(lsession, MY_BUG_NAME, get_cleanup_callback_from_version(version));
+				status = do_stop(lsession, bugname, get_cleanup_callback_from_version(version));
 			} else if (!strcasecmp(argv[1], "start")) {
-        		char* lang = argv[2];
-        		int interim = argc > 3 && !strcmp(argv[3], "true");
-				int single_utterance =  !strcmp(argv[4], "true"); // single-utterance
-				int separate_recognition = !strcmp(argv[5], "true"); // separate-recognition
-				int max_alternatives = atoi(argv[6]); // max-alternatives
-				int profanity_filter = !strcmp(argv[7], "true"); // profanity-filter
-				int word_time_offset = !strcmp(argv[8], "true"); // word-time
-				int punctuation      = !strcmp(argv[9], "true");  //punctuation
-				if (argc > 10) {
-					sample_rate = atol(argv[10]);
+        char* lang = argv[2];
+        int interim = argc > 3 && !strcmp(argv[3], "interim");
+				char *bugname = MY_BUG_NAME;
+				int sampling = 16000;  // Default to 16kHz
+				char *metadata = NULL;
+
+				// Parse mix-type (argv[4]): mono (default), mixed, stereo
+				if (argc > 4) {
+					if (!strcmp(argv[4], "mixed")) {
+						flags |= SMBF_WRITE_STREAM;  // Mixed: READ + WRITE (single channel)
+					} else if (!strcmp(argv[4], "stereo")) {
+						flags |= SMBF_WRITE_STREAM;  // Stereo: READ + WRITE + STEREO
+						flags |= SMBF_STEREO;
+					}
+					// else: mono is default (SMBF_READ_STREAM only)
 				}
-				if (argc > 12){
-					model = argv[11]; // model 
-					enhanced = !strcmp(argv[12], "true"); // enhanced
+
+				// Parse sampling rate (argv[5]): 8k, 16k, or numeric
+				if (argc > 5) {
+					if (!strcmp(argv[5], "8k")) {
+						sampling = 8000;
+					} else if (!strcmp(argv[5], "16k")) {
+						sampling = 16000;
+					} else {
+						int rate = atoi(argv[5]);
+						if (rate > 0 && rate % 8000 == 0) {
+							sampling = rate;
+						}
+					}
 				}
-				if (argc > 13){
-					hints = argv[13]; // hints
+
+				// Parse metadata (argv[6])
+				if (argc > 6) {
+					// Check if argv[6] is metadata (starts with { or [)
+					if (argv[6][0] == '{' || argv[6][0] == '[') {
+						metadata = argv[6];
+					}
 				}
-				if (argc > 14){
-					play_file = argv[14];
-				}
-    			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "start transcribing %s %s\n", lang, interim ? "interim": "complete");
-				status = start_capture2(lsession, flags, sample_rate, lang, interim, single_utterance, separate_recognition,max_alternatives,
-				profanity_filter, word_time_offset, punctuation, model, enhanced, hints, play_file, version);
+
+    		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+					"start transcribing lang=%s interim=%s mix=%s rate=%d bugname=%s metadata=%s\n",
+					lang,
+					interim ? "yes" : "no",
+					(flags & SMBF_STEREO) ? "stereo" : (flags & SMBF_WRITE_STREAM) ? "mixed" : "mono",
+					sampling,
+					bugname,
+					metadata ? metadata : "none");
+
+				status = start_capture(lsession, flags, lang, interim, bugname, sampling, metadata, version);
 			}
 			switch_core_session_rwunlock(lsession);
 		}
