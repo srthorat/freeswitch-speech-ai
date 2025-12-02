@@ -479,7 +479,7 @@ if should_install_module "mod_google_transcribe"; then
         cd googleapis
 
         log_substep "Generating C++ code from proto files..."
-        # Generate the main Speech API proto
+        # Generate the main Speech API v1p1beta1 proto
         protoc \
             --cpp_out=. \
             --grpc_out=. \
@@ -487,19 +487,39 @@ if should_install_module "mod_google_transcribe"; then
             -I. \
             google/cloud/speech/v1p1beta1/cloud_speech.proto \
             > /dev/null 2>&1
-        check_success "Failed to generate Speech API proto code"
+        check_success "Failed to generate Speech API v1p1beta1 proto code"
 
-        # Generate common Google API protos
+        # Generate the main Speech API v2 proto
+        protoc \
+            --cpp_out=. \
+            --grpc_out=. \
+            --plugin=protoc-gen-grpc=$(which grpc_cpp_plugin) \
+            -I. \
+            google/cloud/speech/v2/cloud_speech.proto \
+            > /dev/null 2>&1
+        check_success "Failed to generate Speech API v2 proto code"
+
+        # Generate common Google API protos (including missing launch_stage)
         protoc \
             --cpp_out=. \
             -I. \
             google/api/annotations.proto \
             google/api/client.proto \
             google/api/field_behavior.proto \
+            google/api/field_info.proto \
             google/api/http.proto \
+            google/api/launch_stage.proto \
             google/api/resource.proto \
             > /dev/null 2>&1
         check_success "Failed to generate Google API common protos"
+
+        # Generate Speech API specific resource protos
+        protoc \
+            --cpp_out=. \
+            -I. \
+            google/cloud/speech/v1p1beta1/resource.proto \
+            > /dev/null 2>&1
+        check_success "Failed to generate Speech API resource protos"
 
         # Generate RPC status protos
         protoc \
@@ -524,22 +544,10 @@ if should_install_module "mod_google_transcribe"; then
         cp -r google /usr/local/include/googleapis/
         check_success "Failed to install googleapis headers"
 
-        # Create a simple library directory structure for the module build
-        mkdir -p ${SCRIPT_DIR}/../libs/googleapis/gens
-        cp -r google ${SCRIPT_DIR}/../libs/googleapis/gens/
-        check_success "Failed to copy googleapis to libs directory"
-
         echo "googleapis=installed" >> "$MANIFEST_FILE"
         log_success "Google Cloud Speech API proto files generated and installed"
     else
         log_success "Google Cloud Speech API proto files already installed"
-
-        # Ensure libs directory exists even if googleapis is already installed
-        if [ ! -d "${SCRIPT_DIR}/../libs/googleapis/gens/google" ]; then
-            mkdir -p ${SCRIPT_DIR}/../libs/googleapis/gens
-            cp -r /usr/local/include/googleapis/google ${SCRIPT_DIR}/../libs/googleapis/gens/
-        fi
-
         grep -q "^googleapis=" "$MANIFEST_FILE" || echo "googleapis=existing" >> "$MANIFEST_FILE"
     fi
 fi
@@ -936,7 +944,7 @@ if should_install_module "mod_google_transcribe"; then
     log_command "mod_google_transcribe C++" "${LOG_DIR}/mod_google_transcribe_cpp.log" \
         g++ -fPIC -c -std=c++17 \
             -I${FS_PREFIX}/include/freeswitch \
-            -I${SCRIPT_DIR}/../libs/googleapis/gens \
+            -I/usr/local/include/googleapis \
             -I/usr/local/include \
             $(pkg-config --cflags grpc++ protobuf) \
             google_glue.cpp google_glue_v1.cpp google_glue_v2.cpp
@@ -944,18 +952,46 @@ if should_install_module "mod_google_transcribe"; then
 
     # Compile the generated proto files
     log_substep "Compiling generated proto files..."
-    cd ${SCRIPT_DIR}/../libs/googleapis/gens || exit 1
+    cd /usr/local/include/googleapis || exit 1
 
-    log_command "proto files compile" "${LOG_DIR}/mod_google_transcribe_protos.log" \
+    # Compile v1p1beta1 Speech API files
+    log_command "v1p1beta1 proto files" "${LOG_DIR}/mod_google_transcribe_v1_protos.log" \
         g++ -fPIC -c -std=c++17 \
+            -I. \
             $(pkg-config --cflags grpc++ protobuf) \
             google/cloud/speech/v1p1beta1/cloud_speech.pb.cc \
             google/cloud/speech/v1p1beta1/cloud_speech.grpc.pb.cc \
+            google/cloud/speech/v1p1beta1/resource.pb.cc
+    check_success "Failed to compile v1p1beta1 proto files" "${LOG_DIR}/mod_google_transcribe_v1_protos.log"
+    
+    # Rename v1p1beta1 object files to avoid conflicts
+    mv cloud_speech.pb.o cloud_speech_v1p1beta1.pb.o
+    mv cloud_speech.grpc.pb.o cloud_speech_v1p1beta1.grpc.pb.o
+    mv resource.pb.o resource_v1p1beta1.pb.o
+
+    # Compile v2 Speech API files
+    log_command "v2 proto files" "${LOG_DIR}/mod_google_transcribe_v2_protos.log" \
+        g++ -fPIC -c -std=c++17 \
+            -I. \
+            $(pkg-config --cflags grpc++ protobuf) \
+            google/cloud/speech/v2/cloud_speech.pb.cc \
+            google/cloud/speech/v2/cloud_speech.grpc.pb.cc
+    check_success "Failed to compile v2 proto files" "${LOG_DIR}/mod_google_transcribe_v2_protos.log"
+    
+    # Rename v2 object files to avoid conflicts
+    mv cloud_speech.pb.o cloud_speech_v2.pb.o
+    mv cloud_speech.grpc.pb.o cloud_speech_v2.grpc.pb.o
+
+    # Compile common API proto files
+    log_command "common proto files" "${LOG_DIR}/mod_google_transcribe_common_protos.log" \
+        g++ -fPIC -c -std=c++17 \
+            -I. \
+            $(pkg-config --cflags grpc++ protobuf) \
             google/api/*.pb.cc \
             google/rpc/*.pb.cc \
             google/longrunning/*.pb.cc \
             google/longrunning/*.grpc.pb.cc
-    check_success "Failed to compile proto files" "${LOG_DIR}/mod_google_transcribe_protos.log"
+    check_success "Failed to compile common proto files" "${LOG_DIR}/mod_google_transcribe_common_protos.log"
 
     cd ${SCRIPT_DIR}/../modules/mod_google_transcribe || exit 1
 
@@ -963,10 +999,7 @@ if should_install_module "mod_google_transcribe"; then
     log_command "mod_google_transcribe link" "${LOG_DIR}/mod_google_transcribe_link.log" \
         g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so \
             mod_google_transcribe.o google_glue.o google_glue_v1.o google_glue_v2.o \
-            ${SCRIPT_DIR}/../libs/googleapis/gens/google/cloud/speech/v1p1beta1/*.o \
-            ${SCRIPT_DIR}/../libs/googleapis/gens/google/api/*.o \
-            ${SCRIPT_DIR}/../libs/googleapis/gens/google/rpc/*.o \
-            ${SCRIPT_DIR}/../libs/googleapis/gens/google/longrunning/*.o \
+            /usr/local/include/googleapis/*.o \
             $(pkg-config --libs grpc++ grpc protobuf) \
             -lpthread -lssl -lcrypto
     check_success "Failed to link mod_google_transcribe" "${LOG_DIR}/mod_google_transcribe_link.log"
