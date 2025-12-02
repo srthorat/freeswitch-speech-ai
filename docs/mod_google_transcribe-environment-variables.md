@@ -37,7 +37,7 @@ uuid_google_transcribe2 <uuid> [start|stop] lang-code [interim] [mono|mixed|ster
 | Variable | Type | Description | Default | Example |
 |----------|------|-------------|---------|---------|
 | `GOOGLE_SPEECH_CLOUD_SERVICES_VERSION` | string | API version (`v1` or `v2`) | `v1` / `v2` | `v2` |
-| `GOOGLE_SPEECH_SAMPLE_RATE` | integer | Audio sample rate (Hz) | `16000` | `8000`, `16000` |
+| `GOOGLE_SPEECH_SAMPLE_RATE` | integer | Audio sample rate (Hz) | `8000` | `8000`, `16000` |
 
 ### Boolean Features (set to "true" to enable)
 
@@ -368,11 +368,11 @@ Benefits:
 
 | Audio Quality | Sample Rate | When to Use |
 |---------------|-------------|-------------|
-| Telephony | 8kHz | Traditional phone lines |
-| HD Voice | 16kHz | Modern VoIP, default |
+| Telephony | 8kHz | Traditional phone lines, default |
+| HD Voice | 16kHz | Modern VoIP |
 | High Quality | 24kHz+ | Studio recordings (rarely needed) |
 
-**Default is 16kHz** - works well for most use cases.
+**Default is 8kHz** - standard for telephony. Use `16k` parameter or `GOOGLE_SPEECH_SAMPLE_RATE=16000` for HD Voice.
 
 ---
 

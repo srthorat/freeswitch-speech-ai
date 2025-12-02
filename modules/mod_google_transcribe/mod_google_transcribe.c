@@ -9,7 +9,7 @@
 #include <switch.h>
 #include <switch_json.h>
 
-static const uint32_t DEFAULT_SAMPLE_RATE = 16000;
+static const uint32_t DEFAULT_SAMPLE_RATE = 8000;
 
 /* Callback Type Definitions */
 typedef switch_status_t (*speech_cleanup_callback_t) (switch_core_session_t *, int, switch_media_bug_t *);
@@ -433,7 +433,7 @@ SWITCH_STANDARD_API(transcribe2_function)
         char* lang = argv[2];
         int interim = argc > 3 && !strcmp(argv[3], "interim");
 				char *bugname = MY_BUG_NAME;
-				int sampling = 16000;  // Default to 16kHz
+				int sampling = 0;  // 0 = use DEFAULT_SAMPLE_RATE (8kHz for backward compat)
 				char *metadata = NULL;
 
 				// Parse mix-type (argv[4]): mono (default), mixed, stereo
@@ -538,7 +538,7 @@ SWITCH_STANDARD_API(transcribe_function)
         char* lang = argv[2];
         int interim = argc > 3 && !strcmp(argv[3], "interim");
 				char *bugname = MY_BUG_NAME;
-				int sampling = 16000;  // Default to 16kHz
+				int sampling = 0;  // 0 = use DEFAULT_SAMPLE_RATE (8kHz for backward compat)
 				char *metadata = NULL;
 
 				// Parse mix-type (argv[4]): mono (default), mixed, stereo
