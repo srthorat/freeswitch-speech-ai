@@ -16,7 +16,7 @@
 # Options:
 #   --module NAME           Module to install (freeswitch, mod_*, all)
 #   --freeswitch-prefix PATH  FreeSWITCH installation directory (default: /usr/local/freeswitch)
-#   --build-cpus N            Number of CPU cores for compilation (default: 4)
+#   --build-cpus N            Number of CPU cores for compilation (default: auto-detect)
 #   --yes                     Skip confirmation prompts (auto-accept)
 #   --no-validation           Skip module validation after build
 #   --help                    Show this help message
@@ -130,29 +130,33 @@ detect_freeswitch_installation() {
         "/etc/freeswitch"
     )
     
-    # Check if FreeSWITCH binary is in PATH
-    if command -v freeswitch &> /dev/null; then
-        local FS_BIN=$(command -v freeswitch)
-        local FS_DIR=$(dirname $(dirname "$FS_BIN"))
-        echo "$FS_DIR"
-        return 0
-    fi
-    
-    # Check standard installation paths
+    # Check standard installation paths (both binary and headers must exist)
     for path in "${STANDARD_PATHS[@]}"; do
-        if [ -d "$path" ] && [ -f "$path/bin/freeswitch" ]; then
+        if [ -d "$path" ] && [ -f "$path/bin/freeswitch" ] && [ -d "$path/include/freeswitch" ]; then
             echo "$path"
             return 0
         fi
     done
     
-    # Check if include files exist (development installation)
+    # Check if include files exist (development installation) 
     for path in "${STANDARD_PATHS[@]}"; do
         if [ -d "$path/include/freeswitch" ]; then
             echo "$path"
             return 0
         fi
     done
+    
+    # Check if FreeSWITCH binary is in PATH and validate headers exist
+    if command -v freeswitch &> /dev/null; then
+        local FS_BIN=$(command -v freeswitch)
+        local FS_DIR=$(dirname $(dirname "$FS_BIN"))
+        
+        # Only return this path if headers also exist there
+        if [ -d "$FS_DIR/include/freeswitch" ]; then
+            echo "$FS_DIR"
+            return 0
+        fi
+    fi
     
     return 1
 }
@@ -202,7 +206,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --freeswitch-prefix PATH  FreeSWITCH installation directory (default: /usr/local/freeswitch)"
-            echo "  --build-cpus N            Number of CPU cores for compilation (default: 4)"
+            echo "  --build-cpus N            Number of CPU cores for compilation (default: auto-detect)"
             echo "  --yes                     Skip confirmation prompts (auto-accept)"
             echo "  --no-validation           Skip module validation after build"
             echo "  --verbose                 Show detailed compilation output"
@@ -917,24 +921,32 @@ if [ "$MODULE" != "freeswitch" ]; then
 
         MODULES_CONF="${FS_PREFIX}/conf/autoload_configs/modules.conf.xml"
         if [ -f "$MODULES_CONF" ]; then
-        if ! grep -q "mod_audio_fork" "$MODULES_CONF" 2>/dev/null; then
-            sed -i '/<\/modules>/i \    <!-- Speech Transcription Modules -->' "$MODULES_CONF"
-        fi
+            if ! grep -q "mod_audio_fork" "$MODULES_CONF" 2>/dev/null; then
+                sed -i '/<\/modules>/i \    <!-- Speech Transcription Modules -->' "$MODULES_CONF"
+            fi
 
-        if should_install_module "mod_audio_fork" && ! grep -q "mod_audio_fork" "$MODULES_CONF"; then
-            sed -i '/<\/modules>/i \    <load module="mod_audio_fork"/>' "$MODULES_CONF"
-        fi
-        if should_install_module "mod_aws_transcribe" && ! grep -q "mod_aws_transcribe" "$MODULES_CONF"; then
-            sed -i '/<\/modules>/i \    <load module="mod_aws_transcribe"/>' "$MODULES_CONF"
-        fi
-        if should_install_module "mod_deepgram_transcribe" && ! grep -q "mod_deepgram_transcribe" "$MODULES_CONF"; then
-            sed -i '/<\/modules>/i \    <load module="mod_deepgram_transcribe"/>' "$MODULES_CONF"
-        fi
-        if should_install_module "mod_google_transcribev2" && ! grep -q "mod_google_transcribev2" "$MODULES_CONF"; then
-            sed -i '/<\/modules>/i \    <load module="mod_google_transcribev2"/>' "$MODULES_CONF"
-        fi
+            if should_install_module "mod_audio_fork" && ! grep -q "mod_audio_fork" "$MODULES_CONF"; then
+                sed -i '/<\/modules>/i \    <load module="mod_audio_fork"/>' "$MODULES_CONF"
+            fi
+            if should_install_module "mod_aws_transcribe" && ! grep -q "mod_aws_transcribe" "$MODULES_CONF"; then
+                sed -i '/<\/modules>/i \    <load module="mod_aws_transcribe"/>' "$MODULES_CONF"
+            fi
+            if should_install_module "mod_deepgram_transcribe" && ! grep -q "mod_deepgram_transcribe" "$MODULES_CONF"; then
+                sed -i '/<\/modules>/i \    <load module="mod_deepgram_transcribe"/>' "$MODULES_CONF"
+            fi
+            if should_install_module "mod_google_transcribev2" && ! grep -q "mod_google_transcribev2" "$MODULES_CONF"; then
+                sed -i '/<\/modules>/i \    <load module="mod_google_transcribev2"/>' "$MODULES_CONF"
+            fi
 
-        log_success "modules.conf.xml configured"
+            log_success "modules.conf.xml configured"
+            
+            # Restart FreeSWITCH to load newly configured modules
+            if systemctl is-active --quiet freeswitch; then
+                log_substep "Restarting FreeSWITCH to load new modules..."
+                systemctl restart freeswitch
+                sleep 3  # Give FreeSWITCH time to start
+                log_success "FreeSWITCH restarted with new module configuration"
+            fi
         else
             echo -e "${YELLOW}⚠ Warning: modules.conf.xml not found at $MODULES_CONF${NC}"
             echo -e "${YELLOW}  Module will need to be manually added to FreeSWITCH configuration${NC}"
@@ -1000,7 +1012,7 @@ echo "Build Logs: $LOG_DIR"
 echo ""
 echo "Next steps:"
 if should_install_freeswitch; then
-    echo "  1. Configure environment variables: sudo nano /etc/systemd/system/freeswitch.service.d/freeswitch.conf"
+    echo "  1. Configure environment variables: sudo vi /etc/systemd/system/freeswitch.service.d/freeswitch.conf"
     echo "  2. Reload systemd configuration: sudo systemctl daemon-reload"
     echo "  3. Start FreeSWITCH service: sudo systemctl start freeswitch"
     echo "  4. Check service status: sudo systemctl status freeswitch"
