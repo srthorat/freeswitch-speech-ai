@@ -152,26 +152,32 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
         }
 
         // speech model
-        // V2 API models: long, short, chirp, chirp_2, telephony, telephony_short
-        // Auto-select 'long' for general telephony if no model specified
+        // V2 API models: chirp_3, chirp_2, chirp_1, telephony, medical_conversation, medical_dictation
+        // Auto-select 'telephony' for phone calls if no model specified
         const char* selected_model = model;
         if (model == NULL) {
-            selected_model = "long";  // Default to 'long' model for telephony
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Auto-selected model 'long' for telephony\n");
+            selected_model = "telephony";  // Default to 'telephony' model for phone calls
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Auto-selected model 'telephony' for phone calls\n");
         } else {
             // Map v1 model names to v2 equivalents for convenience
             if (strcmp(model, "phone_call") == 0) {
-                selected_model = "long";
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'phone_call' → 'long'\n");
+                selected_model = "telephony";
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'phone_call' → 'telephony'\n");
             } else if (strcmp(model, "command_and_search") == 0) {
-                selected_model = "short";
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'command_and_search' → 'short'\n");
+                selected_model = "chirp_3";
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'command_and_search' → 'chirp_3'\n");
             } else if (strcmp(model, "video") == 0) {
-                selected_model = "long";
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'video' → 'long'\n");
+                selected_model = "chirp_3";
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'video' → 'chirp_3'\n");
             } else if (strcmp(model, "default") == 0) {
-                selected_model = "long";
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'default' → 'long'\n");
+                selected_model = "telephony";
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'default' → 'telephony'\n");
+            } else if (strcmp(model, "latest_long") == 0) {
+                selected_model = "chirp_3";
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'latest_long' → 'chirp_3'\n");
+            } else if (strcmp(model, "latest_short") == 0) {
+                selected_model = "chirp_3";
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Mapped 'latest_short' → 'chirp_3'\n");
             }
         }
 

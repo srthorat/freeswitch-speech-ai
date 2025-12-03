@@ -14,17 +14,22 @@ Google Cloud Speech-to-Text v1 and v2 APIs use **different model names**. This g
 | `video` | Video/Meetings | Optimized for video conferencing audio |
 | `command_and_search` | Voice Commands | Optimized for short voice commands |
 | `default` | General Purpose | Google's default model selection |
+| `latest_long` | Latest Long-form | Latest model for long-form audio |
+| `latest_short` | Latest Short-form | Latest model for short-form audio |
+
+**V1 Enhanced Models** (use_enhanced=true):
+- `phone_call`, `video`, `command_and_search`
 
 ### V2 API Models
 
 | Model Name | Use Case | Description |
 |------------|----------|-------------|
-| `long` | **Telephony/General (Recommended)** | Long-form audio, works well for telephony |
-| `short` | Voice Commands | Short-form audio, voice commands |
-| `chirp` | Latest Model | Google's Chirp model (latest) |
+| `telephony` | **Telephony (Recommended)** | Optimized for phone call audio (8-16kHz) |
+| `chirp_3` | Latest General | Latest Chirp 3 model - best quality |
 | `chirp_2` | Chirp 2 | Second generation Chirp model |
-| `telephony` | Telephony 8kHz | Specifically for 8kHz telephony |
-| `telephony_short` | Short Telephony | Short telephony audio |
+| `chirp_1` | Chirp 1 | First generation Chirp model |
+| `medical_conversation` | Medical | Medical conversations |
+| `medical_dictation` | Medical | Medical dictation |
 
 ## Automatic Model Selection
 
@@ -38,13 +43,13 @@ uuid_google_transcribe <UUID> start en-US interim stereo 8k
 # → V1 uses: phone_call
 
 uuid_google_transcribe2 <UUID> start en-US interim stereo 8k
-# → V2 uses: long
+# → V2 uses: telephony
 ```
 
 **Log output:**
 ```
 V1 API: Auto-selected model 'phone_call' for telephony
-V2 API: Auto-selected model 'long' for telephony
+V2 API: Auto-selected model 'telephony' for phone calls
 ```
 
 ### Cross-Version Compatibility
@@ -55,7 +60,7 @@ You can use **V1 model names with V2** - they will be automatically mapped:
 # Set V1 model name
 uuid_setvar <UUID> GOOGLE_SPEECH_MODEL phone_call
 
-# Use with V2 API - automatically mapped to 'long'
+# Use with V2 API - automatically mapped to 'telephony'
 uuid_google_transcribe2 <UUID> start en-US interim stereo 8k
 ```
 
@@ -63,15 +68,17 @@ uuid_google_transcribe2 <UUID> start en-US interim stereo 8k
 
 | V1 Model Name | → | V2 Model Name | Use Case |
 |---------------|---|---------------|----------|
-| `phone_call` | → | `long` | Telephony/General |
-| `video` | → | `long` | Video/Meetings |
-| `command_and_search` | → | `short` | Voice Commands |
-| `default` | → | `long` | General Purpose |
+| `phone_call` | → | `telephony` | Telephony |
+| `video` | → | `chirp_3` | Video/Meetings |
+| `command_and_search` | → | `chirp_3` | Voice Commands |
+| `default` | → | `telephony` | General Purpose |
+| `latest_long` | → | `chirp_3` | Latest long-form |
+| `latest_short` | → | `chirp_3` | Latest short-form |
 
 **Log output:**
 ```
-V2 API: Mapped 'phone_call' → 'long'
-V2 API: Using model 'long'
+V2 API: Mapped 'phone_call' → 'telephony'
+V2 API: Using model 'telephony'
 ```
 
 ### V2-Specific Models
@@ -80,7 +87,7 @@ You can also use V2-specific model names directly:
 
 ```bash
 # Use V2-specific model
-uuid_setvar <UUID> GOOGLE_SPEECH_MODEL chirp_2
+uuid_setvar <UUID> GOOGLE_SPEECH_MODEL chirp_3
 
 # Works with V2 API
 uuid_google_transcribe2 <UUID> start en-US interim stereo 8k
@@ -88,7 +95,7 @@ uuid_google_transcribe2 <UUID> start en-US interim stereo 8k
 
 **Log output:**
 ```
-V2 API: Using model 'chirp_2'
+V2 API: Using model 'chirp_3'
 ```
 
 ## Configuration Examples
@@ -99,13 +106,13 @@ V2 API: Using model 'chirp_2'
 # V1 API - auto-selects 'phone_call'
 uuid_google_transcribe <UUID> start en-US interim stereo 8k
 
-# V2 API - auto-selects 'long'
+# V2 API - auto-selects 'telephony'
 uuid_google_transcribe2 <UUID> start en-US interim stereo 8k
 ```
 
 **Result:**
 - ✅ V1 uses `phone_call` model
-- ✅ V2 uses `long` model
+- ✅ V2 uses `telephony` model
 - ✅ Both optimized for telephony
 
 ### Example 2: Set Once, Works for Both APIs
@@ -117,7 +124,7 @@ uuid_setvar <UUID> GOOGLE_SPEECH_MODEL phone_call
 # Test V1 - uses 'phone_call'
 uuid_google_transcribe <UUID> start en-US interim stereo 8k
 
-# Test V2 - automatically maps to 'long'
+# Test V2 - automatically maps to 'telephony'
 uuid_google_transcribe2 <UUID> start en-US interim stereo 8k
 ```
 
@@ -229,14 +236,14 @@ sudo tail -f /var/log/freeswitch/freeswitch.log | grep -E "V1 API|V2 API"
 V1 API: Auto-selected model 'phone_call' for telephony
 V1 API: Using model 'phone_call'
 
-V2 API: Auto-selected model 'long' for telephony
-V2 API: Using model 'long'
+V2 API: Auto-selected model 'telephony' for telephony
+V2 API: Using model 'telephony'
 ```
 
 **V1 Model with V2 API (Auto-Mapping):**
 ```
 V2 API: Mapped 'phone_call' → 'long'
-V2 API: Using model 'long'
+V2 API: Using model 'telephony'
 ```
 
 **V2-Specific Model:**
@@ -270,7 +277,7 @@ uuid_google_transcribe2 <UUID> start en-US interim stereo 8k
 
 **Use V2-specific model names directly:**
 ```bash
-uuid_setvar <UUID> GOOGLE_SPEECH_MODEL long
+uuid_setvar <UUID> GOOGLE_SPEECH_MODEL telephony
 # or
 uuid_setvar <UUID> GOOGLE_SPEECH_MODEL chirp_2
 # or
@@ -304,7 +311,7 @@ Error: Model 'phone_call' not found in v2
 **Solution:**
 ```bash
 # Use V2-specific model names directly
-uuid_setvar <UUID> GOOGLE_SPEECH_MODEL long
+uuid_setvar <UUID> GOOGLE_SPEECH_MODEL telephony
 # or chirp, chirp_2, telephony, telephony_short, short
 ```
 
@@ -317,7 +324,7 @@ sudo tail -f /var/log/freeswitch/freeswitch.log | grep "Using model"
 
 # Output shows:
 # V1 API: Using model 'phone_call'
-# V2 API: Using model 'long'
+# V2 API: Using model 'telephony'
 ```
 
 ## Summary
