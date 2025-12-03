@@ -1,6 +1,7 @@
 #include <switch.h>
 #include <switch_json.h>
 #include <grpc++/grpc++.h>
+#include <cstdlib>
 
 #include "mod_google_transcribe.h"
 #include "gstreamer.h"
@@ -60,7 +61,23 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
         recognizer = var;
         recognizer += "/recognizers/";
     } else {
-        throw std::runtime_error("The v2 Speech-To-Text library requires GOOGLE_SPEECH_RECOGNIZER_PARENT to be set");
+        // Auto-construct from GCP_PROJECT_ID and GCP_LOCATION environment variables
+        const char* project_id = std::getenv("GCP_PROJECT_ID");
+        const char* location = std::getenv("GCP_LOCATION");
+
+        if (!project_id || !location) {
+            throw std::runtime_error("Either set GOOGLE_SPEECH_RECOGNIZER_PARENT channel variable or set both GCP_PROJECT_ID and GCP_LOCATION environment variables");
+        }
+
+        recognizer = "projects/";
+        recognizer += project_id;
+        recognizer += "/locations/";
+        recognizer += location;
+        recognizer += "/recognizers/";
+
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG,
+            "Auto-constructed recognizer parent from environment: projects/%s/locations/%s/recognizers/\n",
+            project_id, location);
     }
 
     // Use the recognizer specified in the variable or just use the wildcard if this is not set.
@@ -88,14 +105,21 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
 
         // number of channels in the audio stream (default: 1)
         // N.B. It is essential to set this configuration value in v2 even if it doesn't deviate from the default.
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: channels=%d, separate_recognition=%d\n", channels, separate_recognition);
+
         config->mutable_explicit_decoding_config()->set_audio_channel_count(channels);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "audio_channel_count %d\n", channels);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: set audio_channel_count=%d\n", channels);
+
         if (channels > 1) {
             // transcribe each separately?
             if (separate_recognition == 1) {
                 config->mutable_features()->set_multi_channel_mode(RecognitionFeatures_MultiChannelMode_SEPARATE_RECOGNITION_PER_CHANNEL);
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "enable_separate_recognition_per_channel on\n");
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: multi_channel_mode=SEPARATE_RECOGNITION_PER_CHANNEL\n");
+            } else {
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: separate_recognition not enabled (value=%d)\n", separate_recognition);
             }
+        } else {
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_WARNING, "V2 API: Only 1 channel detected! Stereo audio requires channels > 1. Check if SMBF_STEREO flag is set in command.\n");
         }
 
         // max alternatives

@@ -89,15 +89,21 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
     // the rest of config comes from channel vars
 
     // number of channels in the audio stream (default: 1)
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V1 API: channels=%d, separate_recognition=%d\n", channels, separate_recognition);
+
     if (channels > 1) {
       config->set_audio_channel_count(channels);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "audio_channel_count %d\n", channels);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V1 API: set audio_channel_count=%d\n", channels);
 
       // transcribe each separately?
       if (separate_recognition == 1) {
         config->set_enable_separate_recognition_per_channel(true);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "enable_separate_recognition_per_channel on\n");
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V1 API: enable_separate_recognition_per_channel=TRUE\n");
+      } else {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V1 API: separate_recognition not enabled (value=%d)\n", separate_recognition);
       }
+    } else {
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_WARNING, "V1 API: Only 1 channel detected! Stereo audio requires channels > 1. Check if SMBF_STEREO flag is set in command.\n");
     }
 
     // max alternatives
