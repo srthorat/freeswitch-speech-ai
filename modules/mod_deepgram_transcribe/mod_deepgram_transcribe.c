@@ -751,8 +751,10 @@ SWITCH_STANDARD_API(dg_transcribe_function)
         char* lang = argv[2];
         int interim = argc > 3 && !strcmp(argv[3], "interim");
 				char *bugname = MY_BUG_NAME;
-				int sampling = 16000;  // Default to 16kHz
+				int sampling = 8000;  // Default to 8kHz mono
+				int sampling_explicit = 0;  // Track if user explicitly set sampling rate
 				char *metadata = NULL;
+				int is_stereo = 0;
 
 				// Parse mix-type (argv[4]): mono (default), mixed, stereo
 				if (argc > 4) {
@@ -761,22 +763,34 @@ SWITCH_STANDARD_API(dg_transcribe_function)
 					} else if (!strcmp(argv[4], "stereo")) {
 						flags |= SMBF_WRITE_STREAM;  // Stereo: READ + WRITE + STEREO
 						flags |= SMBF_STEREO;
+						is_stereo = 1;
 					}
 					// else: mono is default (SMBF_READ_STREAM only)
 				}
 
-				// Parse sampling rate (argv[5]): 8k, 16k, or numeric
+				// Parse sampling rate (argv[5]): ONLY 8k or 16k allowed
 				if (argc > 5) {
-					if (!strcmp(argv[5], "8k")) {
+					if (!strcmp(argv[5], "8k") || !strcmp(argv[5], "8000")) {
 						sampling = 8000;
-					} else if (!strcmp(argv[5], "16k")) {
+						sampling_explicit = 1;
+					} else if (!strcmp(argv[5], "16k") || !strcmp(argv[5], "16000")) {
 						sampling = 16000;
+						sampling_explicit = 1;
 					} else {
-						int rate = atoi(argv[5]);
-						if (rate > 0 && rate % 8000 == 0) {
-							sampling = rate;
-						}
+						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+							"Invalid sampling rate '%s' - only 8k or 16k allowed. Using default.\n", argv[5]);
 					}
+				}
+
+				// Auto-upgrade to 16kHz for stereo mode (better transcription quality)
+				// unless user explicitly requested 8k
+				if (is_stereo && !sampling_explicit) {
+					sampling = 16000;
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+						"Stereo mode: auto-upgraded to 16kHz for better transcription quality\n");
+				} else if (is_stereo && sampling == 8000) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+						"Stereo mode at 8kHz - consider 16kHz for better transcription accuracy\n");
 				}
 
 				// Parse metadata (argv[6] or argv[7])

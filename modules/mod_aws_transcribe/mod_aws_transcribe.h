@@ -45,6 +45,16 @@ struct cap_cb {
 
 	switch_vad_t * vad;
 	uint32_t samples_per_second;
+
+	/* Resampler performance statistics for high-scale monitoring */
+	uint64_t resampler_frames_processed;     /* Total frames processed */
+	uint64_t resampler_samples_in;           /* Total input samples */
+	uint64_t resampler_samples_out;          /* Total output samples */
+	uint64_t resampler_bytes_written;        /* Total bytes sent to transcription */
+	uint32_t resampler_source_rate;          /* Source sample rate (codec) */
+	uint32_t resampler_target_rate;          /* Target sample rate (requested) */
+	switch_time_t resampler_start_time;      /* When resampling started */
+	switch_time_t resampler_last_log_time;   /* Last stats log time */
 };
 
 #ifdef __cplusplus

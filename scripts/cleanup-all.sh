@@ -7,7 +7,7 @@
 #   --module mod_audio_fork          Remove only mod_audio_fork
 #   --module mod_aws_transcribe      Remove only mod_aws_transcribe and AWS SDK
 #   --module mod_deepgram_transcribe Remove only mod_deepgram_transcribe
-#   --module mod_google_transcribev2 Remove only mod_google_transcribev2 and Google Cloud C++
+#   --module mod_google_transcribe   Remove only mod_google_transcribe and Google/gRPC deps
 #   --module all                     Remove everything (default)
 #
 # Usage:
@@ -20,7 +20,7 @@
 #   --help             Show this help message
 #
 # Examples:
-#   sudo ./cleanup-all.sh --module mod_google_transcribev2
+#   sudo ./cleanup-all.sh --module mod_google_transcribe
 #   sudo ./cleanup-all.sh --module freeswitch
 #   sudo ./cleanup-all.sh --module all --yes
 # ============================================================================
@@ -43,7 +43,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 
 # Valid module names
-VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribev2")
+VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe")
 
 # ============================================================================
 # Helper Functions
@@ -52,6 +52,11 @@ VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_dee
 should_remove_module() {
     local target="$1"
     [ "$MODULE" = "all" ] || [ "$MODULE" = "$target" ]
+}
+
+# Check for google transcribe module
+should_remove_google_transcribe() {
+    [ "$MODULE" = "all" ] || [ "$MODULE" = "mod_google_transcribe" ]
 }
 
 should_remove_freeswitch() {
@@ -99,7 +104,7 @@ while [[ $# -gt 0 ]]; do
             echo "  mod_audio_fork           Remove only mod_audio_fork"
             echo "  mod_aws_transcribe       Remove only mod_aws_transcribe and AWS SDK dependencies"
             echo "  mod_deepgram_transcribe  Remove only mod_deepgram_transcribe"
-            echo "  mod_google_transcribev2  Remove only mod_google_transcribev2 and Google Cloud C++ dependencies"
+            echo "  mod_google_transcribe    Remove mod_google_transcribe and Google/gRPC dependencies"
             echo ""
             echo "Options:"
             echo "  --keep-sources    Keep source directories in /usr/local/src"
@@ -107,7 +112,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --help            Show this help message"
             echo ""
             echo "Examples:"
-            echo "  sudo $0 --module mod_google_transcribev2"
+            echo "  sudo $0 --module mod_google_transcribe"
             echo "  sudo $0 --module freeswitch"
             echo "  sudo $0 --module all --yes"
             exit 0
@@ -165,9 +170,9 @@ if should_remove_module "mod_deepgram_transcribe"; then
     echo "  ✗ mod_deepgram_transcribe module and binary"
 fi
 
-if should_remove_module "mod_google_transcribev2"; then
-    echo "  ✗ mod_google_transcribev2 module and binary"
-    echo "  ✗ Google Cloud C++ libraries (/usr/local/lib/libgoogle_cloud_cpp*)"
+if should_remove_google_transcribe; then
+    echo "  ✗ mod_google_transcribe module and binary"
+    echo "  ✗ googleapis headers (/usr/local/include/googleapis)"
 fi
 
 # libwebsockets shared by audio_fork and deepgram
@@ -198,36 +203,57 @@ echo ""
 echo -e "${CYAN}Starting cleanup...${NC}"
 echo ""
 
-# Stop FreeSWITCH if running
-if should_remove_freeswitch && systemctl is-active --quiet freeswitch 2>/dev/null; then
+# Track if FreeSWITCH was running before cleanup
+FS_WAS_RUNNING=false
+if systemctl is-active --quiet freeswitch 2>/dev/null; then
+    FS_WAS_RUNNING=true
+fi
+
+# Stop FreeSWITCH if running (needed to unload modules)
+if [ "$FS_WAS_RUNNING" = true ]; then
     log_remove "Stopping FreeSWITCH service"
     systemctl stop freeswitch || true
     log_success "FreeSWITCH stopped"
 fi
 
+# Helper function to remove module from modules.conf.xml
+remove_from_modules_conf() {
+    local module_name="$1"
+    local modules_conf="${FS_PREFIX}/conf/autoload_configs/modules.conf.xml"
+    
+    if [ -f "$modules_conf" ]; then
+        # Remove the module load line
+        sed -i "/<load module=\"${module_name}\"/d" "$modules_conf" 2>/dev/null || true
+    fi
+}
+
 # Remove modules
 if should_remove_module "mod_audio_fork"; then
     log_remove "mod_audio_fork"
     rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so
+    remove_from_modules_conf "mod_audio_fork"
     log_success "mod_audio_fork removed"
 fi
 
 if should_remove_module "mod_aws_transcribe"; then
     log_remove "mod_aws_transcribe"
     rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so
+    remove_from_modules_conf "mod_aws_transcribe"
     log_success "mod_aws_transcribe removed"
 fi
 
 if should_remove_module "mod_deepgram_transcribe"; then
     log_remove "mod_deepgram_transcribe"
     rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so
+    remove_from_modules_conf "mod_deepgram_transcribe"
     log_success "mod_deepgram_transcribe removed"
 fi
 
-if should_remove_module "mod_google_transcribev2"; then
-    log_remove "mod_google_transcribev2"
-    rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribev2.so
-    log_success "mod_google_transcribev2 removed"
+if should_remove_google_transcribe; then
+    log_remove "mod_google_transcribe"
+    rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so
+    remove_from_modules_conf "mod_google_transcribe"
+    log_success "mod_google_transcribe removed"
 fi
 
 # Remove FreeSWITCH
@@ -278,7 +304,16 @@ if should_remove_module "mod_aws_transcribe"; then
     fi
 fi
 
-if should_remove_module "mod_google_transcribev2"; then
+if should_remove_google_transcribe; then
+    # Remove googleapis headers (generated proto files)
+    if [ -d "/usr/local/include/googleapis" ]; then
+        log_remove "googleapis headers and generated files"
+        rm -rf /usr/local/include/googleapis
+        rm -f /usr/local/include/googleapis/*.o 2>/dev/null || true
+        log_success "googleapis headers removed"
+    fi
+    
+    # Remove Google Cloud C++ libraries if they were installed
     if grep -q "google_cloud_cpp=installed" "$MANIFEST_FILE" 2>/dev/null; then
         log_remove "Google Cloud C++ libraries"
         rm -f /usr/local/lib/libgoogle_cloud_cpp*
@@ -309,8 +344,9 @@ if ! $KEEP_SOURCES; then
         rm -rf /usr/local/src/aws-sdk-cpp
     fi
 
-    if should_remove_module "mod_google_transcribev2"; then
+    if should_remove_google_transcribe; then
         rm -rf /usr/local/src/google-cloud-cpp
+        rm -rf /usr/local/src/googleapis
     fi
 
     log_success "Source directories removed"
@@ -337,8 +373,10 @@ else
         if should_remove_module "mod_aws_transcribe"; then
             sed -i '/^aws-sdk-cpp=/d' "$MANIFEST_FILE" 2>/dev/null || true
         fi
-        if should_remove_module "mod_google_transcribev2"; then
+        if should_remove_google_transcribe; then
             sed -i '/^google_cloud_cpp=/d' "$MANIFEST_FILE" 2>/dev/null || true
+            sed -i '/^googleapis=/d' "$MANIFEST_FILE" 2>/dev/null || true
+            sed -i '/^grpc=/d' "$MANIFEST_FILE" 2>/dev/null || true
         fi
         log_success "Manifest updated"
     fi
@@ -346,6 +384,15 @@ fi
 
 # Run ldconfig to update library cache
 ldconfig
+
+# Restart FreeSWITCH if it was running and we didn't remove it
+if [ "$FS_WAS_RUNNING" = true ] && ! should_remove_freeswitch; then
+    if [ -f "${FS_PREFIX}/bin/freeswitch" ]; then
+        log_remove "Restarting FreeSWITCH service"
+        systemctl start freeswitch || true
+        log_success "FreeSWITCH restarted"
+    fi
+fi
 
 # ============================================================================
 # Cleanup Complete

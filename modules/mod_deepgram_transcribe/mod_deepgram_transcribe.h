@@ -43,6 +43,16 @@ struct private_data {
   unsigned int id;
   int buffer_overrun_notified:1;
   int is_finished:1;
+
+  /* Resampler performance statistics for high-scale monitoring */
+  uint64_t resampler_frames_processed;     /* Total frames processed */
+  uint64_t resampler_samples_in;           /* Total input samples */
+  uint64_t resampler_samples_out;          /* Total output samples */
+  uint64_t resampler_bytes_written;        /* Total bytes sent to transcription */
+  uint32_t resampler_source_rate;          /* Source sample rate (codec) */
+  uint32_t resampler_target_rate;          /* Target sample rate (requested) */
+  switch_time_t resampler_start_time;      /* When resampling started */
+  switch_time_t resampler_last_log_time;   /* Last stats log time */
 };
 
 typedef struct private_data private_t;

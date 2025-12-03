@@ -99,14 +99,39 @@ namespace {
   static void destroy_tech_pvt(private_t *tech_pvt) {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s (%u) destroy_tech_pvt\n", tech_pvt->sessionId, tech_pvt->id);
     if (tech_pvt) {
+      // Log final resampler statistics before cleanup
+      if (tech_pvt->resampler_frames_processed > 0) {
+        switch_time_t now = switch_time_now();
+        double elapsed_secs = (now - tech_pvt->resampler_start_time) / 1000000.0;
+        double fps = tech_pvt->resampler_frames_processed / elapsed_secs;
+        double mb_written = tech_pvt->resampler_bytes_written / (1024.0 * 1024.0);
+        double kbps = (tech_pvt->resampler_bytes_written * 8.0) / (elapsed_secs * 1000.0);
+
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+          "[RESAMPLER-FINAL] (%u) %s: Session complete - frames=%lu, samples_in=%lu, samples_out=%lu, "
+          "bytes=%.2fMB, avg_fps=%.1f, duration=%.1fs, bitrate=%.1fkbps, mode=%s\n",
+          tech_pvt->id, tech_pvt->bugname,
+          (unsigned long)tech_pvt->resampler_frames_processed,
+          (unsigned long)tech_pvt->resampler_samples_in,
+          (unsigned long)tech_pvt->resampler_samples_out,
+          mb_written, fps, elapsed_secs, kbps,
+          tech_pvt->resampler ?
+            (tech_pvt->resampler_source_rate < tech_pvt->resampler_target_rate ? "UPSAMPLE" : "DOWNSAMPLE")
+            : "PASSTHROUGH");
+      }
+
       if (tech_pvt->pAudioPipe) {
         deepgram::AudioPipe* p = (deepgram::AudioPipe *) tech_pvt->pAudioPipe;
         delete p;
         tech_pvt->pAudioPipe = nullptr;
       }
       if (tech_pvt->resampler) {
-          speex_resampler_destroy(tech_pvt->resampler);
-          tech_pvt->resampler = NULL;
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+          "[RESAMPLER-CLEANUP] (%u) %s: Destroying resampler %dHz->%dHz\n",
+          tech_pvt->id, tech_pvt->bugname, 
+          tech_pvt->resampler_source_rate, tech_pvt->resampler_target_rate);
+        speex_resampler_destroy(tech_pvt->resampler);
+        tech_pvt->resampler = NULL;
       }
 
       /*
@@ -382,16 +407,53 @@ namespace {
 
     switch_mutex_init(&tech_pvt->mutex, SWITCH_MUTEX_NESTED, switch_core_session_get_pool(session));
 
+    // Initialize resampler performance tracking stats
+    tech_pvt->resampler_frames_processed = 0;
+    tech_pvt->resampler_samples_in = 0;
+    tech_pvt->resampler_samples_out = 0;
+    tech_pvt->resampler_bytes_written = 0;
+    tech_pvt->resampler_source_rate = sampling;
+    tech_pvt->resampler_target_rate = desiredSampling;
+    tech_pvt->resampler_start_time = switch_time_now();
+    tech_pvt->resampler_last_log_time = tech_pvt->resampler_start_time;
+
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+      "[RESAMPLER-INIT] (%u) %s: codec=%dHz, target=%dHz, channels=%d, direction=%s\n",
+      tech_pvt->id, tech_pvt->bugname, sampling, desiredSampling, channels,
+      sampling < desiredSampling ? "UPSAMPLE" :
+      (sampling > desiredSampling ? "DOWNSAMPLE" : "PASSTHROUGH"));
+
     if (desiredSampling != sampling) {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) resampling from %u to %u\n", tech_pvt->id, sampling, desiredSampling);
+      // Log detailed resampler configuration for scale monitoring
+      // Quality setting: SWITCH_RESAMPLE_QUALITY (typically 4-5)
+      // Memory per resampler: ~10-50KB depending on quality and channels
+      // At 10k calls: ~100-500MB just for resamplers
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+        "[RESAMPLER-INIT] (%u) Initializing Speex resampler: %dHz -> %dHz (%d ch), quality=%d\n",
+        tech_pvt->id, sampling, desiredSampling, channels, SWITCH_RESAMPLE_QUALITY);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+        "[RESAMPLER-INIT] (%u) Estimated memory: ~%dKB, ratio=%.3f, frame_in=%d samples, frame_out=%d samples\n",
+        tech_pvt->id,
+        (channels * 2 * 160 * 4) / 1024 + 10,  // Rough estimate: buffer + filter state
+        (float)desiredSampling / sampling,
+        (sampling / 50),      // 20ms frame at source rate
+        (desiredSampling / 50));  // 20ms frame at target rate
+
       tech_pvt->resampler = speex_resampler_init(channels, sampling, desiredSampling, SWITCH_RESAMPLE_QUALITY, &err);
       if (0 != err) {
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error initializing resampler: %s.\n", speex_resampler_strerror(err));
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+          "[RESAMPLER-ERROR] (%u) Failed to initialize resampler: %s (code=%d)\n",
+          tech_pvt->id, speex_resampler_strerror(err), err);
         return SWITCH_STATUS_FALSE;
       }
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+        "[RESAMPLER-INIT] (%u) Resampler initialized successfully at %p\n",
+        tech_pvt->id, (void*)tech_pvt->resampler);
     }
     else {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) no resampling needed for this call\n", tech_pvt->id);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+        "[RESAMPLER-INIT] (%u) Passthrough mode - no resampling needed (rate=%dHz)\n",
+        tech_pvt->id, desiredSampling);
     }
 
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) fork_data_init\n", tech_pvt->id);
@@ -537,6 +599,7 @@ extern "C" {
       pAudioPipe->lockAudioBuffer();
       size_t available = pAudioPipe->binarySpaceAvailable();
       if (NULL == tech_pvt->resampler) {
+        // Passthrough mode - no resampling
         switch_frame_t frame = { 0 };
         frame.data = pAudioPipe->binaryWritePtr();
         frame.buflen = available;
@@ -559,6 +622,12 @@ extern "C" {
           switch_status_t rv = switch_core_media_bug_read(bug, &frame, SWITCH_TRUE);
           if (rv != SWITCH_STATUS_SUCCESS) break;
           if (frame.datalen) {
+            // Track passthrough stats
+            tech_pvt->resampler_frames_processed++;
+            tech_pvt->resampler_samples_in += frame.datalen / (2 * tech_pvt->channels);
+            tech_pvt->resampler_samples_out += frame.datalen / (2 * tech_pvt->channels);
+            tech_pvt->resampler_bytes_written += frame.datalen;
+            
             pAudioPipe->binaryWritePtrAdd(frame.datalen);
             frame.buflen = available = pAudioPipe->binarySpaceAvailable();
             frame.data = pAudioPipe->binaryWritePtr();
@@ -567,6 +636,7 @@ extern "C" {
         }
       }
       else {
+        // Resampling mode
         uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
         switch_frame_t frame = { 0 };
         frame.data = data;
@@ -575,6 +645,7 @@ extern "C" {
           if (frame.datalen) {
             spx_uint32_t out_len = available >> 1;  // space for samples which are 2 bytes
             spx_uint32_t in_len = frame.samples;
+            spx_uint32_t in_len_before = in_len;
 
             speex_resampler_process_interleaved_int(tech_pvt->resampler, 
               (const spx_int16_t *) frame.data, 
@@ -585,9 +656,35 @@ extern "C" {
             if (out_len > 0) {
               // bytes written = num samples * 2 * num channels
               size_t bytes_written = out_len << tech_pvt->channels;
+              
+              // Track resampler statistics
+              tech_pvt->resampler_frames_processed++;
+              tech_pvt->resampler_samples_in += in_len_before;
+              tech_pvt->resampler_samples_out += out_len;
+              tech_pvt->resampler_bytes_written += bytes_written;
+              
               pAudioPipe->binaryWritePtrAdd(bytes_written);
               available = pAudioPipe->binarySpaceAvailable();
               dirty = true;
+              
+              // Log stats every 10 seconds (500 frames at 50fps)
+              switch_time_t now = switch_time_now();
+              if ((now - tech_pvt->resampler_last_log_time) >= 10000000) {  // 10 seconds in microseconds
+                double elapsed_secs = (now - tech_pvt->resampler_start_time) / 1000000.0;
+                double fps = tech_pvt->resampler_frames_processed / elapsed_secs;
+                double mb_written = tech_pvt->resampler_bytes_written / (1024.0 * 1024.0);
+
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+                  "[RESAMPLER-STATS] (%u) %s: frames=%lu, samples_in=%lu, samples_out=%lu, "
+                  "bytes=%.2fMB, fps=%.1f, elapsed=%.1fs, ratio=%.3f\n",
+                  tech_pvt->id, tech_pvt->bugname,
+                  (unsigned long)tech_pvt->resampler_frames_processed,
+                  (unsigned long)tech_pvt->resampler_samples_in,
+                  (unsigned long)tech_pvt->resampler_samples_out,
+                  mb_written, fps, elapsed_secs,
+                  (double)tech_pvt->resampler_samples_out / tech_pvt->resampler_samples_in);
+                tech_pvt->resampler_last_log_time = now;
+              }
             }
             if (available < pAudioPipe->binaryMinSpace()) {
               if (!tech_pvt->buffer_overrun_notified) {

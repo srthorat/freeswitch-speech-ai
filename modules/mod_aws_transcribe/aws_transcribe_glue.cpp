@@ -517,14 +517,38 @@ static void *SWITCH_THREAD_FUNC aws_transcribe_thread(switch_thread_t *thread, v
 
 static void killcb(struct cap_cb* cb) {
 	if (cb) {
+		// Log final resampler statistics before cleanup
+		if (cb->resampler_frames_processed > 0) {
+			switch_time_t now = switch_time_now();
+			double elapsed_secs = (now - cb->resampler_start_time) / 1000000.0;
+			double fps = cb->resampler_frames_processed / elapsed_secs;
+			double mb_written = cb->resampler_bytes_written / (1024.0 * 1024.0);
+			double kbps = (cb->resampler_bytes_written * 8.0) / (elapsed_secs * 1000.0);
+			
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+				"[RESAMPLER-FINAL] %s: Session complete - frames=%lu, samples_in=%lu, samples_out=%lu, "
+				"bytes=%.2fMB, avg_fps=%.1f, duration=%.1fs, bitrate=%.1fkbps, mode=%s\n",
+				cb->bugname,
+				(unsigned long)cb->resampler_frames_processed,
+				(unsigned long)cb->resampler_samples_in,
+				(unsigned long)cb->resampler_samples_out,
+				mb_written, fps, elapsed_secs, kbps,
+				cb->resampler ? 
+					(cb->resampler_source_rate < cb->resampler_target_rate ? "UPSAMPLE" : "DOWNSAMPLE") 
+					: "PASSTHROUGH");
+		}
+		
 		if (cb->streamer) {
 			GStreamer* p = (GStreamer *) cb->streamer;
 			delete p;
 			cb->streamer = nullptr;
 		}
 		if (cb->resampler) {
-				speex_resampler_destroy(cb->resampler);
-				cb->resampler = nullptr;
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+				"[RESAMPLER-CLEANUP] %s: Destroying resampler %dHz->%dHz\n",
+				cb->bugname, cb->resampler_source_rate, cb->resampler_target_rate);
+			speex_resampler_destroy(cb->resampler);
+			cb->resampler = nullptr;
 		}
 		if (cb->vad) {
 			switch_vad_destroy(&cb->vad);
@@ -762,25 +786,56 @@ extern "C" {
 		}
 		// Use user-configured sampling rate (not codec rate)
 		cb->samples_per_second = samples_per_second;
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "codec sample rate: %dHz, target sample rate: %dHz\n",
-			sampleRate, samples_per_second);
+		
+		// Initialize resampler performance tracking stats
+		cb->resampler_frames_processed = 0;
+		cb->resampler_samples_in = 0;
+		cb->resampler_samples_out = 0;
+		cb->resampler_bytes_written = 0;
+		cb->resampler_source_rate = sampleRate;
+		cb->resampler_target_rate = samples_per_second;
+		cb->resampler_start_time = switch_time_now();
+		cb->resampler_last_log_time = cb->resampler_start_time;
+
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, 
+			"[RESAMPLER-INIT] %s: codec=%dHz, target=%dHz, channels=%d, direction=%s\n",
+			switch_channel_get_name(channel), sampleRate, samples_per_second, channels,
+			sampleRate < samples_per_second ? "UPSAMPLE" : 
+			(sampleRate > samples_per_second ? "DOWNSAMPLE" : "PASSTHROUGH"));
 
 		// Resample from codec rate to user-requested rate (if different)
 		// Note: AWS Transcribe quality is better at 16kHz, but 8kHz is supported
+		// Speex resampler handles both upsampling (8k->16k) and downsampling (24k->16k)
 		if (sampleRate != samples_per_second) {
+			// Log detailed resampler configuration for scale monitoring
+			// Quality setting: SWITCH_RESAMPLE_QUALITY (typically 4-5)
+			// Memory per resampler: ~10-50KB depending on quality and channels
+			// At 10k calls: ~100-500MB just for resamplers
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-				"%s: Initializing resampler %dHz -> %dHz\n",
-				switch_channel_get_name(channel), sampleRate, samples_per_second);
-			cb->resampler = speex_resampler_init(1, sampleRate, samples_per_second, SWITCH_RESAMPLE_QUALITY, &err);
+				"[RESAMPLER-INIT] %s: Initializing Speex resampler: %dHz -> %dHz (%d ch), quality=%d\n",
+				switch_channel_get_name(channel), sampleRate, samples_per_second, channels, SWITCH_RESAMPLE_QUALITY);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+				"[RESAMPLER-INIT] %s: Estimated memory: ~%dKB, ratio=%.3f, frame_in=%d samples, frame_out=%d samples\n",
+				switch_channel_get_name(channel),
+				(channels * 2 * 160 * 4) / 1024 + 10,  // Rough estimate: buffer + filter state
+				(float)samples_per_second / sampleRate,
+				(sampleRate / 50),      // 20ms frame at source rate
+				(samples_per_second / 50));  // 20ms frame at target rate
+
+			cb->resampler = speex_resampler_init(channels, sampleRate, samples_per_second, SWITCH_RESAMPLE_QUALITY, &err);
 			if (0 != err) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n",
-							switch_channel_get_name(channel), speex_resampler_strerror(err));
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, 
+					"[RESAMPLER-ERROR] %s: Failed to initialize resampler: %s (code=%d)\n",
+					switch_channel_get_name(channel), speex_resampler_strerror(err), err);
 				status = SWITCH_STATUS_FALSE;
 				goto done;
 			}
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+				"[RESAMPLER-INIT] %s: Resampler initialized successfully at %p\n",
+				switch_channel_get_name(channel), (void*)cb->resampler);
 		} else {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
-				"%s: Sample rate already %dHz, no resampling needed\n",
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+				"[RESAMPLER-INIT] %s: Passthrough mode - no resampling needed (rate=%dHz)\n",
 				switch_channel_get_name(channel), samples_per_second);
 		}
 
@@ -901,11 +956,47 @@ extern "C" {
 						}
 
 						if (cb->resampler) {
-							speex_resampler_process_interleaved_int(cb->resampler, (const spx_int16_t *) frame.data, (spx_uint32_t *) &in_len, &out[0], &out_len);						
-							streamer->write( &out[0], sizeof(spx_int16_t) * out_len);
+							spx_uint32_t in_len_before = in_len;
+							speex_resampler_process_interleaved_int(cb->resampler, (const spx_int16_t *) frame.data, (spx_uint32_t *) &in_len, &out[0], &out_len);
+							
+							// Track resampler statistics
+							cb->resampler_frames_processed++;
+							cb->resampler_samples_in += in_len_before;
+							cb->resampler_samples_out += out_len;
+							size_t bytes_to_write = sizeof(spx_int16_t) * out_len * cb->channels;
+							cb->resampler_bytes_written += bytes_to_write;
+							
+							// bytes = samples * sizeof(int16) * channels (for stereo interleaved audio)
+							streamer->write(&out[0], bytes_to_write);
+							
+							// Log stats every 10 seconds (500 frames at 50fps)
+							switch_time_t now = switch_time_now();
+							if ((now - cb->resampler_last_log_time) >= 10000000) {  // 10 seconds in microseconds
+								double elapsed_secs = (now - cb->resampler_start_time) / 1000000.0;
+								double fps = cb->resampler_frames_processed / elapsed_secs;
+								double mb_written = cb->resampler_bytes_written / (1024.0 * 1024.0);
+								
+								switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+									"[RESAMPLER-STATS] %s: frames=%lu, samples_in=%lu, samples_out=%lu, "
+									"bytes=%.2fMB, fps=%.1f, elapsed=%.1fs, ratio=%.3f\n",
+									cb->bugname,
+									(unsigned long)cb->resampler_frames_processed,
+									(unsigned long)cb->resampler_samples_in,
+									(unsigned long)cb->resampler_samples_out,
+									mb_written, fps, elapsed_secs,
+									(double)cb->resampler_samples_out / cb->resampler_samples_in);
+								cb->resampler_last_log_time = now;
+							}
 						}
 						else {
-							streamer->write( frame.data, sizeof(spx_int16_t) * frame.samples);
+							// Passthrough mode - still track stats
+							cb->resampler_frames_processed++;
+							cb->resampler_samples_in += frame.samples;
+							cb->resampler_samples_out += frame.samples;
+							size_t bytes_to_write = sizeof(spx_int16_t) * frame.samples * cb->channels;
+							cb->resampler_bytes_written += bytes_to_write;
+							
+							streamer->write(frame.data, bytes_to_write);
 						}
 					}
 				}
