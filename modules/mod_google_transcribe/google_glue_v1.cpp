@@ -135,10 +135,16 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
     }
 
     // speech model
-    if (model != NULL) {
-      config->set_model(model);
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "speech model %s\n", model);
+    // V1 API models: phone_call, video, command_and_search, default
+    // Auto-select phone_call for telephony if no model specified
+    const char* selected_model = model;
+    if (model == NULL) {
+      selected_model = "phone_call";  // Default to phone_call for telephony
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V1 API: Auto-selected model 'phone_call' for telephony\n");
     }
+
+    config->set_model(selected_model);
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V1 API: Using model '%s'\n", selected_model);
 
     // use enhanced model
     if (enhanced == 1) {
