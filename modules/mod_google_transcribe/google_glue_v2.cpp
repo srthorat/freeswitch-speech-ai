@@ -175,11 +175,11 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
 
         // speech model
         // V2 API models: chirp_3, chirp_2, chirp_1, long, telephony, medical_conversation, medical_dictation
-        // Use 'long' model by default (most reliable for streaming per Google docs)
+        // Use 'telephony' model by default (optimized for phone calls)
         const char* selected_model = model;
         if (model == NULL) {
-            selected_model = "long";  // Default to 'long' model (same as Python SDK)
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Auto-selected model 'long' (default)\n");
+            selected_model = "telephony";  // Default to 'telephony' model for phone calls
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Auto-selected model 'telephony' for phone calls\n");
         } else {
             // Map v1 model names to v2 equivalents for convenience
             if (strcmp(model, "phone_call") == 0) {
