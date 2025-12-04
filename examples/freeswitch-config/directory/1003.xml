@@ -37,9 +37,9 @@
       <variable name="effective_caller_id_name" value="David Wilson"/>
       <variable name="effective_caller_id_number" value="1003"/>
 
-      <!-- ⚙️ SERVICE FLAG: AWS Transcribe Enabled -->
-      <!-- All AWS Transcribe settings (credentials, region, features) are in dialplan -->
-      <variable name="enable_aws_transcribe" value="true"/>
+      <!-- ⚙️ SERVICE FLAG: Google Transcribe Enabled -->
+      <!-- All Google Transcribe settings (credentials, region, features) are in dialplan -->
+      <variable name="enable_google_transcribe" value="true"/>
     </variables>
   </user>
 </include>

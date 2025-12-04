@@ -45,15 +45,33 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
     int punctuation, 
     const char* model, 
     int enhanced, 
-	const char* hints) : m_session(session), m_writesDone(false), m_connected(false),
-    m_audioBuffer(CHUNKSIZE, 15) {
+	const char* hints) : m_session(session), m_writesDone(false), m_connected(false) {
   
     switch_channel_t *channel = switch_core_session_get_channel(session);
+    const char* var;
+
+    // For V2 API, we need to determine the location FIRST to construct the regional endpoint
+    // V2 API requires regional endpoints like: us-central1-speech.googleapis.com
+    const char* project_id = switch_channel_get_variable(channel, "GCP_PROJECT_ID");
+    const char* location = switch_channel_get_variable(channel, "GCP_LOCATION");
+    
+    // Fall back to environment variables if channel variables not set
+    if (!project_id) project_id = std::getenv("GCP_PROJECT_ID");
+    if (!location) location = std::getenv("GCP_LOCATION");
+
+    // Auto-set the V2 regional endpoint if location is available and endpoint not already set
+    if (location && !switch_channel_get_variable(channel, "GOOGLE_SPEECH_TO_TEXT_URI")) {
+        std::string regional_endpoint = std::string(location) + "-speech.googleapis.com";
+        switch_channel_set_variable(channel, "GOOGLE_SPEECH_TO_TEXT_URI", regional_endpoint.c_str());
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO,
+            "V2 API: Auto-set regional endpoint: %s\n", regional_endpoint.c_str());
+    }
+
+    // Now create the gRPC channel with the correct endpoint
     m_channel = create_grpc_channel(channel);
   	m_stub = Speech::NewStub(m_channel);
 
 	auto streaming_config = m_request.mutable_streaming_config();
-    const char* var;
 
     // The parent of the recognizer must still be provided even if the wildcard
     // recognizer is used rather than a pre-prepared recognizer.
@@ -62,12 +80,12 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
         recognizer = var;
         recognizer += "/recognizers/";
     } else {
-        // Auto-construct from GCP_PROJECT_ID and GCP_LOCATION environment variables
-        const char* project_id = std::getenv("GCP_PROJECT_ID");
-        const char* location = std::getenv("GCP_LOCATION");
+        // project_id and location already fetched above
 
         if (!project_id || !location) {
-            throw std::runtime_error("Either set GOOGLE_SPEECH_RECOGNIZER_PARENT channel variable or set both GCP_PROJECT_ID and GCP_LOCATION environment variables");
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_ERROR,
+                "V2 API requires: GOOGLE_SPEECH_RECOGNIZER_PARENT channel variable, OR both GCP_PROJECT_ID and GCP_LOCATION (as channel variables or environment variables)\n");
+            throw std::runtime_error("V2 API: Missing GCP_PROJECT_ID or GCP_LOCATION. Set GOOGLE_SPEECH_RECOGNIZER_PARENT=projects/{project}/locations/{location} or set GCP_PROJECT_ID and GCP_LOCATION");
         }
 
         recognizer = "projects/";
@@ -76,9 +94,8 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
         recognizer += location;
         recognizer += "/recognizers/";
 
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG,
-            "Auto-constructed recognizer parent from environment: projects/%s/locations/%s/recognizers/\n",
-            project_id, location);
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO,
+            "V2 API: Using recognizer path: %s_\n", recognizer.c_str());
     }
 
     // Use the recognizer specified in the variable or just use the wildcard if this is not set.
@@ -112,15 +129,14 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: set audio_channel_count=%d\n", channels);
 
         if (channels > 1) {
-            // transcribe each separately?
-            if (separate_recognition == 1) {
-                config->mutable_features()->set_multi_channel_mode(RecognitionFeatures_MultiChannelMode_SEPARATE_RECOGNITION_PER_CHANNEL);
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: multi_channel_mode=SEPARATE_RECOGNITION_PER_CHANNEL\n");
-            } else {
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: separate_recognition not enabled (value=%d)\n", separate_recognition);
-            }
+            // Auto-enable separate recognition per channel when stereo mode is used
+            // This ensures proper per-channel transcription with channel_tag in results
+            // (matching AWS Transcribe's enable_channel_identification behavior)
+            config->mutable_features()->set_multi_channel_mode(RecognitionFeatures_MultiChannelMode_SEPARATE_RECOGNITION_PER_CHANNEL);
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, 
+                "V2 API: multi_channel_mode=SEPARATE_RECOGNITION_PER_CHANNEL (auto-enabled for stereo, channel_tag will map: 1=caller/ch_0, 2=agent/ch_1)\n");
         } else {
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_WARNING, "V2 API: Only 1 channel detected! Stereo audio requires channels > 1. Check if SMBF_STEREO flag is set in command.\n");
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2 API: mono mode, channels=1\n");
         }
 
         // max alternatives
@@ -292,6 +308,11 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
     
     for (int r = 0; r < response.results_size(); ++r) {
       auto result = response.results(r);
+      
+      // Debug logging for channel_tag (like V1)
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "V2 API: result[%d] channel_tag=%d, is_final=%s, stability=%.2f\n",
+        r, result.channel_tag(), result.is_final() ? "true" : "false", result.stability());
+      
       cJSON * jResult = cJSON_CreateObject();
       cJSON * jAlternatives = cJSON_CreateArray();
       cJSON * jStability = cJSON_CreateNumber(result.stability());
@@ -418,14 +439,25 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
 
 template <>
 bool GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::write(void* data, uint32_t datalen) {
+	// Zero-latency direct write - drop audio if not connected yet
 	if (!m_connected) {
-		if (datalen % CHUNKSIZE == 0) {
-			m_audioBuffer.add(data, datalen);
-		}
-		return true;
+		return true;  // Drop silently during connection setup
 	}
+	
+	// V2 API: recognizer field is required on every request (outside the oneof)
+	// Verify it's still set after clear_streaming_config()
     m_request.clear_streaming_config();
 	m_request.set_audio(data, datalen);
+	
+	// Debug: log first few writes to verify recognizer is preserved
+	static int write_count = 0;
+	if (write_count < 3) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
+			"V2 write #%d: datalen=%u, recognizer='%s'\n", 
+			write_count, datalen, m_request.recognizer().c_str());
+		write_count++;
+	}
+	
 	bool ok = m_streamer->Write(m_request);
 	return ok;
 }

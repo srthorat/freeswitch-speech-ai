@@ -30,17 +30,54 @@ switch_bool_t google_speech_frame(switch_media_bug_t *bug, void* user_data) {
                         spx_int16_t out[SWITCH_RECOMMENDED_BUFFER_SIZE];
                         spx_uint32_t out_len = SWITCH_RECOMMENDED_BUFFER_SIZE;
                         spx_uint32_t in_len = frame.samples;
-                        size_t written;
+                        spx_uint32_t in_len_before = in_len;
 
                         speex_resampler_process_interleaved_int(cb->resampler,
                             (const spx_int16_t *) frame.data,
                             (spx_uint32_t *) &in_len,
                             &out[0],
                             &out_len);
-                        streamer->write( &out[0], sizeof(spx_int16_t) * out_len);
+                        
+                        // Track resampler statistics
+                        cb->resampler_frames_processed++;
+                        cb->resampler_samples_in += in_len_before;
+                        cb->resampler_samples_out += out_len;
+                        // bytes = samples * sizeof(int16) * channels (for stereo interleaved audio)
+                        size_t bytes_to_write = sizeof(spx_int16_t) * out_len * cb->channels;
+                        cb->resampler_bytes_written += bytes_to_write;
+                        
+                        streamer->write(&out[0], bytes_to_write);
+                        
+                        // Log stats every 10 seconds (500 frames at 50fps)
+                        switch_time_t now = switch_time_now();
+                        if ((now - cb->resampler_last_log_time) >= 10000000) {  // 10 seconds in microseconds
+                            double elapsed_secs = (now - cb->resampler_start_time) / 1000000.0;
+                            double fps = cb->resampler_frames_processed / elapsed_secs;
+                            double mb_written = cb->resampler_bytes_written / (1024.0 * 1024.0);
+                            
+                            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+                                "[RESAMPLER-STATS] %s: frames=%lu, samples_in=%lu, samples_out=%lu, "
+                                "bytes=%.2fMB, fps=%.1f, elapsed=%.1fs, ratio=%.3f, channels=%u\n",
+                                cb->bugname,
+                                (unsigned long)cb->resampler_frames_processed,
+                                (unsigned long)cb->resampler_samples_in,
+                                (unsigned long)cb->resampler_samples_out,
+                                mb_written, fps, elapsed_secs,
+                                (double)cb->resampler_samples_out / cb->resampler_samples_in,
+                                cb->channels);
+                            cb->resampler_last_log_time = now;
+                        }
                     }
                     else {
-                        streamer->write( frame.data, sizeof(spx_int16_t) * frame.samples);
+                        // Passthrough mode - still track stats
+                        cb->resampler_frames_processed++;
+                        cb->resampler_samples_in += frame.samples;
+                        cb->resampler_samples_out += frame.samples;
+                        // bytes = samples * sizeof(int16) * channels (for stereo interleaved audio)
+                        size_t bytes_to_write = sizeof(spx_int16_t) * frame.samples * cb->channels;
+                        cb->resampler_bytes_written += bytes_to_write;
+                        
+                        streamer->write(frame.data, bytes_to_write);
                     }
                 }
             }
@@ -68,20 +105,35 @@ switch_status_t google_speech_session_init(switch_core_session_t *session, respo
 	strncpy(cb->bugname, bugname, MAX_BUG_LEN);
 	cb->got_end_of_utterance = 0;
 	cb->wants_single_utterance = single_utterance;
+	cb->channels = channels;  // Store channels for frame processing
 	if (play_file != NULL){
 		cb->play_file = 1;
 	}
 	
+	// Initialize resampler statistics
+	cb->resampler_source_rate = sampleRate;
+	cb->resampler_target_rate = to_rate;
+	cb->resampler_frames_processed = 0;
+	cb->resampler_samples_in = 0;
+	cb->resampler_samples_out = 0;
+	cb->resampler_bytes_written = 0;
+	cb->resampler_start_time = switch_time_now();
+	cb->resampler_last_log_time = cb->resampler_start_time;
+	
 	switch_mutex_init(&cb->mutex, SWITCH_MUTEX_NESTED, switch_core_session_get_pool(session));
 	if (sampleRate != to_rate) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+			"[RESAMPLER-INIT] %s: Creating resampler %uHz->%uHz, channels=%u, mode=%s\n",
+			bugname, sampleRate, to_rate, channels,
+			sampleRate < to_rate ? "UPSAMPLE" : "DOWNSAMPLE");
 		cb->resampler = speex_resampler_init(channels, sampleRate, to_rate, SWITCH_RESAMPLE_QUALITY, &err);
-	if (0 != err) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n",
+		if (0 != err) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n",
 								switch_channel_get_name(channel), speex_resampler_strerror(err));
-		return SWITCH_STATUS_FALSE;
-	}
+			return SWITCH_STATUS_FALSE;
+		}
 	} else {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s: no resampling needed for this call\n", switch_channel_get_name(channel));
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s: no resampling needed for this call, channels=%u\n", switch_channel_get_name(channel), channels);
 	}
 	cb->responseHandler = responseHandler;
 
@@ -179,7 +231,31 @@ switch_status_t google_speech_session_cleanup(switch_core_session_t *session, in
 			cb->streamer = NULL;
 		}
 
+		// Log final resampler statistics before cleanup (for both resampling and passthrough modes)
+		if (cb->resampler_frames_processed > 0) {
+			switch_time_t now = switch_time_now();
+			double elapsed_secs = (now - cb->resampler_start_time) / 1000000.0;
+			double fps = cb->resampler_frames_processed / elapsed_secs;
+			double mb_written = cb->resampler_bytes_written / (1024.0 * 1024.0);
+			double kbps = (cb->resampler_bytes_written * 8.0) / (elapsed_secs * 1000.0);
+			
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+				"[RESAMPLER-FINAL] %s: Session complete - frames=%lu, samples_in=%lu, samples_out=%lu, "
+				"bytes=%.2fMB, avg_fps=%.1f, duration=%.1fs, bitrate=%.1fkbps, channels=%u, mode=%s\n",
+				cb->bugname,
+				(unsigned long)cb->resampler_frames_processed,
+				(unsigned long)cb->resampler_samples_in,
+				(unsigned long)cb->resampler_samples_out,
+				mb_written, fps, elapsed_secs, kbps, cb->channels,
+				cb->resampler ? 
+					(cb->resampler_source_rate < cb->resampler_target_rate ? "UPSAMPLE" : "DOWNSAMPLE") 
+					: "PASSTHROUGH");
+		}
+
 		if (cb->resampler) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+				"[RESAMPLER-CLEANUP] %s: Destroying resampler %uHz->%uHz\n",
+				cb->bugname, cb->resampler_source_rate, cb->resampler_target_rate);
 			speex_resampler_destroy(cb->resampler);
 		}
 		if (cb->vad) {

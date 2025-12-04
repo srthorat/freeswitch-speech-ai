@@ -59,8 +59,7 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
     int punctuation, 
     const char* model, 
     int enhanced, 
-		const char* hints) : m_session(session), m_writesDone(false), m_connected(false), 
-      m_audioBuffer(CHUNKSIZE, 15) {
+		const char* hints) : m_session(session), m_writesDone(false), m_connected(false) {
   
     switch_channel_t *channel = switch_core_session_get_channel(session);
     m_channel = create_grpc_channel(channel);
@@ -95,15 +94,14 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
       config->set_audio_channel_count(channels);
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V1 API: set audio_channel_count=%d\n", channels);
 
-      // transcribe each separately?
-      if (separate_recognition == 1) {
-        config->set_enable_separate_recognition_per_channel(true);
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V1 API: enable_separate_recognition_per_channel=TRUE\n");
-      } else {
-        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V1 API: separate_recognition not enabled (value=%d)\n", separate_recognition);
-      }
+      // Auto-enable separate recognition per channel when stereo mode is used
+      // This ensures proper per-channel transcription with channel_tag in results
+      // (matching AWS Transcribe's enable_channel_identification behavior)
+      config->set_enable_separate_recognition_per_channel(true);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, 
+        "V1 API: enable_separate_recognition_per_channel=TRUE (auto-enabled for stereo, channel_tag will map: 1=caller/ch_0, 2=agent/ch_1)\n");
     } else {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_WARNING, "V1 API: Only 1 channel detected! Stereo audio requires channels > 1. Check if SMBF_STEREO flag is set in command.\n");
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V1 API: mono mode, channels=1\n");
     }
 
     // max alternatives
@@ -273,6 +271,12 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
       cJSON * jLanguageCode = cJSON_CreateString(result.language_code().c_str());
       cJSON * jChannelTag = cJSON_CreateNumber(result.channel_tag());
 
+      // Log channel_tag for debugging stereo transcription issues
+      int ch_tag = result.channel_tag();
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
+        "V1 API: result[%d] channel_tag=%d, is_final=%s, stability=%.2f\n",
+        r, ch_tag, result.is_final() ? "true" : "false", result.stability());
+
       auto duration = result.result_end_time();
       int32_t seconds = duration.seconds();
       int64_t nanos = duration.nanos();
@@ -376,11 +380,9 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
 
 template<>
 bool GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::write(void* data, uint32_t datalen) {
+  // Zero-latency direct write - drop audio if not connected yet
   if (!m_connected) {
-    if (datalen % CHUNKSIZE == 0) {
-      m_audioBuffer.add(data, datalen);
-    }
-    return true;
+    return true;  // Drop silently during connection setup
   }
   m_request.set_audio_content(data, datalen);
   bool ok = m_streamer->Write(m_request);

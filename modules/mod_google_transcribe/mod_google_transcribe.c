@@ -448,6 +448,7 @@ SWITCH_STANDARD_API(transcribe2_function)
 				}
 
 				// Parse sampling rate (argv[5]): 8k, 16k, or numeric
+				// Only allow 8k or 16k - strict validation like AWS module
 				if (argc > 5) {
 					if (!strcmp(argv[5], "8k")) {
 						sampling = 8000;
@@ -455,10 +456,22 @@ SWITCH_STANDARD_API(transcribe2_function)
 						sampling = 16000;
 					} else {
 						int rate = atoi(argv[5]);
-						if (rate > 0 && rate % 8000 == 0) {
+						if (rate == 8000 || rate == 16000) {
 							sampling = rate;
+						} else if (rate > 0) {
+							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+								"transcribe2: Invalid sampling rate %d - only 8000 or 16000 allowed. Using default 8000Hz.\n", rate);
+							sampling = 8000;
 						}
 					}
+				}
+
+				// Auto-upgrade to 16kHz for stereo mode (matching AWS behavior)
+				if ((flags & SMBF_STEREO) && (sampling == 0 || sampling == 8000)) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+						"transcribe2: Stereo mode detected - auto-upgrading sample rate from %dHz to 16000Hz for better quality\n",
+						sampling ? sampling : 8000);
+					sampling = 16000;
 				}
 
 				// Parse metadata (argv[6])
@@ -470,7 +483,7 @@ SWITCH_STANDARD_API(transcribe2_function)
 				}
 
     		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-					"start transcribing lang=%s interim=%s mix=%s rate=%d bugname=%s metadata=%s\n",
+					"start transcribing (V2 API) lang=%s interim=%s mix=%s rate=%d bugname=%s metadata=%s\n",
 					lang,
 					interim ? "yes" : "no",
 					(flags & SMBF_STEREO) ? "stereo" : (flags & SMBF_WRITE_STREAM) ? "mixed" : "mono",
@@ -553,6 +566,7 @@ SWITCH_STANDARD_API(transcribe_function)
 				}
 
 				// Parse sampling rate (argv[5]): 8k, 16k, or numeric
+				// Only allow 8k or 16k - strict validation like AWS module
 				if (argc > 5) {
 					if (!strcmp(argv[5], "8k")) {
 						sampling = 8000;
@@ -560,10 +574,22 @@ SWITCH_STANDARD_API(transcribe_function)
 						sampling = 16000;
 					} else {
 						int rate = atoi(argv[5]);
-						if (rate > 0 && rate % 8000 == 0) {
+						if (rate == 8000 || rate == 16000) {
 							sampling = rate;
+						} else if (rate > 0) {
+							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+								"transcribe: Invalid sampling rate %d - only 8000 or 16000 allowed. Using default 8000Hz.\n", rate);
+							sampling = 8000;
 						}
 					}
+				}
+
+				// Auto-upgrade to 16kHz for stereo mode (matching AWS behavior)
+				if ((flags & SMBF_STEREO) && (sampling == 0 || sampling == 8000)) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+						"transcribe: Stereo mode detected - auto-upgrading sample rate from %dHz to 16000Hz for better quality\n",
+						sampling ? sampling : 8000);
+					sampling = 16000;
 				}
 
 				// Parse metadata (argv[6])
@@ -575,7 +601,7 @@ SWITCH_STANDARD_API(transcribe_function)
 				}
 
     		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-					"start transcribing lang=%s interim=%s mix=%s rate=%d bugname=%s metadata=%s\n",
+					"start transcribing (V1 API) lang=%s interim=%s mix=%s rate=%d bugname=%s metadata=%s\n",
 					lang,
 					interim ? "yes" : "no",
 					(flags & SMBF_STEREO) ? "stereo" : (flags & SMBF_WRITE_STREAM) ? "mixed" : "mono",

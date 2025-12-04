@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <future>
+#include <chrono>
 
 #include <switch.h>
 #include <switch_json.h>
@@ -8,9 +9,6 @@
 #include <grpcpp/impl/codegen/sync_stream.h>
 
 #include "mod_google_transcribe.h"
-#include "simple_buffer.h"
-
-#define CHUNKSIZE (320)
 
 namespace {
   int case_insensitive_match(std::string s1, std::string s2) {
@@ -50,6 +48,17 @@ public:
 
 	void connect() {
 		assert(!m_connected);
+		
+		// Warmup: Wait for gRPC channel to be ready (connection establishment)
+		// This ensures we don't drop audio during TLS handshake
+		auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(2000);
+		bool channel_ready = m_channel->WaitForConnected(deadline);
+		if (channel_ready) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p gRPC channel warmed up and ready\n", this);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "GStreamer %p gRPC channel warmup timeout, proceeding anyway\n", this);
+		}
+		
 		// Begin a stream.
 		m_streamer = m_stub->StreamingRecognize(&m_context);
 		m_connected = true;
@@ -59,19 +68,8 @@ public:
 
 		// Write the first request, containing the config only.
 		m_streamer->Write(m_request);
-
-		// send any buffered audio
-		int nFrames = m_audioBuffer.getNumItems();
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p got stream ready, %d buffered frames\n", this, nFrames);	
-		if (nFrames) {
-			char *p;
-			do {
-				p = m_audioBuffer.getNextChunk();
-				if (p) {
-					write(p, CHUNKSIZE);
-				}
-			} while (p);
-		}
+		
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p stream ready - zero-latency direct write mode\n", this);
 	}
 
 	uint32_t nextMessageSize(void) {
@@ -143,5 +141,4 @@ private:
 	bool m_writesDone;
 	bool m_connected;
 	std::promise<void> m_promise;
-	SimpleBuffer m_audioBuffer;
 };

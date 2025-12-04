@@ -51,15 +51,26 @@ struct cap_cb {
 	char bugname[MAX_BUG_LEN+1];
 	char sessionId[MAX_SESSION_ID+1];
 	char *base;
-  SpeexResamplerState *resampler;
+	SpeexResamplerState *resampler;
 	void* streamer;
 	responseHandler_t responseHandler;
 	switch_thread_t* thread;
-  int wants_single_utterance;
-  int got_end_of_utterance;
+	int wants_single_utterance;
+	int got_end_of_utterance;
 	int play_file;
 	switch_vad_t * vad;
 	uint32_t samples_per_second;
+	uint32_t channels;  // Number of audio channels (1=mono, 2=stereo)
+	
+	// Resampler statistics for monitoring (matching AWS implementation)
+	uint32_t resampler_source_rate;
+	uint32_t resampler_target_rate;
+	uint64_t resampler_frames_processed;
+	uint64_t resampler_samples_in;
+	uint64_t resampler_samples_out;
+	uint64_t resampler_bytes_written;
+	switch_time_t resampler_start_time;
+	switch_time_t resampler_last_log_time;
 
 	// Call metadata (Sprint 2, Task 2.1)
 	char *caller_name;
