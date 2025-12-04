@@ -9,6 +9,7 @@
 #include "generic_google_glue.h"
 
 #include "google/cloud/speech/v2/cloud_speech.grpc.pb.h"
+#include <google/protobuf/field_mask.pb.h>
 
 using google::cloud::speech::v2::RecognitionConfig;
 using google::cloud::speech::v2::Speech;
@@ -104,6 +105,11 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
     } else {
         recognizer += "_";
 
+        // When using the wildcard recognizer "_", we must set config_mask to "*"
+        // to tell the API to use our provided config completely (not merge with defaults)
+        streaming_config->mutable_config_mask()->add_paths("*");
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2 API: set config_mask=* for wildcard recognizer\n");
+
         RecognitionConfig* config = streaming_config->mutable_config();
         config->add_language_codes(lang);
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "transcribe language %s\n", lang);
@@ -168,12 +174,12 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
         }
 
         // speech model
-        // V2 API models: chirp_3, chirp_2, chirp_1, telephony, medical_conversation, medical_dictation
-        // Auto-select 'telephony' for phone calls if no model specified
+        // V2 API models: chirp_3, chirp_2, chirp_1, long, telephony, medical_conversation, medical_dictation
+        // Use 'long' model by default (most reliable for streaming per Google docs)
         const char* selected_model = model;
         if (model == NULL) {
-            selected_model = "telephony";  // Default to 'telephony' model for phone calls
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Auto-selected model 'telephony' for phone calls\n");
+            selected_model = "long";  // Default to 'long' model (same as Python SDK)
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, "V2 API: Auto-selected model 'long' (default)\n");
         } else {
             // Map v1 model names to v2 equivalents for convenience
             if (strcmp(model, "phone_call") == 0) {
