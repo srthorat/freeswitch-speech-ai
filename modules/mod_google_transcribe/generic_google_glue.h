@@ -37,15 +37,18 @@ switch_bool_t google_speech_frame(switch_media_bug_t *bug, void* user_data) {
                             (spx_uint32_t *) &in_len,
                             &out[0],
                             &out_len);
-                        
+
                         // Track resampler statistics
                         cb->resampler_frames_processed++;
                         cb->resampler_samples_in += in_len_before;
                         cb->resampler_samples_out += out_len;
-                        // bytes = samples * sizeof(int16) * channels (for stereo interleaved audio)
-                        size_t bytes_to_write = sizeof(spx_int16_t) * out_len * cb->channels;
+                        // CRITICAL: For speex_resampler_process_interleaved_int, out_len already accounts for ALL channels
+                        // When resampler has channels=1, it treats interleaved stereo as mono with 2x samples
+                        // The output buffer contains: out_len samples * sizeof(int16)
+                        // DO NOT multiply by cb->channels again - that would claim 2x the actual data!
+                        size_t bytes_to_write = sizeof(spx_int16_t) * out_len;
                         cb->resampler_bytes_written += bytes_to_write;
-                        
+
                         streamer->write(&out[0], bytes_to_write);
                         
                         // Log stats every 10 seconds (500 frames at 50fps)
@@ -73,10 +76,11 @@ switch_bool_t google_speech_frame(switch_media_bug_t *bug, void* user_data) {
                         cb->resampler_frames_processed++;
                         cb->resampler_samples_in += frame.samples;
                         cb->resampler_samples_out += frame.samples;
-                        // bytes = samples * sizeof(int16) * channels (for stereo interleaved audio)
-                        size_t bytes_to_write = sizeof(spx_int16_t) * frame.samples * cb->channels;
+                        // Passthrough: frame.samples already includes all channels in interleaved format
+                        // frame.datalen = actual bytes in buffer
+                        size_t bytes_to_write = frame.datalen;
                         cb->resampler_bytes_written += bytes_to_write;
-                        
+
                         streamer->write(frame.data, bytes_to_write);
                     }
                 }
