@@ -126,7 +126,7 @@ switch_status_t google_speech_session_init(switch_core_session_t *session, respo
 			"[RESAMPLER-INIT] %s: Creating resampler %uHz->%uHz, channels=%u, mode=%s\n",
 			bugname, sampleRate, to_rate, channels,
 			sampleRate < to_rate ? "UPSAMPLE" : "DOWNSAMPLE");
-		cb->resampler = speex_resampler_init(channels, sampleRate, to_rate, SWITCH_RESAMPLE_QUALITY, &err);
+		cb->resampler = speex_resampler_init(1, sampleRate, to_rate, SWITCH_RESAMPLE_QUALITY, &err);
 		if (0 != err) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n",
 								switch_channel_get_name(channel), speex_resampler_strerror(err));
@@ -139,7 +139,7 @@ switch_status_t google_speech_session_init(switch_core_session_t *session, respo
 
 	// allocate vad if we are delaying connecting to the recognizer until we detect speech
 	if (switch_channel_var_true(channel, "START_RECOGNIZING_ON_VAD")) {
-		cb->vad = switch_vad_init(sampleRate, channels);
+		cb->vad = switch_vad_init(sampleRate, 1);
 		if (cb->vad) {
 			const char* var;
 			int mode = 2;
