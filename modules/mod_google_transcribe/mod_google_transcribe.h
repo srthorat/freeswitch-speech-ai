@@ -72,6 +72,13 @@ struct cap_cb {
 	switch_time_t resampler_start_time;
 	switch_time_t resampler_last_log_time;
 
+	// Per-channel timing for latency analysis (V2 multichannel debugging)
+	switch_time_t stream_start_time;           // When streaming started
+	switch_time_t first_result_time_ch1;       // When first channel_tag=1 result arrived
+	switch_time_t first_result_time_ch2;       // When first channel_tag=2 result arrived
+	int got_first_result_ch1;                  // Flag: received first result for channel 1
+	int got_first_result_ch2;                  // Flag: received first result for channel 2
+
 	// Call metadata (Sprint 2, Task 2.1)
 	char *caller_name;
 	char *caller_number;

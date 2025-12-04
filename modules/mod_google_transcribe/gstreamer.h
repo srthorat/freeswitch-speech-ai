@@ -9,6 +9,20 @@
 #include <grpcpp/impl/codegen/sync_stream.h>
 
 #include "mod_google_transcribe.h"
+#include "simple_buffer.h"
+
+// Chunk size for sending to Google Speech API
+// Python reference uses 100ms chunks which works well for multichannel
+// At 8kHz stereo (2 channels, 16-bit): 8000 * 2 * 2 * 0.1 = 3200 bytes per 100ms
+// At 16kHz stereo: 16000 * 2 * 2 * 0.1 = 6400 bytes per 100ms
+// We use a fixed 100ms worth of 8kHz stereo as our target chunk
+#define CHUNKSIZE_100MS_8KHZ_STEREO (3200)  // 100ms @ 8kHz stereo
+#define CHUNKSIZE_100MS_16KHZ_STEREO (6400) // 100ms @ 16kHz stereo
+#define CHUNKSIZE (320)  // Legacy: 20ms @ 8kHz mono for buffer granularity
+
+// Accumulation buffer size - hold up to 100ms of audio before sending
+// This matches Python's approach of sending larger, consistent chunks
+#define ACCUMULATION_BUFFER_SIZE (CHUNKSIZE_100MS_16KHZ_STEREO)
 
 namespace {
   int case_insensitive_match(std::string s1, std::string s2) {
@@ -45,18 +59,21 @@ public:
 	}
 
 	bool write(void* data, uint32_t datalen);
+	
+	// Flush any accumulated audio - must be called before writesDone for V2 API
+	void flushAccumulatedAudio();
 
 	void connect() {
 		assert(!m_connected);
 		
 		// Warmup: Wait for gRPC channel to be ready (connection establishment)
-		// This ensures we don't drop audio during TLS handshake
-		auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(2000);
+		// Reduced timeout to 800ms for faster connection
+		auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(800);
 		bool channel_ready = m_channel->WaitForConnected(deadline);
 		if (channel_ready) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p gRPC channel warmed up and ready\n", this);
 		} else {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "GStreamer %p gRPC channel warmup timeout, proceeding anyway\n", this);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "GStreamer %p gRPC channel warmup timeout (800ms), proceeding anyway\n", this);
 		}
 		
 		// Begin a stream.
@@ -141,4 +158,10 @@ private:
 	bool m_writesDone;
 	bool m_connected;
 	std::promise<void> m_promise;
+	SimpleBuffer m_audioBuffer;
+	
+	// Accumulation buffer for batching small frames into larger chunks
+	// Google V2 API processes multichannel audio more efficiently with ~100ms chunks
+	std::vector<uint8_t> m_accumBuffer;
+	static const size_t ACCUMULATE_TARGET = 3200;  // 100ms at 8kHz stereo (8000 * 0.1 * 2 * 2)
 };

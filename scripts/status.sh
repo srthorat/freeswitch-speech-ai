@@ -93,7 +93,7 @@ fi
 # Check modules
 echo ""
 echo "Modules:"
-for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
+for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe mod_google_transcribe_async; do
     if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
         # Check if module is loaded
         if LD_LIBRARY_PATH=/usr/local/lib ${FS_PREFIX}/bin/fs_cli -x "module_exists ${module}" 2>/dev/null | grep -q "true"; then

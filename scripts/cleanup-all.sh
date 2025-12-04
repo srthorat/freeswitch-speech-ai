@@ -3,12 +3,13 @@
 # FreeSWITCH Speech AI - Unified Cleanup Script
 # ============================================================================
 # Supports modular cleanup via --module flag:
-#   --module freeswitch              Remove only FreeSWITCH
-#   --module mod_audio_fork          Remove only mod_audio_fork
-#   --module mod_aws_transcribe      Remove only mod_aws_transcribe and AWS SDK
-#   --module mod_deepgram_transcribe Remove only mod_deepgram_transcribe
-#   --module mod_google_transcribe   Remove only mod_google_transcribe and Google/gRPC deps
-#   --module all                     Remove everything (default)
+#   --module freeswitch                   Remove only FreeSWITCH
+#   --module mod_audio_fork               Remove only mod_audio_fork
+#   --module mod_aws_transcribe           Remove only mod_aws_transcribe and AWS SDK
+#   --module mod_deepgram_transcribe      Remove only mod_deepgram_transcribe
+#   --module mod_google_transcribe        Remove only mod_google_transcribe and Google/gRPC deps
+#   --module mod_google_transcribe_async  Remove only mod_google_transcribe_async
+#   --module all                          Remove everything (default)
 #
 # Usage:
 #   sudo ./cleanup-all.sh --module <module-name> [OPTIONS]
@@ -43,7 +44,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 
 # Valid module names
-VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe")
+VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe" "mod_google_transcribe_async")
 
 # ============================================================================
 # Helper Functions
@@ -57,6 +58,11 @@ should_remove_module() {
 # Check for google transcribe module
 should_remove_google_transcribe() {
     [ "$MODULE" = "all" ] || [ "$MODULE" = "mod_google_transcribe" ]
+}
+
+# Check for google transcribe async module
+should_remove_google_transcribe_async() {
+    [ "$MODULE" = "all" ] || [ "$MODULE" = "mod_google_transcribe_async" ]
 }
 
 should_remove_freeswitch() {
@@ -105,6 +111,7 @@ while [[ $# -gt 0 ]]; do
             echo "  mod_aws_transcribe       Remove only mod_aws_transcribe and AWS SDK dependencies"
             echo "  mod_deepgram_transcribe  Remove only mod_deepgram_transcribe"
             echo "  mod_google_transcribe    Remove mod_google_transcribe and Google/gRPC dependencies"
+            echo "  mod_google_transcribe_async  Remove only mod_google_transcribe_async"
             echo ""
             echo "Options:"
             echo "  --keep-sources    Keep source directories in /usr/local/src"
@@ -172,7 +179,15 @@ fi
 
 if should_remove_google_transcribe; then
     echo "  ✗ mod_google_transcribe module and binary"
-    echo "  ✗ googleapis headers (/usr/local/include/googleapis)"
+fi
+
+if should_remove_google_transcribe_async; then
+    echo "  ✗ mod_google_transcribe_async module and binary"
+fi
+
+# googleapis headers shared by both google modules
+if should_remove_google_transcribe || should_remove_google_transcribe_async; then
+    echo "  ✗ googleapis headers (/usr/local/include/googleapis) - if both google modules removed"
 fi
 
 # libwebsockets shared by audio_fork and deepgram
@@ -256,6 +271,13 @@ if should_remove_google_transcribe; then
     log_success "mod_google_transcribe removed"
 fi
 
+if should_remove_google_transcribe_async; then
+    log_remove "mod_google_transcribe_async"
+    rm -f ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe_async.so
+    remove_from_modules_conf "mod_google_transcribe_async"
+    log_success "mod_google_transcribe_async removed"
+fi
+
 # Remove FreeSWITCH
 if should_remove_freeswitch; then
     log_remove "FreeSWITCH installation"
@@ -304,13 +326,19 @@ if should_remove_module "mod_aws_transcribe"; then
     fi
 fi
 
-if should_remove_google_transcribe; then
-    # Remove googleapis headers (generated proto files)
-    if [ -d "/usr/local/include/googleapis" ]; then
-        log_remove "googleapis headers and generated files"
-        rm -rf /usr/local/include/googleapis
-        rm -f /usr/local/include/googleapis/*.o 2>/dev/null || true
-        log_success "googleapis headers removed"
+if should_remove_google_transcribe || should_remove_google_transcribe_async; then
+    # Only remove googleapis headers if both google transcribe modules are being removed
+    # or if we're removing everything
+    if [ "$MODULE" = "all" ] || (should_remove_google_transcribe && should_remove_google_transcribe_async); then
+        # Remove googleapis headers (generated proto files)
+        if [ -d "/usr/local/include/googleapis" ]; then
+            log_remove "googleapis headers and generated files"
+            rm -rf /usr/local/include/googleapis
+            rm -f /usr/local/include/googleapis/*.o 2>/dev/null || true
+            log_success "googleapis headers removed"
+        fi
+    else
+        log_skip "googleapis headers (still needed by other google module)"
     fi
     
     # Remove Google Cloud C++ libraries if they were installed
@@ -344,7 +372,7 @@ if ! $KEEP_SOURCES; then
         rm -rf /usr/local/src/aws-sdk-cpp
     fi
 
-    if should_remove_google_transcribe; then
+    if should_remove_google_transcribe || should_remove_google_transcribe_async; then
         rm -rf /usr/local/src/google-cloud-cpp
         rm -rf /usr/local/src/googleapis
     fi

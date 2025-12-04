@@ -29,7 +29,9 @@ switch_bool_t google_speech_frame(switch_media_bug_t *bug, void* user_data) {
                     if (cb->resampler) {
                         spx_int16_t out[SWITCH_RECOMMENDED_BUFFER_SIZE];
                         spx_uint32_t out_len = SWITCH_RECOMMENDED_BUFFER_SIZE;
-                        spx_uint32_t in_len = frame.samples;
+                        // For speex_resampler_process_interleaved_int with channels > 1:
+                        // in_len is number of FRAMES, not samples. Each frame has cb->channels samples.
+                        spx_uint32_t in_len = frame.samples / cb->channels;
                         spx_uint32_t in_len_before = in_len;
 
                         speex_resampler_process_interleaved_int(cb->resampler,
@@ -40,13 +42,11 @@ switch_bool_t google_speech_frame(switch_media_bug_t *bug, void* user_data) {
 
                         // Track resampler statistics
                         cb->resampler_frames_processed++;
-                        cb->resampler_samples_in += in_len_before;
-                        cb->resampler_samples_out += out_len;
-                        // CRITICAL: For speex_resampler_process_interleaved_int, out_len already accounts for ALL channels
-                        // When resampler has channels=1, it treats interleaved stereo as mono with 2x samples
-                        // The output buffer contains: out_len samples * sizeof(int16)
-                        // DO NOT multiply by cb->channels again - that would claim 2x the actual data!
-                        size_t bytes_to_write = sizeof(spx_int16_t) * out_len;
+                        cb->resampler_samples_in += in_len_before * cb->channels;
+                        cb->resampler_samples_out += out_len * cb->channels;
+                        // For interleaved stereo: bytes = frames * channels * sizeof(int16)
+                        // out_len is number of output frames, each frame has cb->channels samples
+                        size_t bytes_to_write = sizeof(spx_int16_t) * out_len * cb->channels;
                         cb->resampler_bytes_written += bytes_to_write;
 
                         streamer->write(&out[0], bytes_to_write);
@@ -124,13 +124,21 @@ switch_status_t google_speech_session_init(switch_core_session_t *session, respo
 	cb->resampler_start_time = switch_time_now();
 	cb->resampler_last_log_time = cb->resampler_start_time;
 	
+	// Initialize per-channel timing for latency analysis
+	cb->stream_start_time = cb->resampler_start_time;
+	cb->first_result_time_ch1 = 0;
+	cb->first_result_time_ch2 = 0;
+	cb->got_first_result_ch1 = 0;
+	cb->got_first_result_ch2 = 0;
+	
 	switch_mutex_init(&cb->mutex, SWITCH_MUTEX_NESTED, switch_core_session_get_pool(session));
 	if (sampleRate != to_rate) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
 			"[RESAMPLER-INIT] %s: Creating resampler %uHz->%uHz, channels=%u, mode=%s\n",
 			bugname, sampleRate, to_rate, channels,
 			sampleRate < to_rate ? "UPSAMPLE" : "DOWNSAMPLE");
-		cb->resampler = speex_resampler_init(1, sampleRate, to_rate, SWITCH_RESAMPLE_QUALITY, &err);
+		// Initialize resampler with actual channel count for proper stereo interleaved processing
+		cb->resampler = speex_resampler_init(channels, sampleRate, to_rate, SWITCH_RESAMPLE_QUALITY, &err);
 		if (0 != err) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "%s: Error initializing resampler: %s.\n",
 								switch_channel_get_name(channel), speex_resampler_strerror(err));
@@ -224,6 +232,8 @@ switch_status_t google_speech_session_cleanup(switch_core_session_t *session, in
 		Streamer* streamer = (Streamer *) cb->streamer;
 
 		if (streamer) {
+			// Flush any accumulated audio before ending the stream
+			streamer->flushAccumulatedAudio();
 			streamer->writesDone();
 
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "google_speech_session_cleanup: GStreamer (%p) waiting for read thread to complete\n", (void*)streamer);

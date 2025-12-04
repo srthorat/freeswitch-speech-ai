@@ -59,7 +59,8 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
     int punctuation, 
     const char* model, 
     int enhanced, 
-		const char* hints) : m_session(session), m_writesDone(false), m_connected(false) {
+		const char* hints) : m_session(session), m_writesDone(false), m_connected(false),
+      m_audioBuffer(CHUNKSIZE, 100) {  // 100 chunks = ~1 second of stereo 8kHz audio
   
     switch_channel_t *channel = switch_core_session_get_channel(session);
     m_channel = create_grpc_channel(channel);
@@ -380,13 +381,40 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
 
 template<>
 bool GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::write(void* data, uint32_t datalen) {
-  // Zero-latency direct write - drop audio if not connected yet
+  // Wait for connection before sending
   if (!m_connected) {
-    return true;  // Drop silently during connection setup
+    return true;
   }
-  m_request.set_audio_content(data, datalen);
-  bool ok = m_streamer->Write(m_request);
-  return ok;
+  
+  // Add current audio data to accumulation buffer
+  m_accumBuffer.insert(m_accumBuffer.end(), (uint8_t*)data, (uint8_t*)data + datalen);
+  
+  // Only send when we have accumulated enough data (100ms target = 3200 bytes for 8kHz stereo)
+  // This helps multichannel processing - larger chunks are processed more efficiently
+  if (m_accumBuffer.size() >= ACCUMULATE_TARGET) {
+    m_request.set_audio_content(m_accumBuffer.data(), m_accumBuffer.size());
+    bool ok = m_streamer->Write(m_request);
+    if (!ok) {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, 
+        "V1 API: Failed to write accumulated audio chunk (%zu bytes)\n", m_accumBuffer.size());
+      return false;
+    }
+    m_accumBuffer.clear();
+  }
+  
+  return true;
+}
+
+template<>
+void GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::flushAccumulatedAudio() {
+  // Flush any remaining accumulated audio before ending the stream
+  if (m_connected && !m_writesDone && m_accumBuffer.size() > 0) {
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, 
+      "V1 API: Flushing final accumulated audio (%zu bytes) before writesDone\n", m_accumBuffer.size());
+    m_request.set_audio_content(m_accumBuffer.data(), m_accumBuffer.size());
+    m_streamer->Write(m_request);
+    m_accumBuffer.clear();
+  }
 }
 
 extern "C" {

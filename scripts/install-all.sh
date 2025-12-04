@@ -3,12 +3,13 @@
 # FreeSWITCH Speech AI - Unified Installation Script
 # ============================================================================
 # Supports modular installation via --module flag:
-#   --module freeswitch              Install only FreeSWITCH
-#   --module mod_audio_fork          Install only mod_audio_fork dependencies + module
-#   --module mod_aws_transcribe      Install only mod_aws_transcribe dependencies + module
-#   --module mod_deepgram_transcribe Install only mod_deepgram_transcribe dependencies + module
-#   --module mod_google_transcribe   Install only mod_google_transcribe dependencies + module
-#   --module all                     Install everything (default)
+#   --module freeswitch                   Install only FreeSWITCH
+#   --module mod_audio_fork               Install only mod_audio_fork dependencies + module
+#   --module mod_aws_transcribe           Install only mod_aws_transcribe dependencies + module
+#   --module mod_deepgram_transcribe      Install only mod_deepgram_transcribe dependencies + module
+#   --module mod_google_transcribe        Install only mod_google_transcribe dependencies + module
+#   --module mod_google_transcribe_async  Install only mod_google_transcribe_async (async gRPC)
+#   --module all                          Install everything (default)
 #
 # Usage:
 #   sudo ./install-all.sh --module <module-name> [OPTIONS]
@@ -24,6 +25,7 @@
 # Examples:
 #   sudo ./install-all.sh --module freeswitch
 #   sudo ./install-all.sh --module mod_google_transcribe
+#   sudo ./install-all.sh --module mod_google_transcribe_async
 #   sudo ./install-all.sh --module all --build-cpus 8
 # ============================================================================
 
@@ -50,7 +52,7 @@ MANIFEST_FILE="$(cd "${SCRIPT_DIR}/.." && pwd)/.freeswitch-install-manifest.txt"
 LOG_DIR="/tmp/freeswitch-install-logs"
 
 # Valid module names
-VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe")
+VALID_MODULES=("all" "freeswitch" "mod_audio_fork" "mod_aws_transcribe" "mod_deepgram_transcribe" "mod_google_transcribe" "mod_google_transcribe_async")
 
 # Create log directory
 mkdir -p "$LOG_DIR"
@@ -203,6 +205,7 @@ while [[ $# -gt 0 ]]; do
             echo "  mod_aws_transcribe       Install only mod_aws_transcribe and dependencies"
             echo "  mod_deepgram_transcribe  Install only mod_deepgram_transcribe and dependencies"
             echo "  mod_google_transcribe    Install only mod_google_transcribe and dependencies"
+            echo "  mod_google_transcribe_async  Install only mod_google_transcribe_async (async gRPC)"
             echo ""
             echo "Options:"
             echo "  --freeswitch-prefix PATH  FreeSWITCH installation directory (default: /usr/local/freeswitch)"
@@ -267,6 +270,9 @@ if should_install_module "mod_deepgram_transcribe"; then
 fi
 if should_install_module "mod_google_transcribe"; then
     echo "  Install mod_google_transcribe: Yes"
+fi
+if should_install_module "mod_google_transcribe_async"; then
+    echo "  Install mod_google_transcribe_async: Yes"
 fi
 echo ""
 
@@ -435,8 +441,8 @@ if should_install_module "mod_aws_transcribe"; then
     fi
 fi
 
-# gRPC (for mod_google_transcribe)
-if should_install_module "mod_google_transcribe"; then
+# gRPC (for mod_google_transcribe and mod_google_transcribe_async)
+if should_install_module "mod_google_transcribe" || should_install_module "mod_google_transcribe_async"; then
     if ! command -v protoc &> /dev/null || ! command -v grpc_cpp_plugin &> /dev/null; then
         log_substep "Installing gRPC from system packages..."
 
@@ -465,8 +471,8 @@ if should_install_module "mod_google_transcribe"; then
     fi
 fi
 
-# Google Cloud Speech API Proto Definitions (for mod_google_transcribe)
-if should_install_module "mod_google_transcribe"; then
+# Google Cloud Speech API Proto Definitions (for mod_google_transcribe and mod_google_transcribe_async)
+if should_install_module "mod_google_transcribe" || should_install_module "mod_google_transcribe_async"; then
     if [ ! -d "/usr/local/include/googleapis/google" ]; then
         log_substep "Downloading and generating Google Cloud Speech API proto files..."
         cd /usr/local/src || exit 1
@@ -1010,6 +1016,89 @@ else
 fi
 
 # ============================================================================
+# Step 8: Build mod_google_transcribe_async
+# ============================================================================
+if should_install_module "mod_google_transcribe_async"; then
+    log_step "[Step 8] Building mod_google_transcribe_async (Async gRPC Version)"
+
+    # 1. Navigate to the module directory
+    cd ${SCRIPT_DIR}/../modules/mod_google_transcribe_async || exit 1
+
+    # 2. Check if V2 proto object files exist; if not, compile them
+    # This allows mod_google_transcribe_async to be installed independently
+    if [ ! -f "/usr/local/include/googleapis/cloud_speech_v2.pb.o" ]; then
+        log_substep "Compiling Google Speech V2 proto files (required for async module)..."
+        
+        cd /usr/local/include/googleapis || exit 1
+
+        # Compile v2 Speech API files
+        log_command "v2 proto files" "${LOG_DIR}/mod_google_async_v2_protos.log" \
+            g++ -fPIC -c -std=c++17 \
+                -I. \
+                $(pkg-config --cflags grpc++ protobuf) \
+                google/cloud/speech/v2/cloud_speech.pb.cc \
+                google/cloud/speech/v2/cloud_speech.grpc.pb.cc
+        check_success "Failed to compile v2 proto files" "${LOG_DIR}/mod_google_async_v2_protos.log"
+        
+        # Rename v2 object files to avoid conflicts
+        mv cloud_speech.pb.o cloud_speech_v2.pb.o 2>/dev/null || true
+        mv cloud_speech.grpc.pb.o cloud_speech_v2.grpc.pb.o 2>/dev/null || true
+
+        # Compile common API proto files (if not already compiled)
+        if [ ! -f "/usr/local/include/googleapis/annotations.pb.o" ]; then
+            log_command "common proto files" "${LOG_DIR}/mod_google_async_common_protos.log" \
+                g++ -fPIC -c -std=c++17 \
+                    -I. \
+                    $(pkg-config --cflags grpc++ protobuf) \
+                    google/api/*.pb.cc \
+                    google/rpc/*.pb.cc \
+                    google/longrunning/*.pb.cc \
+                    google/longrunning/*.grpc.pb.cc
+            check_success "Failed to compile common proto files" "${LOG_DIR}/mod_google_async_common_protos.log"
+        fi
+
+        cd ${SCRIPT_DIR}/../modules/mod_google_transcribe_async || exit 1
+    fi
+
+    # 3. Compile the single C++ source file
+    log_substep "Compiling mod_google_transcribe_async.cpp..."
+    log_command "mod_google_transcribe_async compile" "${LOG_DIR}/mod_google_async_compile.log" \
+        g++ -fPIC -c -std=c++17 \
+            -I${FS_PREFIX}/include/freeswitch \
+            -I/usr/local/include/googleapis \
+            -I/usr/local/include \
+            $(pkg-config --cflags grpc++ protobuf) \
+            mod_google_transcribe_async.cpp
+    check_success "Failed to compile mod_google_transcribe_async.cpp" "${LOG_DIR}/mod_google_async_compile.log"
+
+    # 4. Link the Shared Object (.so)
+    log_substep "Linking mod_google_transcribe_async.so..."
+    log_command "mod_google_transcribe_async link" "${LOG_DIR}/mod_google_async_link.log" \
+        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe_async.so \
+            mod_google_transcribe_async.o \
+            /usr/local/include/googleapis/cloud_speech_v2.pb.o \
+            /usr/local/include/googleapis/cloud_speech_v2.grpc.pb.o \
+            /usr/local/include/googleapis/annotations.pb.o \
+            /usr/local/include/googleapis/http.pb.o \
+            /usr/local/include/googleapis/client.pb.o \
+            /usr/local/include/googleapis/field_behavior.pb.o \
+            /usr/local/include/googleapis/field_info.pb.o \
+            /usr/local/include/googleapis/launch_stage.pb.o \
+            /usr/local/include/googleapis/resource.pb.o \
+            /usr/local/include/googleapis/status.pb.o \
+            /usr/local/include/googleapis/operations.pb.o \
+            /usr/local/include/googleapis/operations.grpc.pb.o \
+            $(pkg-config --libs grpc++ grpc protobuf) \
+            -lpthread -lssl -lcrypto
+            
+    check_success "Failed to link mod_google_transcribe_async" "${LOG_DIR}/mod_google_async_link.log"
+
+    log_success "mod_google_transcribe_async built and installed"
+else
+    log_step "[Step 8] Skipping mod_google_transcribe_async"
+fi
+
+# ============================================================================
 # Configure FreeSWITCH modules.conf.xml
 # ============================================================================
 
@@ -1034,6 +1123,9 @@ if [ "$MODULE" != "freeswitch" ]; then
             fi
             if should_install_module "mod_google_transcribe" && ! grep -q "mod_google_transcribe" "$MODULES_CONF"; then
                 sed -i '/<\/modules>/i \    <load module="mod_google_transcribe"/>' "$MODULES_CONF"
+            fi
+            if should_install_module "mod_google_transcribe_async" && ! grep -q "mod_google_transcribe_async" "$MODULES_CONF"; then
+                sed -i '/<\/modules>/i \    <load module="mod_google_transcribe_async"/>' "$MODULES_CONF"
             fi
 
             log_success "modules.conf.xml configured"
@@ -1091,6 +1183,14 @@ if [ "$NO_VALIDATION" = false ] && [ "$MODULE" != "freeswitch" ]; then
             log_success "mod_google_transcribe.so exists"
         else
             echo -e "${RED}✗ mod_google_transcribe.so NOT FOUND${NC}"
+        fi
+    fi
+
+    if should_install_module "mod_google_transcribe_async"; then
+        if [ -f "${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe_async.so" ]; then
+            log_success "mod_google_transcribe_async.so exists"
+        else
+            echo -e "${RED}✗ mod_google_transcribe_async.so NOT FOUND${NC}"
         fi
     fi
 fi

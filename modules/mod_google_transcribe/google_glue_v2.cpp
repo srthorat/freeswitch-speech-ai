@@ -3,6 +3,7 @@
 #include <grpc++/grpc++.h>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 
 #include "mod_google_transcribe.h"
 #include "gstreamer.h"
@@ -46,7 +47,8 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
     int punctuation, 
     const char* model, 
     int enhanced, 
-	const char* hints) : m_session(session), m_writesDone(false), m_connected(false) {
+	const char* hints) : m_session(session), m_writesDone(false), m_connected(false),
+    m_audioBuffer(CHUNKSIZE, 100) {  // 100 chunks = ~1 second of stereo 8kHz audio
   
     switch_channel_t *channel = switch_core_session_get_channel(session);
     const char* var;
@@ -141,6 +143,12 @@ GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::
             config->mutable_features()->set_multi_channel_mode(RecognitionFeatures_MultiChannelMode_SEPARATE_RECOGNITION_PER_CHANNEL);
             switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, 
                 "V2 API: multi_channel_mode=SEPARATE_RECOGNITION_PER_CHANNEL (auto-enabled for stereo, channel_tag will map: 1=caller/ch_0, 2=agent/ch_1)\n");
+            
+            // Auto-enable voice activity events for stereo mode to help diagnose channel timing
+            // This sends SPEECH_ACTIVITY_BEGIN and SPEECH_ACTIVITY_END events
+            streaming_config->mutable_streaming_features()->set_enable_voice_activity_events(true);
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_INFO, 
+                "V2 API: enable_voice_activity_events=true (auto-enabled for stereo for timing diagnostics)\n");
         } else {
             switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(m_session), SWITCH_LOG_DEBUG, "V2 API: mono mode, channels=1\n");
         }
@@ -314,10 +322,41 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
     
     for (int r = 0; r < response.results_size(); ++r) {
       auto result = response.results(r);
+      int channel_tag = result.channel_tag();
+      
+      // Track first result timing per channel for latency analysis
+      switch_time_t now = switch_time_now();
+      if (channel_tag == 1 && !cb->got_first_result_ch1) {
+        cb->got_first_result_ch1 = 1;
+        cb->first_result_time_ch1 = now;
+        double latency_ms = (now - cb->stream_start_time) / 1000.0;
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, 
+          "[CHANNEL-LATENCY] First result for channel_tag=1 (caller): latency=%.0fms from stream start\n", latency_ms);
+        
+        // If ch2 was already received, report the gap
+        if (cb->got_first_result_ch2) {
+          double diff_ms = (now - cb->first_result_time_ch2) / 1000.0;
+          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, 
+            "[CHANNEL-LATENCY] Channel 1 arrived %.0fms AFTER channel 2 - investigating Google multi-channel processing\n", diff_ms);
+        }
+      } else if (channel_tag == 2 && !cb->got_first_result_ch2) {
+        cb->got_first_result_ch2 = 1;
+        cb->first_result_time_ch2 = now;
+        double latency_ms = (now - cb->stream_start_time) / 1000.0;
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, 
+          "[CHANNEL-LATENCY] First result for channel_tag=2 (agent): latency=%.0fms from stream start\n", latency_ms);
+        
+        // If ch1 was already received, report the gap
+        if (cb->got_first_result_ch1) {
+          double diff_ms = (now - cb->first_result_time_ch1) / 1000.0;
+          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, 
+            "[CHANNEL-LATENCY] Channel 2 arrived %.0fms after channel 1\n", diff_ms);
+        }
+      }
       
       // Debug logging for channel_tag (like V1)
       switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "V2 API: result[%d] channel_tag=%d, is_final=%s, stability=%.2f\n",
-        r, result.channel_tag(), result.is_final() ? "true" : "false", result.stability());
+        r, channel_tag, result.is_final() ? "true" : "false", result.stability());
       
       cJSON * jResult = cJSON_CreateObject();
       cJSON * jAlternatives = cJSON_CreateArray();
@@ -401,10 +440,19 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
       }
     }
     else if (speech_event_type == StreamingRecognizeResponse_SpeechEventType_SPEECH_ACTIVITY_BEGIN) {
-      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "grpc_read_thread: got SPEECH_ACTIVITY_BEGIN\n") ;
+      // Log with timing info - speech_event_offset tells us when in the audio stream this occurred
+      auto offset = response.speech_event_offset();
+      int32_t offset_ms = (int32_t)(offset.seconds() * 1000 + offset.nanos() / 1000000);
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, 
+        "V2 API: SPEECH_ACTIVITY_BEGIN at offset=%dms (voice detected in audio stream)\n", offset_ms);
+      cb->responseHandler(session, "speech_activity_begin", cb->bugname);
     }
     else if (speech_event_type == StreamingRecognizeResponse_SpeechEventType_SPEECH_ACTIVITY_END) {
-      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "grpc_read_thread: got SPEECH_ACTIVITY_END\n") ;
+      auto offset = response.speech_event_offset();
+      int32_t offset_ms = (int32_t)(offset.seconds() * 1000 + offset.nanos() / 1000000);
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, 
+        "V2 API: SPEECH_ACTIVITY_END at offset=%dms (silence detected in audio stream)\n", offset_ms);
+      cb->responseHandler(session, "speech_activity_end", cb->bugname);
     }
     switch_core_session_rwunlock(session);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "grpc_read_thread: got %d responses\n", response.results_size());
@@ -445,27 +493,44 @@ static void *SWITCH_THREAD_FUNC grpc_read_thread(switch_thread_t *thread, void *
 
 template <>
 bool GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::write(void* data, uint32_t datalen) {
-	// Zero-latency direct write - drop audio if not connected yet
+	// Wait for connection before sending
 	if (!m_connected) {
-		return true;  // Drop silently during connection setup
+		return true;
 	}
 	
-	// V2 API: recognizer field is required on every request (outside the oneof)
-	// Verify it's still set after clear_streaming_config()
-    m_request.clear_streaming_config();
-	m_request.set_audio(data, datalen);
+	// Add current audio data to accumulation buffer
+	m_accumBuffer.insert(m_accumBuffer.end(), (uint8_t*)data, (uint8_t*)data + datalen);
 	
-	// Debug: log first few writes to verify recognizer is preserved
-	static int write_count = 0;
-	if (write_count < 3) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
-			"V2 write #%d: datalen=%u, recognizer='%s'\n", 
-			write_count, datalen, m_request.recognizer().c_str());
-		write_count++;
+	// Only send when we have accumulated enough data (100ms target = 3200 bytes for 8kHz stereo)
+	// This is critical for Google V2 multichannel: smaller chunks cause channel 1 to be delayed
+	// Python reference implementation uses 100ms chunks and works correctly
+	if (m_accumBuffer.size() >= ACCUMULATE_TARGET) {
+		m_request.clear_streaming_config();
+		m_request.set_audio(m_accumBuffer.data(), m_accumBuffer.size());
+		bool ok = m_streamer->Write(m_request);
+		if (!ok) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, 
+				"V2 API: Failed to write accumulated audio chunk (%zu bytes)\n", m_accumBuffer.size());
+			return false;
+		}
+		m_accumBuffer.clear();
 	}
 	
-	bool ok = m_streamer->Write(m_request);
-	return ok;
+	return true;
+}
+
+template <>
+void GStreamer<StreamingRecognizeRequest, StreamingRecognizeResponse, Speech::Stub>::flushAccumulatedAudio() {
+	// Flush any remaining accumulated audio before ending the stream
+	// This ensures we don't lose the final portion of speech
+	if (m_connected && !m_writesDone && m_accumBuffer.size() > 0) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, 
+			"V2 API: Flushing final accumulated audio (%zu bytes) before writesDone\n", m_accumBuffer.size());
+		m_request.clear_streaming_config();
+		m_request.set_audio(m_accumBuffer.data(), m_accumBuffer.size());
+		m_streamer->Write(m_request);
+		m_accumBuffer.clear();
+	}
 }
 
 extern "C" {

@@ -466,12 +466,13 @@ SWITCH_STANDARD_API(transcribe2_function)
 					}
 				}
 
-				// Auto-upgrade to 16kHz for stereo mode (matching AWS behavior)
+				// For stereo mode, use 8kHz passthrough (no resampling)
+				// This ensures proper channel separation with Google V2 API
+				// Resampling to 16kHz causes channel timing issues
 				if ((flags & SMBF_STEREO) && (sampling == 0 || sampling == 8000)) {
+					sampling = 8000;  // Use 8kHz stereo passthrough
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-						"transcribe2: Stereo mode detected - auto-upgrading sample rate from %dHz to 16000Hz for better quality\n",
-						sampling ? sampling : 8000);
-					sampling = 16000;
+						"transcribe2: Using 8kHz stereo passthrough (no resampling) for proper channel separation\n");
 				}
 
 				// Parse metadata (argv[6])

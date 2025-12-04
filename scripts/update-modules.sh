@@ -130,7 +130,7 @@ fi
 if [ "$AUTO_YES" = false ]; then
     echo "This will:"
     echo "  1. Pull latest code from repository"
-    echo "  2. Rebuild all modules (mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe, mod_google_transcribev2)"
+    echo "  2. Rebuild all modules (mod_audio_fork, mod_aws_transcribe, mod_deepgram_transcribe, mod_google_transcribe, mod_google_transcribe_async)"
     echo "  3. Replace existing modules"
     if [ "$NO_RESTART" = false ]; then
         echo "  4. Restart FreeSWITCH"
@@ -174,7 +174,7 @@ echo "Backing up existing modules..."
 BACKUP_DIR="${FS_PREFIX}/lib/freeswitch/mod/.backup.$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
-for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribev2; do
+for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe mod_google_transcribe_async; do
     if [ -f "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" ]; then
         cp "${FS_PREFIX}/lib/freeswitch/mod/${module}.so" "$BACKUP_DIR/"
         echo -e "${GREEN}✓${NC} Backed up ${module}.so"
@@ -260,25 +260,85 @@ check_success "Failed to link mod_deepgram_transcribe" "${LOG_DIR}/update_mod_de
 
 echo -e "${GREEN}✓ mod_deepgram_transcribe${NC}"
 
-# Build mod_google_transcribev2
-echo "Building mod_google_transcribev2..."
-cd ${SCRIPT_DIR}/../modules/mod_google_transcribev2
+# Build mod_google_transcribe
+echo "Building mod_google_transcribe..."
+if [ -d "${SCRIPT_DIR}/../modules/mod_google_transcribe" ]; then
+    cd ${SCRIPT_DIR}/../modules/mod_google_transcribe
 
-# Build using Makefile
-echo "  Cleaning previous build..."
-make clean > /dev/null 2>&1
+    # Clean previous build
+    rm -f *.o *.so
 
-echo "  Building mod_google_transcribev2..."
-log_command "mod_google_transcribev2 build" "${LOG_DIR}/update_mod_google_transcribev2_make.log" \
-    make -j ${BUILD_CPUS} FS_PREFIX=${FS_PREFIX}
-check_success "Failed to build mod_google_transcribev2" "${LOG_DIR}/update_mod_google_transcribev2_make.log"
+    echo "  Compiling mod_google_transcribe.c..."
+    log_command "mod_google_transcribe.c" "${LOG_DIR}/update_mod_google_transcribe_c.log" \
+        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_google_transcribe.c
+    check_success "Failed to compile mod_google_transcribe.c" "${LOG_DIR}/update_mod_google_transcribe_c.log"
 
-echo "  Installing mod_google_transcribev2..."
-log_command "mod_google_transcribev2 install" "${LOG_DIR}/update_mod_google_transcribev2_install.log" \
-    make install FS_PREFIX=${FS_PREFIX}
-check_success "Failed to install mod_google_transcribev2" "${LOG_DIR}/update_mod_google_transcribev2_install.log"
+    echo "  Compiling mod_google_transcribe C++ sources..."
+    log_command "mod_google_transcribe C++" "${LOG_DIR}/update_mod_google_transcribe_cpp.log" \
+        g++ -fPIC -c -std=c++17 \
+            -I${FS_PREFIX}/include/freeswitch \
+            -I/usr/local/include/googleapis \
+            -I/usr/local/include \
+            $(pkg-config --cflags grpc++ protobuf) \
+            google_glue.cpp google_glue_v1.cpp google_glue_v2.cpp
+    check_success "Failed to compile mod_google_transcribe C++ sources" "${LOG_DIR}/update_mod_google_transcribe_cpp.log"
 
-echo -e "${GREEN}✓ mod_google_transcribev2${NC}"
+    echo "  Linking mod_google_transcribe..."
+    log_command "mod_google_transcribe link" "${LOG_DIR}/update_mod_google_transcribe_link.log" \
+        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe.so \
+            mod_google_transcribe.o google_glue.o google_glue_v1.o google_glue_v2.o \
+            /usr/local/include/googleapis/*.o \
+            $(pkg-config --libs grpc++ grpc protobuf) \
+            -lpthread -lssl -lcrypto
+    check_success "Failed to link mod_google_transcribe" "${LOG_DIR}/update_mod_google_transcribe_link.log"
+
+    echo -e "${GREEN}✓ mod_google_transcribe${NC}"
+else
+    echo -e "${YELLOW}⚠${NC}  mod_google_transcribe directory not found - skipping"
+fi
+
+# Build mod_google_transcribe_async
+echo "Building mod_google_transcribe_async..."
+if [ -d "${SCRIPT_DIR}/../modules/mod_google_transcribe_async" ]; then
+    cd ${SCRIPT_DIR}/../modules/mod_google_transcribe_async
+
+    # Clean previous build
+    rm -f *.o *.so
+
+    echo "  Compiling mod_google_transcribe_async.cpp..."
+    log_command "mod_google_transcribe_async compile" "${LOG_DIR}/update_mod_google_async_compile.log" \
+        g++ -fPIC -c -std=c++17 \
+            -I${FS_PREFIX}/include/freeswitch \
+            -I/usr/local/include/googleapis \
+            -I/usr/local/include \
+            $(pkg-config --cflags grpc++ protobuf) \
+            mod_google_transcribe_async.cpp
+    check_success "Failed to compile mod_google_transcribe_async.cpp" "${LOG_DIR}/update_mod_google_async_compile.log"
+
+    echo "  Linking mod_google_transcribe_async..."
+    log_command "mod_google_transcribe_async link" "${LOG_DIR}/update_mod_google_async_link.log" \
+        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_google_transcribe_async.so \
+            mod_google_transcribe_async.o \
+            /usr/local/include/googleapis/cloud_speech_v2.pb.o \
+            /usr/local/include/googleapis/cloud_speech_v2.grpc.pb.o \
+            /usr/local/include/googleapis/annotations.pb.o \
+            /usr/local/include/googleapis/http.pb.o \
+            /usr/local/include/googleapis/client.pb.o \
+            /usr/local/include/googleapis/field_behavior.pb.o \
+            /usr/local/include/googleapis/field_info.pb.o \
+            /usr/local/include/googleapis/launch_stage.pb.o \
+            /usr/local/include/googleapis/resource.pb.o \
+            /usr/local/include/googleapis/status.pb.o \
+            /usr/local/include/googleapis/operations.pb.o \
+            /usr/local/include/googleapis/operations.grpc.pb.o \
+            $(pkg-config --libs grpc++ grpc protobuf) \
+            -lpthread -lssl -lcrypto
+    check_success "Failed to link mod_google_transcribe_async" "${LOG_DIR}/update_mod_google_async_link.log"
+
+    echo -e "${GREEN}✓ mod_google_transcribe_async${NC}"
+else
+    echo -e "${YELLOW}⚠${NC}  mod_google_transcribe_async directory not found - skipping"
+fi
 
 echo -e "${GREEN}✓ All modules rebuilt${NC}"
 
@@ -319,7 +379,8 @@ echo "Updated modules:"
 echo "  ✓ mod_audio_fork"
 echo "  ✓ mod_aws_transcribe"
 echo "  ✓ mod_deepgram_transcribe"
-echo "  ✓ mod_google_transcribev2"
+echo "  ✓ mod_google_transcribe"
+echo "  ✓ mod_google_transcribe_async"
 echo ""
 echo "Backup location: $BACKUP_DIR"
 echo ""

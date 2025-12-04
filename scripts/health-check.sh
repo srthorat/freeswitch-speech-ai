@@ -102,7 +102,7 @@ fi
 # Check 3: Modules loaded
 echo ""
 echo "Checking modules loaded:"
-for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
+for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe mod_google_transcribe_async; do
     echo -n "  $module... "
     if LD_LIBRARY_PATH=/usr/local/lib ${FS_PREFIX}/bin/fs_cli -x "module_exists ${module}" 2>/dev/null | grep -q "true"; then
         echo -e "${GREEN}✓ Loaded${NC}"
@@ -115,7 +115,7 @@ done
 # Check 4: Module dependencies
 echo ""
 echo "Checking module dependencies:"
-for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe; do
+for module in mod_audio_fork mod_aws_transcribe mod_deepgram_transcribe mod_google_transcribe mod_google_transcribe_async; do
     MODULE_PATH="${FS_PREFIX}/lib/freeswitch/mod/${module}.so"
     if [ -f "$MODULE_PATH" ]; then
         echo -n "  $module dependencies... "
@@ -152,7 +152,7 @@ echo "Checking configuration files:"
 MODULES_CONF="${FS_PREFIX}/conf/autoload_configs/modules.conf.xml"
 echo -n "  modules.conf.xml... "
 if [ -f "$MODULES_CONF" ]; then
-    if grep -q "mod_audio_fork\|mod_aws_transcribe\|mod_deepgram_transcribe" "$MODULES_CONF"; then
+    if grep -q "mod_audio_fork\|mod_aws_transcribe\|mod_deepgram_transcribe\|mod_google_transcribe" "$MODULES_CONF"; then
         echo -e "${GREEN}✓ Configured${NC}"
     else
         echo -e "${YELLOW}⚠${NC}  Modules not configured"
