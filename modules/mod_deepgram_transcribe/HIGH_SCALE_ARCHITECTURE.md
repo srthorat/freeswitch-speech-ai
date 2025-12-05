@@ -11,7 +11,7 @@ This document describes the high-performance architecture implemented to support
 | Phase 3 | Zero-Copy Frames | ✅ Complete | Reserve/commit pattern |
 | Phase 4 | Async Pusher Integration | ✅ Complete | Non-blocking HTTP delivery |
 | Phase 5 | Lock-Free MPSC Queues | ✅ Complete | For pending WebSocket ops |
-| Phase 6 | Shared-Ptr Session Lifecycle | ✅ Complete | `DgSession` with self-anchoring |
+| Phase 6 | Shared-Ptr Session Lifecycle | ✅ Available | `DgSession` class ready; current code uses FS session locking |
 
 **Last Updated**: December 5, 2025
 
@@ -423,19 +423,38 @@ The `pendingConnects` vector is still needed for `findPendingConnect()` during
 
 ## Phase 6: Shared-Ptr Session Lifecycle
 
-### Implementation: `dg_session.hpp`, `dg_session.cpp`
+### Implementation Status: AVAILABLE (Alternative Approach Active)
 
-Crash-safe session management using `std::shared_ptr` with self-anchoring pattern.
+The `DgSession` class with `shared_ptr` lifecycle management is **fully implemented** in 
+`dg_session.hpp` and `dg_session.cpp`. However, the current production code in 
+`dg_transcribe_glue.cpp` uses FreeSWITCH's native session locking mechanism, which 
+provides equivalent crash-safety.
 
-#### Problem
+#### Current Implementation (Active)
 
-Original `private_t*` lifecycle issues:
-- Raw pointer stored on media bug user data
-- Manual cleanup in `destroy_tech_pvt()`
-- Crash risk if async callbacks arrive after session freed
-- No protection against double-free
+The `dg_transcribe_glue.cpp` code uses FreeSWITCH session locking for safety:
 
-#### Solution: DgSession with enable_shared_from_this
+```cpp
+// In eventCallback() - WebSocket message handler
+switch_core_session_t* session = switch_core_session_locate(sessionId);  // Takes read lock
+if (session) {
+    // Access tech_pvt safely while session lock is held
+    private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
+    // ... process callback ...
+    switch_core_session_rwunlock(session);  // Release lock
+}
+// If session gone, locate() returns NULL - no crash risk
+```
+
+**Safety Guarantees:**
+1. `switch_core_session_locate()` returns NULL if session is destroyed
+2. Read lock prevents session destruction while callback runs
+3. `tech_pvt` is only accessed within locked region
+4. Memory pools (`PrivateDataPool`) ensure no fragmentation
+
+#### Alternative Implementation (Available)
+
+The `DgSession` class provides a modern C++ approach:
 
 ```cpp
 class DgSession : public std::enable_shared_from_this<DgSession> {
@@ -483,18 +502,26 @@ void DgSession::onConnectComplete() {
 
 This ensures the session stays alive while async WebSocket operations are pending.
 
+#### When to Use DgSession
+
+Consider migrating to `DgSession` when:
+- Porting to a non-FreeSWITCH environment
+- Building unit tests that mock FreeSWITCH sessions
+- Preferring explicit RAII over implicit framework locking
+- Adding complex async operations beyond WebSocket callbacks
+
 #### PrivateDataPool
 
 Pre-allocated pool for `private_t` structures:
 - Avoids malloc/free per session
 - Lock-free acquire/release using atomic CAS
-- Configurable via `MOD_DEEPGRAM_PRIVATE_POOL_SIZE`
+- Configurable via `MOD_DEEPGRAM_PVT_POOL_SIZE`
 
 ```cpp
 class PrivateDataPool {
     static constexpr size_t DEFAULT_POOL_SIZE = 2000;
     
-    static bool Init(size_t capacity);
+    static bool Initialize(size_t capacity);
     static private_t* Acquire();
     static void Release(private_t* p);
 };

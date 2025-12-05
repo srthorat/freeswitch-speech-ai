@@ -9,7 +9,7 @@
 | Lock-free MPSC pending queues | Multiple producer threads, single LWS consumer | Scales to 5K+ calls |
 | Async non-blocking Pusher | Never block audio callback on HTTP I/O | Consistent frame timing |
 | Object pooling for AudioPipe | Reduce malloc/free overhead | Pre-allocated slots |
-| shared_ptr session lifecycle | Crash-safe async callbacks | No use-after-free |
+| shared_ptr session lifecycle | Crash-safe async callbacks | FS session lock (active), DgSession (available) |
 | 3 LWS service threads (default) | Handle ~1500 concurrent calls | Tunable via env var |
 
 ## Alternatives Considered
@@ -1366,6 +1366,27 @@ enum LwsState {
 ### 11.4 DgSession (`dg_session.hpp/cpp`)
 
 **Purpose**: Crash-safe session lifecycle management using `shared_ptr` and self-anchoring pattern.
+
+**Implementation Status**: The `DgSession` class is **fully implemented** and available, but the current 
+production code in `dg_transcribe_glue.cpp` uses FreeSWITCH's native session locking mechanism instead.
+Both approaches provide crash-safety:
+
+| Approach | Mechanism | Used By |
+|----------|-----------|---------|
+| FreeSWITCH Session Locking | `switch_core_session_locate()` + rwlock | `dg_transcribe_glue.cpp` (current) |
+| DgSession shared_ptr | Self-anchoring pattern | Available for future use |
+
+**Current Implementation (Active)**:
+```cpp
+// In eventCallback() - FreeSWITCH's session locking
+switch_core_session_t* session = switch_core_session_locate(sessionId);  // Read lock
+if (session) {
+    private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
+    // ... safe to access tech_pvt ...
+    switch_core_session_rwunlock(session);  // Release lock
+}
+// If session is gone, locate() returns NULL - no crash
+```
 
 **Problem Solved**: Async WebSocket callbacks can fire after the FreeSWITCH session is destroyed, causing use-after-free crashes.
 
