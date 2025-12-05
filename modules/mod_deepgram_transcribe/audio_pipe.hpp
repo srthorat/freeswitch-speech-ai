@@ -13,6 +13,7 @@
 
 #include <libwebsockets.h>
 #include "lockfree_ring_buffer.hpp"
+#include "lockfree_mpsc_queue.hpp"
 
 namespace deepgram {
 
@@ -250,14 +251,35 @@ private:
   static struct lws_context *contexts[];
   static unsigned int numContexts;
   static std::string protocolName;
+  
+  /* ============================================================================
+   * LOCK-FREE PENDING QUEUES (HIGH SCALE OPTIMIZATION)
+   * 
+   * Replaces mutex-guarded std::vector with lock-free MPSC queues.
+   * Multiple producer threads (frame callbacks) can push concurrently,
+   * single consumer thread (LWS service) processes items.
+   * 
+   * This eliminates ~250K mutex operations per second at 5K calls!
+   * ============================================================================ */
+  
+  // Lock-free MPSC queues for pending operations
+  // Using bounded queue with 16K capacity (supports burst of pending ops)
+  static BoundedMPSCQueue<AudioPipe, 16384> pendingConnectsQueue;
+  static BoundedMPSCQueue<AudioPipe, 16384> pendingDisconnectsQueue;
+  static BoundedMPSCQueue<AudioPipe, 16384> pendingWritesQueue;
+  
+  // Legacy mutex-based vectors (kept for fallback/transition)
+  // TODO: Remove after lock-free queues are verified stable
   static std::mutex mutex_connects;
   static std::mutex mutex_disconnects;
   static std::mutex mutex_writes;
-  // HIGH SCALE: Using vector instead of list for better cache locality
-  // At 5K calls, list traversal causes cache misses; vector is contiguous
   static std::vector<AudioPipe*> pendingConnects;
   static std::vector<AudioPipe*> pendingDisconnects;
   static std::vector<AudioPipe*> pendingWrites;
+  
+  // Flag to enable/disable lock-free queues (for A/B testing)
+  static std::atomic<bool> useLockFreeQueues;
+  
   static log_emit_function logger;
 
   static std::mutex mapMutex;
@@ -307,6 +329,11 @@ private:
   bool m_finished;
   std::string m_bugname;
   std::promise<void> m_promise;
+  
+public:
+  // MPSC queue node for lock-free pending queues
+  // Public because BoundedMPSCQueue needs access
+  std::atomic<AudioPipe*> mpsc_next{nullptr};
 };
 
 } // namespace deepgram

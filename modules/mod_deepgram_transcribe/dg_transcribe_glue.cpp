@@ -18,6 +18,7 @@
 #include "mod_deepgram_transcribe.h"
 #include "audio_pipe.hpp"
 #include "memory_pool.hpp"
+#include "dg_session.hpp"
 
 #define RTP_PACKETIZATION_PERIOD 20
 #define FRAME_SIZE_8000  320 /*which means each 20ms frame as 320 bytes at 8 khz (1 channel only)*/
@@ -606,6 +607,17 @@ extern "C" {
       switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
         "mod_deepgram_transcribe: AudioPipe pool init failed - using direct allocation\n");
     }
+    
+    // Initialize PrivateData memory pool for high-scale operation
+    const char* pvtPoolSizeEnv = std::getenv("MOD_DEEPGRAM_PVT_POOL_SIZE");
+    size_t pvtPoolSize = pvtPoolSizeEnv ? std::atoi(pvtPoolSizeEnv) : 2000;  // Default 2K sessions
+    if (deepgram::PrivateDataPool::Initialize(pvtPoolSize)) {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, 
+        "mod_deepgram_transcribe: PrivateData pool initialized (capacity=%zu)\n", pvtPoolSize);
+    } else {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+        "mod_deepgram_transcribe: PrivateData pool init failed - using malloc\n");
+    }
 
 		const char* apiKey = std::getenv("DEEPGRAM_API_KEY");
 		if (NULL == apiKey) {
@@ -620,7 +632,11 @@ extern "C" {
   }
 
   switch_status_t dg_transcribe_cleanup() {
-    // Shutdown AudioPipe pool first (log stats before cleanup)
+    // Shutdown PrivateData pool first
+    deepgram::PrivateDataPool::Shutdown();
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "PrivateData pool shutdown complete\n");
+    
+    // Shutdown AudioPipe pool (log stats before cleanup)
     deepgram::AudioPipePool::shutdown();
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "AudioPipe pool shutdown complete\n");
     

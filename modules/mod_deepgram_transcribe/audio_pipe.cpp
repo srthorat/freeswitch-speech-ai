@@ -48,6 +48,12 @@ int AudioPipe::lws_callback(struct lws *wsi,
         AudioPipe* ap = findPendingConnect(wsi);
         if (ap) {
           std::string apiKey = ap->getApiKey();
+          if (apiKey.empty()) {
+            lwsl_err("AudioPipe: API key is EMPTY for session %s\n", ap->m_uuid.c_str());
+          } else {
+            lwsl_info("AudioPipe: Adding auth header for session %s (key length=%zu)\n", 
+                      ap->m_uuid.c_str(), apiKey.length());
+          }
           unsigned char **p = (unsigned char **)in, *end = (*p) + len;
           char b[256];
           memset(b, 0, sizeof(b));
@@ -55,6 +61,8 @@ int AudioPipe::lws_callback(struct lws *wsi,
           strcpy(b + 6, apiKey.c_str());
 
           if (lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_AUTHORIZATION, (unsigned char *)b, strlen(b), p, end)) return -1;
+        } else {
+          lwsl_err("AudioPipe: LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER - no pending connect found for wsi %p\n", wsi);
         }
       }
       break;
@@ -265,12 +273,23 @@ struct lws_context *AudioPipe::contexts[] = {
 unsigned int AudioPipe::numContexts = 0;
 unsigned int AudioPipe::nchild = 0;
 std::string AudioPipe::protocolName;
+
+// Lock-free MPSC queues (HIGH SCALE)
+BoundedMPSCQueue<AudioPipe, 16384> AudioPipe::pendingConnectsQueue;
+BoundedMPSCQueue<AudioPipe, 16384> AudioPipe::pendingDisconnectsQueue;
+BoundedMPSCQueue<AudioPipe, 16384> AudioPipe::pendingWritesQueue;
+
+// Legacy mutex-guarded vectors (fallback)
 std::mutex AudioPipe::mutex_connects;
 std::mutex AudioPipe::mutex_disconnects;
 std::mutex AudioPipe::mutex_writes;
 std::vector<AudioPipe*> AudioPipe::pendingConnects;
 std::vector<AudioPipe*> AudioPipe::pendingDisconnects;
 std::vector<AudioPipe*> AudioPipe::pendingWrites;
+
+// Flag to use lock-free queues (enabled by default)
+std::atomic<bool> AudioPipe::useLockFreeQueues{true};
+
 AudioPipe::log_emit_function AudioPipe::logger;
 std::mutex AudioPipe::mapMutex;
 std::unordered_map<std::thread::id, bool> AudioPipe::stopFlags;
@@ -278,50 +297,89 @@ std::queue<std::thread::id> AudioPipe::threadIds;
 
 
 void AudioPipe::processPendingConnects(lws_per_vhost_data *vhd) {
-  // HIGH SCALE: Use vector for better cache locality
-  std::vector<AudioPipe*> connects;
-  {
-    std::lock_guard<std::mutex> guard(mutex_connects);
-    connects.reserve(pendingConnects.size());  // Pre-allocate
-    for (auto* ap : pendingConnects) {
+  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
+    // Lock-free path: pop from MPSC queue
+    AudioPipe* ap;
+    while ((ap = pendingConnectsQueue.pop()) != nullptr) {
       if (ap->m_state == LWS_CLIENT_IDLE) {
-        connects.push_back(ap);
         ap->m_state = LWS_CLIENT_CONNECTING;
+        // CRITICAL: Add to pendingConnects vector so findPendingConnect() 
+        // can find it during LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER
+        {
+          std::lock_guard<std::mutex> guard(mutex_connects);
+          pendingConnects.push_back(ap);
+        }
+        ap->connect_client(vhd);
       }
     }
-  }
-  for (auto* ap : connects) {
-    ap->connect_client(vhd);   
+  } else {
+    // Legacy mutex path (fallback)
+    std::vector<AudioPipe*> connects;
+    {
+      std::lock_guard<std::mutex> guard(mutex_connects);
+      connects.reserve(pendingConnects.size());
+      for (auto* ap : pendingConnects) {
+        if (ap->m_state == LWS_CLIENT_IDLE) {
+          connects.push_back(ap);
+          ap->m_state = LWS_CLIENT_CONNECTING;
+        }
+      }
+    }
+    for (auto* ap : connects) {
+      ap->connect_client(vhd);
+    }
   }
 }
 
 void AudioPipe::processPendingDisconnects(lws_per_vhost_data *vhd) {
-  std::vector<AudioPipe*> disconnects;
-  {
-    std::lock_guard<std::mutex> guard(mutex_disconnects);
-    disconnects.reserve(pendingDisconnects.size());
-    for (auto* ap : pendingDisconnects) {
-      if (ap->m_state == LWS_CLIENT_DISCONNECTING) disconnects.push_back(ap);
+  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
+    // Lock-free path
+    AudioPipe* ap;
+    while ((ap = pendingDisconnectsQueue.pop()) != nullptr) {
+      if (ap->m_state == LWS_CLIENT_DISCONNECTING && ap->m_wsi) {
+        lws_callback_on_writable(ap->m_wsi);
+      }
     }
-    pendingDisconnects.clear();
-  }
-  for (auto* ap : disconnects) {
-    lws_callback_on_writable(ap->m_wsi); 
+  } else {
+    // Legacy mutex path
+    std::vector<AudioPipe*> disconnects;
+    {
+      std::lock_guard<std::mutex> guard(mutex_disconnects);
+      disconnects.reserve(pendingDisconnects.size());
+      for (auto* ap : pendingDisconnects) {
+        if (ap->m_state == LWS_CLIENT_DISCONNECTING) disconnects.push_back(ap);
+      }
+      pendingDisconnects.clear();
+    }
+    for (auto* ap : disconnects) {
+      lws_callback_on_writable(ap->m_wsi);
+    }
   }
 }
 
 void AudioPipe::processPendingWrites() {
-  std::vector<AudioPipe*> writes;
-  {
-    std::lock_guard<std::mutex> guard(mutex_writes);
-    writes.reserve(pendingWrites.size());
-    for (auto* ap : pendingWrites) {
-       if (ap->m_state == LWS_CLIENT_CONNECTED) writes.push_back(ap);
-    }  
-    pendingWrites.clear();
-  }
-  for (auto* ap : writes) {
-    lws_callback_on_writable(ap->m_wsi);
+  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
+    // Lock-free path
+    AudioPipe* ap;
+    while ((ap = pendingWritesQueue.pop()) != nullptr) {
+      if (ap->m_state == LWS_CLIENT_CONNECTED && ap->m_wsi) {
+        lws_callback_on_writable(ap->m_wsi);
+      }
+    }
+  } else {
+    // Legacy mutex path
+    std::vector<AudioPipe*> writes;
+    {
+      std::lock_guard<std::mutex> guard(mutex_writes);
+      writes.reserve(pendingWrites.size());
+      for (auto* ap : pendingWrites) {
+        if (ap->m_state == LWS_CLIENT_CONNECTED) writes.push_back(ap);
+      }
+      pendingWrites.clear();
+    }
+    for (auto* ap : writes) {
+      lws_callback_on_writable(ap->m_wsi);
+    }
   }
 }
 
@@ -358,7 +416,13 @@ AudioPipe* AudioPipe::findPendingConnect(struct lws *wsi) {
 }
 
 void AudioPipe::addPendingConnect(AudioPipe* ap) {
-  {
+  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
+    // Lock-free path
+    if (!pendingConnectsQueue.push(ap)) {
+      lwsl_err("%s LOCKFREE: pendingConnectsQueue full!\n", ap->m_uuid.c_str());
+    }
+  } else {
+    // Legacy mutex path
     std::lock_guard<std::mutex> guard(mutex_connects);
     pendingConnects.push_back(ap);
     lwsl_debug("%s after adding connect there are %lu pending connects\n", 
@@ -366,9 +430,16 @@ void AudioPipe::addPendingConnect(AudioPipe* ap) {
   }
   lws_cancel_service(contexts[nchild++ % numContexts]);
 }
+
 void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
   ap->m_state = LWS_CLIENT_DISCONNECTING;
-  {
+  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
+    // Lock-free path
+    if (!pendingDisconnectsQueue.push(ap)) {
+      lwsl_err("%s LOCKFREE: pendingDisconnectsQueue full!\n", ap->m_uuid.c_str());
+    }
+  } else {
+    // Legacy mutex path
     std::lock_guard<std::mutex> guard(mutex_disconnects);
     pendingDisconnects.push_back(ap);
     lwsl_debug("%s after adding disconnect there are %lu pending disconnects\n", 
@@ -376,8 +447,16 @@ void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
   }
   lws_cancel_service(ap->m_vhd->context);
 }
+
 void AudioPipe::addPendingWrite(AudioPipe* ap) {
-  {
+  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
+    // Lock-free path
+    if (!pendingWritesQueue.push(ap)) {
+      // Queue full - this is a scale issue, log at debug level to avoid spam
+      lwsl_debug("%s LOCKFREE: pendingWritesQueue full\n", ap->m_uuid.c_str());
+    }
+  } else {
+    // Legacy mutex path
     std::lock_guard<std::mutex> guard(mutex_writes);
     pendingWrites.push_back(ap);
   }
