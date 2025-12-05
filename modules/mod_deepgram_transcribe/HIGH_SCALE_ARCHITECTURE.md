@@ -9,10 +9,12 @@ This document describes the high-performance architecture implemented to support
 3. [Phase 2: Memory Pool for Sessions](#phase-2-memory-pool-for-sessions)
 4. [Phase 3: Zero-Copy Frames](#phase-3-zero-copy-frames)
 5. [Phase 4: Async Pusher Integration](#phase-4-async-pusher-integration)
-6. [Performance Benchmarks](#performance-benchmarks)
-7. [Unit Tests](#unit-tests)
-8. [Building](#building)
-9. [Files Reference](#files-reference)
+6. [Phase 5: Lock-Free MPSC Queues](#phase-5-lock-free-mpsc-queues)
+7. [Phase 6: Shared-Ptr Session Lifecycle](#phase-6-shared-ptr-session-lifecycle)
+8. [Performance Benchmarks](#performance-benchmarks)
+9. [Unit Tests](#unit-tests)
+10. [Building](#building)
+11. [Files Reference](#files-reference)
 
 ---
 
@@ -321,6 +323,144 @@ PUSHER_APP_ID=your-app-id
 PUSHER_KEY=your-key
 PUSHER_SECRET=your-secret
 PUSHER_CLUSTER=us2
+```
+
+---
+
+## Phase 5: Lock-Free MPSC Queues
+
+### Implementation: `lockfree_mpsc_queue.hpp`
+
+Lock-free Multiple-Producer Single-Consumer queues for pending WebSocket operations.
+
+#### Problem
+
+The original implementation used mutex-guarded `std::vector` for:
+- `pendingConnects` - New WebSocket connections
+- `pendingDisconnects` - Graceful disconnections
+- `pendingWrites` - Audio data to send
+
+At 5K+ concurrent calls, these mutexes cause contention.
+
+#### Solution: Bounded MPSC Queue
+
+```cpp
+template<typename T, size_t Capacity = 16384>
+class BoundedMPSCQueue {
+    // Lock-free bounded queue using intrusive linked list
+    // Multiple producer threads can push simultaneously
+    // Single LWS thread consumes all pending operations
+};
+```
+
+#### Key Features
+
+- **No mutexes** - Uses atomic CAS operations
+- **Bounded capacity** - 16K pending operations (prevents memory explosion)
+- **Intrusive** - No per-node allocation, T must have `mpsc_next` pointer
+- **Fallback** - Can disable via `MOD_DEEPGRAM_LOCKFREE_QUEUES=0`
+
+#### Architecture
+
+```
+Producer Threads (FreeSWITCH)          Consumer Thread (LWS)
+┌───────────────┐                      ┌───────────────────┐
+│ Frame CB #1   │──push()──┐           │   LWS Service     │
+├───────────────┤          │           │                   │
+│ Frame CB #2   │──push()──┼──►[MPSC]──►│ pop_all()        │
+├───────────────┤          │           │                   │
+│ Frame CB #N   │──push()──┘           │ Process batch     │
+└───────────────┘                      └───────────────────┘
+     (multiple)                             (single)
+```
+
+#### Note: Hybrid Approach
+
+The `pendingConnects` vector is still needed for `findPendingConnect()` during
+`LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER`. Items are:
+1. Pushed to MPSC queue (lock-free) by producers
+2. Popped and added to vector by LWS consumer
+3. Looked up in vector during handshake (requires sync access)
+
+---
+
+## Phase 6: Shared-Ptr Session Lifecycle
+
+### Implementation: `dg_session.hpp`, `dg_session.cpp`
+
+Crash-safe session management using `std::shared_ptr` with self-anchoring pattern.
+
+#### Problem
+
+Original `private_t*` lifecycle issues:
+- Raw pointer stored on media bug user data
+- Manual cleanup in `destroy_tech_pvt()`
+- Crash risk if async callbacks arrive after session freed
+- No protection against double-free
+
+#### Solution: DgSession with enable_shared_from_this
+
+```cpp
+class DgSession : public std::enable_shared_from_this<DgSession> {
+public:
+    // Factory method - only way to create
+    static std::shared_ptr<DgSession> Create(...);
+    
+    // Constructor requires passkey (prevents direct construction)
+    DgSession(DgSessionKey key, ...);
+    
+private:
+    // Self-anchoring for async safety
+    std::shared_ptr<DgSession> m_connect_anchor;
+    std::shared_ptr<DgSession> m_write_anchor;
+};
+```
+
+#### Passkey Pattern
+
+```cpp
+// Only Create() can construct DgSession
+class DgSessionKey {
+    friend class DgSession;
+    DgSessionKey() = default;  // Private constructor
+};
+
+// Usage:
+auto session = DgSession::Create(...);  // OK
+DgSession s(...);  // ERROR: can't create DgSessionKey
+```
+
+#### Self-Anchoring Pattern
+
+```cpp
+void DgSession::onAsyncConnect() {
+    // Hold ourselves alive during async operation
+    m_connect_anchor = shared_from_this();
+}
+
+void DgSession::onConnectComplete() {
+    // Release anchor - may trigger destruction
+    m_connect_anchor.reset();
+}
+```
+
+This ensures the session stays alive while async WebSocket operations are pending.
+
+#### PrivateDataPool
+
+Pre-allocated pool for `private_t` structures:
+- Avoids malloc/free per session
+- Lock-free acquire/release using atomic CAS
+- Configurable via `MOD_DEEPGRAM_PRIVATE_POOL_SIZE`
+
+```cpp
+class PrivateDataPool {
+    static constexpr size_t DEFAULT_POOL_SIZE = 2000;
+    
+    static bool Init(size_t capacity);
+    static private_t* Acquire();
+    static void Release(private_t* p);
+};
 ```
 
 ---
@@ -646,12 +786,12 @@ gcc -fPIC -c -I/usr/local/freeswitch/include/freeswitch -I/usr/local/include \
 
 # Compile C++ sources (C++17 required)
 g++ -fPIC -c -std=c++17 -O2 -I/usr/local/freeswitch/include/freeswitch -I/usr/local/include \
-    dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp
+    dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp dg_session.cpp
 
 # Link
 g++ -shared -o mod_deepgram_transcribe.so \
     mod_deepgram_transcribe.o async_http.o async_pusher.o \
-    dg_transcribe_glue.o audio_pipe.o memory_pool.o \
+    dg_transcribe_glue.o audio_pipe.o memory_pool.o dg_session.o \
     -lwebsockets -lcurl -lpthread -lssl -lcrypto
 
 # Install
@@ -675,11 +815,14 @@ cp mod_deepgram_transcribe.so /usr/local/freeswitch/lib/freeswitch/mod/
 
 | File | Purpose |
 |------|---------|
-| `lockfree_ring_buffer.hpp` | Lock-free SPSC ring buffer |
+| `lockfree_ring_buffer.hpp` | Lock-free SPSC ring buffer for audio |
+| `lockfree_mpsc_queue.hpp` | Lock-free MPSC queue for pending ops |
 | `audio_pipe.hpp` | AudioPipe class with lock-free buffer |
 | `audio_pipe.cpp` | AudioPipe implementation |
 | `memory_pool.hpp` | Lock-free object pool template |
 | `memory_pool.cpp` | AudioPipePool singleton |
+| `dg_session.hpp` | DgSession class with shared_ptr lifecycle |
+| `dg_session.cpp` | DgSession + PrivateDataPool implementation |
 
 ### Async Pusher
 

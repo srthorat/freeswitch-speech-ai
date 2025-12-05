@@ -268,8 +268,8 @@ private:
   static BoundedMPSCQueue<AudioPipe, 16384> pendingDisconnectsQueue;
   static BoundedMPSCQueue<AudioPipe, 16384> pendingWritesQueue;
   
-  // Legacy mutex-based vectors (kept for fallback/transition)
-  // TODO: Remove after lock-free queues are verified stable
+  // Legacy mutex-based vectors - REQUIRED for findPendingConnect() during handshake
+  // Note: Cannot fully remove - LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER needs sync lookup
   static std::mutex mutex_connects;
   static std::mutex mutex_disconnects;
   static std::mutex mutex_writes;

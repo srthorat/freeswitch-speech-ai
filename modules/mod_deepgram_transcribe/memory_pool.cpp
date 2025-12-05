@@ -147,9 +147,9 @@ void AudioPipePool::release(AudioPipe* pipe) {
     // would require modifying AudioPipe. A future optimization could
     // add a pool_node pointer to AudioPipe.
     
-    // TODO: Implement proper node tracking for true pooling
-    // For now, we get the benefit of pre-allocated slots without
-    // the full recycling benefit
+    // PHASE 2 OPTIMIZATION: Implement proper node tracking for true pooling
+    // Options: (a) Add pool_node pointer to AudioPipe, or (b) lock-free hash map
+    // For now, we get pre-allocation benefit without full recycling
     
     delete pipe;
     
