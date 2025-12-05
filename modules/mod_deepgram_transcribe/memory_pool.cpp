@@ -147,9 +147,17 @@ void AudioPipePool::release(AudioPipe* pipe) {
     // would require modifying AudioPipe. A future optimization could
     // add a pool_node pointer to AudioPipe.
     
-    // PHASE 2 OPTIMIZATION: Implement proper node tracking for true pooling
-    // Options: (a) Add pool_node pointer to AudioPipe, or (b) lock-free hash map
-    // For now, we get pre-allocation benefit without full recycling
+    // DEFERRED OPTIMIZATION: Implement proper node tracking for true AudioPipe recycling
+    // Current status: PrivateDataPool IS fully activated with true recycling.
+    //                 AudioPipePool provides pre-allocation but not recycling yet.
+    // 
+    // Impact: We still get the MAIN benefit (eliminate malloc in hot path) because
+    //         PrivateDataPool handles the more frequent per-session allocation.
+    //         AudioPipe allocation happens once per call setup and is less critical.
+    //
+    // To implement full recycling later:
+    //   Option A: Add pool_node* to AudioPipe class
+    //   Option B: Use concurrent_hash_map<AudioPipe*, PoolNode*>
     
     delete pipe;
     

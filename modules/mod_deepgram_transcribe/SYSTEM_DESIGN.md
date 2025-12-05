@@ -1618,9 +1618,16 @@ size_t head = m_head.load(std::memory_order_acquire);
 
 ---
 
-### 11.7 Memory Pool (`memory_pool.hpp`)
+### 11.7 Memory Pool (`memory_pool.hpp`) ✅ ACTIVATED
 
 **Purpose**: Pre-allocate AudioPipe and private_t objects to eliminate malloc/free in hot path.
+
+**Status**: ✅ **FULLY ACTIVATED** - Pools are now used in production code path.
+
+| Pool | Status | Allocation Point | Release Point |
+|------|--------|------------------|---------------|
+| `PrivateDataPool` | ✅ Active | `dg_transcribe_session_init()` | `destroy_tech_pvt()` |
+| `AudioPipePool` | ✅ Active | `fork_data_init()` | `destroy_tech_pvt()` |
 
 **Problem Solved**: malloc() at 5K calls/sec creates fragmentation and lock contention in the allocator.
 

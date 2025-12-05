@@ -164,7 +164,8 @@ namespace {
 
       if (tech_pvt->pAudioPipe) {
         deepgram::AudioPipe* p = (deepgram::AudioPipe *) tech_pvt->pAudioPipe;
-        delete p;
+        // Release AudioPipe back to pool (HIGH SCALE OPTIMIZATION)
+        deepgram::AudioPipePool::release(p);
         tech_pvt->pAudioPipe = nullptr;
       }
       if (tech_pvt->resampler) {
@@ -182,6 +183,9 @@ namespace {
         tech_pvt->vad = nullptr;
       }
       */
+      
+      // Release private_t back to pool (HIGH SCALE OPTIMIZATION)
+      deepgram::PrivateDataPool::Release(tech_pvt);
     }
   }
 
@@ -506,10 +510,13 @@ namespace {
       return SWITCH_STATUS_FALSE;
     }
 
-    deepgram::AudioPipe* ap = new deepgram::AudioPipe(tech_pvt->sessionId, tech_pvt->host, tech_pvt->port, tech_pvt->path, 
-      buflen, read_impl.decoded_bytes_per_packet, apiKey, eventCallback);
+    // Use AudioPipe pool for high-scale operation (eliminates malloc in hot path)
+    deepgram::AudioPipe* ap = deepgram::AudioPipePool::acquire(
+      tech_pvt->sessionId, tech_pvt->host, tech_pvt->port, tech_pvt->path, 
+      buflen, read_impl.decoded_bytes_per_packet, apiKey, 
+      reinterpret_cast<void*>(eventCallback));
     if (!ap) {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error allocating AudioPipe\n");
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error allocating AudioPipe from pool\n");
       return SWITCH_STATUS_FALSE;
     }
 
@@ -654,10 +661,12 @@ extern "C" {
   {
     int err;
 
-    // allocate per-session data structure
-    private_t* tech_pvt = (private_t *) switch_core_session_alloc(session, sizeof(private_t));
+    // allocate per-session data structure from memory pool (HIGH SCALE OPTIMIZATION)
+    // Uses pre-allocated pool to eliminate malloc overhead in hot path
+    // Falls back to malloc if pool exhausted
+    private_t* tech_pvt = deepgram::PrivateDataPool::Acquire();
     if (!tech_pvt) {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "error allocating memory!\n");
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "error allocating memory from pool!\n");
       return SWITCH_STATUS_FALSE;
     }
 

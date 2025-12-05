@@ -2,6 +2,19 @@
 
 This document describes the high-performance architecture implemented to support **5,000+ concurrent calls** at 50 frames per second (250,000 audio frames/second).
 
+## Implementation Status: ✅ COMPLETE
+
+| Phase | Component | Status | Notes |
+|-------|-----------|--------|-------|
+| Phase 1 | Lock-Free Ring Buffer | ✅ Complete | SPSC buffer for audio frames |
+| Phase 2 | Memory Pool for Sessions | ✅ Complete | `PrivateDataPool` fully activated |
+| Phase 3 | Zero-Copy Frames | ✅ Complete | Reserve/commit pattern |
+| Phase 4 | Async Pusher Integration | ✅ Complete | Non-blocking HTTP delivery |
+| Phase 5 | Lock-Free MPSC Queues | ✅ Complete | For pending WebSocket ops |
+| Phase 6 | Shared-Ptr Session Lifecycle | ✅ Complete | `DgSession` with self-anchoring |
+
+**Last Updated**: December 5, 2025
+
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
@@ -139,11 +152,35 @@ size_t popped = pAudioPipe->popAudio(buffer, max_len);
 
 ---
 
-## Phase 2: Memory Pool for Sessions
+## Phase 2: Memory Pool for Sessions ✅ ACTIVATED
 
-### Implementation: `memory_pool.hpp`, `memory_pool.cpp`
+### Implementation: `memory_pool.hpp`, `memory_pool.cpp`, `dg_session.hpp`
 
-Lock-free object pool for `AudioPipe` instances to eliminate per-session allocation.
+Lock-free object pools for `private_t` and `AudioPipe` instances to eliminate per-session allocation.
+
+### Activation Status
+
+| Pool | Acquire Function | Release Function | Fully Recycled? |
+|------|------------------|------------------|-----------------|
+| `PrivateDataPool` | `Acquire()` ✅ | `Release()` ✅ | ✅ Yes |
+| `AudioPipePool` | `acquire()` ✅ | `release()` ✅ | ⚠️ Pre-alloc only* |
+
+*AudioPipePool provides pre-allocation benefit but not full recycling yet (deferred optimization).
+
+### Usage in Hot Path
+
+```cpp
+// dg_transcribe_glue.cpp - Session Init (ACTIVATED)
+private_t* tech_pvt = deepgram::PrivateDataPool::Acquire();  // From pool!
+
+// dg_transcribe_glue.cpp - AudioPipe Create (ACTIVATED)  
+deepgram::AudioPipe* ap = deepgram::AudioPipePool::acquire(
+    uuid, host, port, path, buflen, minSpace, apiKey, callback);
+
+// dg_transcribe_glue.cpp - Cleanup (ACTIVATED)
+deepgram::AudioPipePool::release(p);
+deepgram::PrivateDataPool::Release(tech_pvt);
+```
 
 #### Key Features
 
