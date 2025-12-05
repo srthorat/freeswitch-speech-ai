@@ -6,6 +6,8 @@
 
 #include <unistd.h>
 
+#include "transcript_data.h"
+
 #define MY_BUG_NAME "deepgram_transcribe"
 #define TRANSCRIBE_EVENT_RESULTS "deepgram_transcribe::transcription"
 #define TRANSCRIBE_EVENT_NO_AUDIO_DETECTED "deepgram_transcribe::no_audio_detected"
@@ -25,6 +27,10 @@
 #define MAX_METADATA_LEN (8192)
 
 typedef void (*responseHandler_t)(switch_core_session_t* session, const char* eventName, const char* json, const char* bugname, int finished);
+
+/* Optimized response handler that accepts pre-parsed transcript data */
+typedef void (*responseHandlerParsed_t)(switch_core_session_t* session, const char* eventName, 
+    const char* json, const char* bugname, int finished, const transcript_data_t* td);
 
 struct private_data {
 	switch_mutex_t *mutex;

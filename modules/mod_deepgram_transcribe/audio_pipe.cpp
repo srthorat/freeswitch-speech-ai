@@ -215,17 +215,25 @@ int AudioPipe::lws_callback(struct lws *wsi,
           return -1;
         }
 
-        // check for audio packets
+        // check for audio packets (LOCK-FREE)
         {
-          std::lock_guard<std::mutex> lk(ap->m_audio_mutex);
-          if (ap->m_audio_buffer_write_offset > LWS_PRE) {
-            size_t datalen = ap->m_audio_buffer_write_offset - LWS_PRE;
-            int sent = lws_write(wsi, (unsigned char *) ap->m_audio_buffer + LWS_PRE, datalen, LWS_WRITE_BINARY);
-            if (sent < datalen) {
+          // Pop audio data from lock-free ring buffer
+          // Buffer needs LWS_PRE bytes before payload
+          static constexpr size_t MAX_WS_PAYLOAD = 16384;
+          uint8_t ws_buffer[LWS_PRE + MAX_WS_PAYLOAD];
+          
+          size_t datalen = ap->popAudio(ws_buffer + LWS_PRE, MAX_WS_PAYLOAD);
+          if (datalen > 0) {
+            int sent = lws_write(wsi, ws_buffer + LWS_PRE, datalen, LWS_WRITE_BINARY);
+            if (sent < (int)datalen) {
               lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_WRITEABLE %s attemped to send %lu only sent %d wsi %p..\n", 
                 ap->m_uuid.c_str(), datalen, sent, wsi); 
             }
-            ap->m_audio_buffer_write_offset = LWS_PRE;
+            
+            // If there's more data, request another writable callback
+            if (ap->hasAudioPending()) {
+              lws_callback_on_writable(wsi);
+            }
           }
         }
 
@@ -260,9 +268,9 @@ std::string AudioPipe::protocolName;
 std::mutex AudioPipe::mutex_connects;
 std::mutex AudioPipe::mutex_disconnects;
 std::mutex AudioPipe::mutex_writes;
-std::list<AudioPipe*> AudioPipe::pendingConnects;
-std::list<AudioPipe*> AudioPipe::pendingDisconnects;
-std::list<AudioPipe*> AudioPipe::pendingWrites;
+std::vector<AudioPipe*> AudioPipe::pendingConnects;
+std::vector<AudioPipe*> AudioPipe::pendingDisconnects;
+std::vector<AudioPipe*> AudioPipe::pendingWrites;
 AudioPipe::log_emit_function AudioPipe::logger;
 std::mutex AudioPipe::mapMutex;
 std::unordered_map<std::thread::id, bool> AudioPipe::stopFlags;
@@ -270,87 +278,83 @@ std::queue<std::thread::id> AudioPipe::threadIds;
 
 
 void AudioPipe::processPendingConnects(lws_per_vhost_data *vhd) {
-  std::list<AudioPipe*> connects;
+  // HIGH SCALE: Use vector for better cache locality
+  std::vector<AudioPipe*> connects;
   {
     std::lock_guard<std::mutex> guard(mutex_connects);
-    for (auto it = pendingConnects.begin(); it != pendingConnects.end(); ++it) {
-      if ((*it)->m_state == LWS_CLIENT_IDLE) {
-        connects.push_back(*it);
-        (*it)->m_state = LWS_CLIENT_CONNECTING;
+    connects.reserve(pendingConnects.size());  // Pre-allocate
+    for (auto* ap : pendingConnects) {
+      if (ap->m_state == LWS_CLIENT_IDLE) {
+        connects.push_back(ap);
+        ap->m_state = LWS_CLIENT_CONNECTING;
       }
     }
   }
-  for (auto it = connects.begin(); it != connects.end(); ++it) {
-    AudioPipe* ap = *it;
+  for (auto* ap : connects) {
     ap->connect_client(vhd);   
   }
 }
 
 void AudioPipe::processPendingDisconnects(lws_per_vhost_data *vhd) {
-  std::list<AudioPipe*> disconnects;
+  std::vector<AudioPipe*> disconnects;
   {
     std::lock_guard<std::mutex> guard(mutex_disconnects);
-    for (auto it = pendingDisconnects.begin(); it != pendingDisconnects.end(); ++it) {
-      if ((*it)->m_state == LWS_CLIENT_DISCONNECTING) disconnects.push_back(*it);
+    disconnects.reserve(pendingDisconnects.size());
+    for (auto* ap : pendingDisconnects) {
+      if (ap->m_state == LWS_CLIENT_DISCONNECTING) disconnects.push_back(ap);
     }
     pendingDisconnects.clear();
   }
-  for (auto it = disconnects.begin(); it != disconnects.end(); ++it) {
-    AudioPipe* ap = *it;
+  for (auto* ap : disconnects) {
     lws_callback_on_writable(ap->m_wsi); 
   }
 }
 
 void AudioPipe::processPendingWrites() {
-  std::list<AudioPipe*> writes;
+  std::vector<AudioPipe*> writes;
   {
     std::lock_guard<std::mutex> guard(mutex_writes);
-    for (auto it = pendingWrites.begin(); it != pendingWrites.end(); ++it) {
-       if ((*it)->m_state == LWS_CLIENT_CONNECTED) writes.push_back(*it);
+    writes.reserve(pendingWrites.size());
+    for (auto* ap : pendingWrites) {
+       if (ap->m_state == LWS_CLIENT_CONNECTED) writes.push_back(ap);
     }  
     pendingWrites.clear();
   }
-  for (auto it = writes.begin(); it != writes.end(); ++it) {
-    AudioPipe* ap = *it;
+  for (auto* ap : writes) {
     lws_callback_on_writable(ap->m_wsi);
   }
 }
 
 AudioPipe* AudioPipe::findAndRemovePendingConnect(struct lws *wsi) {
-  AudioPipe* ap = NULL;
+  AudioPipe* ap = nullptr;
   std::lock_guard<std::mutex> guard(mutex_connects);
-  std::list<AudioPipe* > toRemove;
-
-  for (auto it = pendingConnects.begin(); it != pendingConnects.end() && !ap; ++it) {
-    int state = (*it)->m_state;
-
-    if ((*it)->m_wsi == nullptr)
-      toRemove.push_back(*it);
-
-    if ((state == LWS_CLIENT_CONNECTING) &&
-      (*it)->m_wsi == wsi) ap = *it;
-  }
-
-  for (auto it = toRemove.begin(); it != toRemove.end(); ++it)
-    pendingConnects.remove(*it);
-
-  if (ap) {
-    pendingConnects.remove(ap);
-  }
-
+  
+  // HIGH SCALE: Use erase-remove idiom for O(n) instead of O(n²)
+  // First pass: find the target and mark null entries for removal
+  auto remove_it = std::remove_if(pendingConnects.begin(), pendingConnects.end(),
+    [wsi, &ap](AudioPipe* p) {
+      if (p->m_wsi == nullptr) return true;  // Remove null wsi entries
+      if (!ap && p->m_state == LWS_CLIENT_CONNECTING && p->m_wsi == wsi) {
+        ap = p;
+        return true;  // Remove the found entry
+      }
+      return false;
+    });
+  pendingConnects.erase(remove_it, pendingConnects.end());
+  
   return ap;
 }
 
 AudioPipe* AudioPipe::findPendingConnect(struct lws *wsi) {
-  AudioPipe* ap = NULL;
   std::lock_guard<std::mutex> guard(mutex_connects);
-
-  for (auto it = pendingConnects.begin(); it != pendingConnects.end() && !ap; ++it) {
-    int state = (*it)->m_state;
-    if ((state == LWS_CLIENT_CONNECTING) &&
-      (*it)->m_wsi == wsi) ap = *it;
-  }
-  return ap;
+  
+  // HIGH SCALE: Use std::find_if for cleaner code
+  auto it = std::find_if(pendingConnects.begin(), pendingConnects.end(),
+    [wsi](AudioPipe* p) {
+      return p->m_state == LWS_CLIENT_CONNECTING && p->m_wsi == wsi;
+    });
+  
+  return (it != pendingConnects.end()) ? *it : nullptr;
 }
 
 void AudioPipe::addPendingConnect(AudioPipe* ap) {
@@ -476,14 +480,17 @@ bool AudioPipe::deinitialize() {
 AudioPipe::AudioPipe(const char* uuid, const char* host, unsigned int port, const char* path,
   size_t bufLen, size_t minFreespace, const char* apiKey, notifyHandler_t callback) :
   m_uuid(uuid), m_host(host), m_port(port), m_path(path), m_finished(false),
-  m_audio_buffer_min_freespace(minFreespace), m_audio_buffer_max_len(bufLen), m_gracefulShutdown(false),
-  m_audio_buffer_write_offset(LWS_PRE), m_recv_buf(nullptr), m_recv_buf_ptr(nullptr), 
-  m_state(LWS_CLIENT_IDLE), m_wsi(nullptr), m_vhd(nullptr), m_apiKey(apiKey), m_callback(callback) {
-
-  m_audio_buffer = new uint8_t[m_audio_buffer_max_len];
+  m_audio_buffer_min_freespace(minFreespace), m_gracefulShutdown(false),
+  m_recv_buf(nullptr), m_recv_buf_ptr(nullptr), 
+  m_state(LWS_CLIENT_IDLE), m_wsi(nullptr), m_vhd(nullptr), m_apiKey(apiKey), m_callback(callback),
+  m_audio_bytes_pending(0) {
+  // Lock-free ring buffer is initialized by its constructor
+  // Note: bufLen parameter is ignored - using fixed AUDIO_RING_BUFFER_SIZE
+  lwsl_info("%s AudioPipe created with lock-free ring buffer (capacity=%zu)\n", 
+            uuid, AUDIO_RING_BUFFER_SIZE);
 }
 AudioPipe::~AudioPipe() {
-  if (m_audio_buffer) delete [] m_audio_buffer;
+  // Ring buffer cleanup is automatic
   if (m_recv_buf) delete [] m_recv_buf;
 }
 
@@ -492,7 +499,6 @@ void AudioPipe::connect(void) {
 }
 
 bool AudioPipe::connect_client(struct lws_per_vhost_data *vhd) {
-  assert(m_audio_buffer != nullptr);
   assert(m_vhd == nullptr);
   struct lws_client_connect_info i;
 
@@ -526,8 +532,11 @@ void AudioPipe::bufferForSending(const char* text) {
 }
 
 void AudioPipe::unlockAudioBuffer() {
-  if (m_audio_buffer_write_offset > LWS_PRE) addPendingWrite(this);
-  m_audio_mutex.unlock();
+  // Lock-free design: check if there's pending data and trigger write
+  if (hasAudioPending()) {
+    addPendingWrite(this);
+  }
+  // No mutex to unlock - lock-free design
 }
 
 void AudioPipe::close() {
@@ -545,4 +554,42 @@ void AudioPipe::waitForClose() {
   std::shared_future<void> sf(m_promise.get_future());
   sf.wait();
   return;
+}
+
+void AudioPipe::reset(const char* uuid, const char* host, unsigned int port, const char* path,
+  size_t bufLen, size_t minFreespace, const char* apiKey, notifyHandler_t callback) {
+  
+  // Reset all state for reuse
+  m_uuid = uuid;
+  m_host = host;
+  m_port = port;
+  m_path = path;
+  m_finished = false;
+  m_audio_buffer_min_freespace = minFreespace;
+  m_gracefulShutdown = false;
+  m_state = LWS_CLIENT_IDLE;
+  m_wsi = nullptr;
+  m_vhd = nullptr;
+  m_apiKey = apiKey;
+  m_callback = callback;
+  
+  // Clear metadata
+  m_metadata.clear();
+  
+  // Reset ring buffer
+  m_audio_ring_buffer.reset();
+  m_audio_bytes_pending.store(0, std::memory_order_relaxed);
+  
+  // Reset receive buffer
+  if (m_recv_buf) {
+    delete[] m_recv_buf;
+    m_recv_buf = nullptr;
+  }
+  m_recv_buf_ptr = nullptr;
+  m_recv_buf_len = 0;
+  
+  // Reset promise for new session
+  m_promise = std::promise<void>();
+  
+  lwsl_info("%s AudioPipe reset for reuse (pool recycling)\n", uuid);
 }

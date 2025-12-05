@@ -2,16 +2,24 @@
 #define __DG_AUDIO_PIPE_HPP__
 
 #include <string>
-#include <list>
+#include <vector>
 #include <mutex>
 #include <future>
 #include <queue>
 #include <unordered_map>
 #include <thread>
+#include <atomic>
+#include <algorithm>
 
 #include <libwebsockets.h>
+#include "lockfree_ring_buffer.hpp"
 
 namespace deepgram {
+
+// Buffer size: 64KB = ~2 seconds of 16kHz mono audio (or ~1 sec stereo)
+// Power of 2 for efficient modulo operations
+// Increase if you see "ring buffer full" errors
+static constexpr size_t AUDIO_RING_BUFFER_SIZE = 65536;
 
 class AudioPipe {
 public:
@@ -54,23 +62,166 @@ public:
   }
   void connect(void);
   void bufferForSending(const char* text);
-  size_t binarySpaceAvailable(void) {
-    return m_audio_buffer_max_len - m_audio_buffer_write_offset;
+  
+  /* ============================================================================
+   * Lock-Free Audio Buffer API (HIGH SCALE OPTIMIZATION)
+   * 
+   * These methods replace the old mutex-based buffer API.
+   * Producer (frame callback): pushAudio()
+   * Consumer (LWS callback): popAudio()
+   * ============================================================================ */
+  
+  /**
+   * Push audio data into the ring buffer (producer side - frame callback)
+   * Lock-free, returns immediately
+   * 
+   * @param data Audio data pointer
+   * @param len Number of bytes to push
+   * @return Number of bytes actually pushed (may be less if buffer full)
+   */
+  size_t pushAudio(const void* data, size_t len) {
+    size_t pushed = m_audio_ring_buffer.push(data, len);
+    if (pushed > 0) {
+      m_audio_bytes_pending.fetch_add(pushed, std::memory_order_relaxed);
+    }
+    return pushed;
   }
-  size_t binaryMinSpace(void) {
+  
+  /**
+   * Pop audio data from the ring buffer (consumer side - LWS callback)
+   * Lock-free, returns immediately
+   * 
+   * @param dest Destination buffer (must have space for LWS_PRE + max_len)
+   * @param max_len Maximum bytes to pop
+   * @return Number of bytes popped
+   */
+  size_t popAudio(void* dest, size_t max_len) {
+    size_t popped = m_audio_ring_buffer.pop(dest, max_len);
+    if (popped > 0) {
+      m_audio_bytes_pending.fetch_sub(popped, std::memory_order_relaxed);
+    }
+    return popped;
+  }
+  
+  /**
+   * Get available space for writing (producer perspective)
+   */
+  size_t audioSpaceAvailable(void) const {
+    return m_audio_ring_buffer.space_available();
+  }
+  
+  /**
+   * Get available data for reading (consumer perspective)
+   */
+  size_t audioDataAvailable(void) const {
+    return m_audio_ring_buffer.size();
+  }
+  
+  /**
+   * Get current buffer usage (bytes used)
+   */
+  size_t audioSize(void) const {
+    return m_audio_ring_buffer.size();
+  }
+  
+  /**
+   * Get total buffer capacity
+   */
+  size_t audioCapacity(void) const {
+    return AUDIO_RING_BUFFER_SIZE;
+  }
+  
+  /**
+   * Check if there's pending audio data
+   */
+  bool hasAudioPending(void) const {
+    return !m_audio_ring_buffer.empty();
+  }
+  
+  // ============================================
+  // Zero-copy API for direct buffer writes
+  // ============================================
+  
+  /**
+   * Reserve contiguous space for zero-copy write
+   * Returns pointer where data can be written directly (no memcpy needed)
+   * Call commitAudio() after writing to make data available to consumer
+   */
+  AudioRingBuffer<AUDIO_RING_BUFFER_SIZE>::ReserveResult reserveAudio(size_t requested) {
+    return m_audio_ring_buffer.reserve_contiguous(requested);
+  }
+  
+  /**
+   * Commit data after zero-copy write
+   * Makes written data available to the consumer
+   * @param len Number of bytes actually written (must be <= reserved contiguous)
+   */
+  void commitAudio(size_t len) {
+    m_audio_ring_buffer.commit(len);
+    m_audio_bytes_pending.fetch_add(len, std::memory_order_relaxed);
+  }
+  
+  /**
+   * Get maximum contiguous bytes available for zero-copy write
+   * Useful to check if wrap-around will occur
+   */
+  size_t maxContiguousWrite(void) const {
+    return m_audio_ring_buffer.max_contiguous_write();
+  }
+  
+  /**
+   * Get reserve result for wrap-around handling
+   * For advanced cases where writing spans the wrap boundary
+   */
+  AudioRingBuffer<AUDIO_RING_BUFFER_SIZE>::ReserveSplit reserveSplit(size_t requested) {
+    return m_audio_ring_buffer.reserve_split(requested);
+  }
+  
+  /**
+   * Get direct read pointer for zero-copy read
+   * @return Pointer to contiguous readable data and size
+   * Note: Non-const because it may update internal cache for efficiency
+   */
+  std::pair<const uint8_t*, size_t> peekAudio(void) {
+    return m_audio_ring_buffer.peek_contiguous();
+  }
+  
+  /**
+   * Consume data after zero-copy read
+   * @param len Number of bytes consumed
+   */
+  void consumeAudio(size_t len) {
+    m_audio_ring_buffer.consume(len);
+    m_audio_bytes_pending.fetch_sub(len, std::memory_order_relaxed);
+  }
+  
+  /**
+   * Get minimum free space threshold
+   */
+  size_t binaryMinSpace(void) const {
     return m_audio_buffer_min_freespace;
   }
-  char * binaryWritePtr(void) { 
-    return (char *) m_audio_buffer + m_audio_buffer_write_offset;
+  
+  /* Legacy API - kept for compatibility during transition */
+  size_t binarySpaceAvailable(void) {
+    return audioSpaceAvailable();
+  }
+  char* binaryWritePtr(void) { 
+    // WARNING: This is only valid for immediate memcpy + binaryWritePtrAdd
+    // Consider using pushAudio() instead
+    return (char *) m_legacy_write_buffer;
   }
   void binaryWritePtrAdd(size_t len) {
-    m_audio_buffer_write_offset += len;
+    // Push the data that was written to legacy buffer
+    pushAudio(m_legacy_write_buffer, len);
   }
   void binaryWritePtrResetToZero(void) {
-    m_audio_buffer_write_offset = 0;
+    // No-op for ring buffer - data is consumed by pop
   }
+  
+  // Lock/unlock are now no-ops (lock-free design)
   void lockAudioBuffer(void) {
-    m_audio_mutex.lock();
+    // No-op - lock-free design
   }
   void unlockAudioBuffer(void) ;
 
@@ -79,6 +230,13 @@ public:
   void waitForClose();
   void setClosed() { m_promise.set_value(); }
   bool isFinished() { return m_finished;}
+
+  /**
+   * Reset AudioPipe for reuse (memory pool support)
+   * Called when recycling an AudioPipe from the pool
+   */
+  void reset(const char* uuid, const char* host, unsigned int port, const char* path,
+    size_t bufLen, size_t minFreespace, const char* apiKey, notifyHandler_t callback);
 
   // no default constructor or copying
   AudioPipe() = delete;
@@ -95,9 +253,11 @@ private:
   static std::mutex mutex_connects;
   static std::mutex mutex_disconnects;
   static std::mutex mutex_writes;
-  static std::list<AudioPipe*> pendingConnects;
-  static std::list<AudioPipe*> pendingDisconnects;
-  static std::list<AudioPipe*> pendingWrites;
+  // HIGH SCALE: Using vector instead of list for better cache locality
+  // At 5K calls, list traversal causes cache misses; vector is contiguous
+  static std::vector<AudioPipe*> pendingConnects;
+  static std::vector<AudioPipe*> pendingDisconnects;
+  static std::vector<AudioPipe*> pendingWrites;
   static log_emit_function logger;
 
   static std::mutex mapMutex;
@@ -122,13 +282,20 @@ private:
   std::string m_path;
   std::string m_metadata;
   std::mutex m_text_mutex;
-  std::mutex m_audio_mutex;
+  // NOTE: m_audio_mutex removed - using lock-free ring buffer instead
   int m_sslFlags;
   struct lws *m_wsi;
-  uint8_t *m_audio_buffer;
-  size_t m_audio_buffer_max_len;
-  size_t m_audio_buffer_write_offset;
+  
+  // Lock-free audio buffer (HIGH SCALE OPTIMIZATION)
+  LockFreeRingBuffer<AUDIO_RING_BUFFER_SIZE> m_audio_ring_buffer;
+  std::atomic<size_t> m_audio_bytes_pending{0};  // For statistics
   size_t m_audio_buffer_min_freespace;
+  
+  // Legacy write buffer for compatibility with old API
+  // Used by binaryWritePtr() -> binaryWritePtrAdd() pattern
+  uint8_t m_legacy_write_buffer[8192];  // Max frame size
+  
+  // Receive buffer (not changed - only used by consumer)
   uint8_t* m_recv_buf;
   uint8_t* m_recv_buf_ptr;
   size_t m_recv_buf_len;

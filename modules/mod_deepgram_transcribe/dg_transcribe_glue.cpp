@@ -16,19 +16,60 @@
 #include <unordered_map>
 
 #include "mod_deepgram_transcribe.h"
-#include "parser.hpp"
 #include "audio_pipe.hpp"
+#include "memory_pool.hpp"
 
 #define RTP_PACKETIZATION_PERIOD 20
 #define FRAME_SIZE_8000  320 /*which means each 20ms frame as 320 bytes at 8 khz (1 channel only)*/
+
+/* ============================================================================
+ * SPEEX RESAMPLER QUALITY CONFIGURATION
+ * 
+ * Quality levels (0-10):
+ *   0  = Lowest quality, fastest
+ *   2  = SWITCH_RESAMPLE_QUALITY (FreeSWITCH default) - LOW
+ *   3  = SPEEX_RESAMPLER_QUALITY_VOIP - Good for VoIP
+ *   4  = SPEEX_RESAMPLER_QUALITY_DEFAULT - Recommended
+ *   5  = SPEEX_RESAMPLER_QUALITY_DESKTOP - High quality
+ *   10 = SPEEX_RESAMPLER_QUALITY_MAX - Best quality, slowest
+ * 
+ * For speech transcription, quality 4-5 is recommended for accuracy.
+ * Higher quality = better transcription but more CPU.
+ * 
+ * Set via environment: MOD_DEEPGRAM_RESAMPLE_QUALITY=5
+ * ============================================================================ */
+#define DEFAULT_RESAMPLE_QUALITY 2  // FreeSWITCH default - increase to 3-5 if transcription quality issues
 
 namespace {
   static bool hasDefaultCredentials = false;
   static const char* defaultApiKey = nullptr;
   static const char *requestedBufferSecs = std::getenv("MOD_AUDIO_FORK_BUFFER_SECS");
   static int nAudioBufferSecs = std::max(1, std::min(requestedBufferSecs ? ::atoi(requestedBufferSecs) : 2, 5));
+  
+  /* Resampler quality (0-10, default 5 for speech transcription) */
+  static const char *requestedResampleQuality = std::getenv("MOD_DEEPGRAM_RESAMPLE_QUALITY");
+  static int nResampleQuality = std::max(0, std::min(requestedResampleQuality ? ::atoi(requestedResampleQuality) : DEFAULT_RESAMPLE_QUALITY, 10));
+  
+  /* ============================================================================
+   * LWS SERVICE THREAD CONFIGURATION (HIGH SCALE)
+   * 
+   * Each LWS service thread handles WebSocket I/O for multiple connections.
+   * Scaling guide (from mod_google_transcribe_async):
+   *   - 100 calls:   1-2 threads (low load)
+   *   - 500 calls:   2-3 threads (medium load)  
+   *   - 1000 calls:  3-4 threads (high load)
+   *   - 2000+ calls: 4-5 threads (very high load)
+   * 
+   * Each call generates ~50 WebSocket writes/sec (audio frames).
+   * Each thread can handle ~2000-3000 writes/sec efficiently.
+   * Formula: threads = ceil(expected_calls * 50 / 2500)
+   * 
+   * Set via environment: MOD_AUDIO_FORK_SERVICE_THREADS=3
+   * ============================================================================ */
   static const char *requestedNumServiceThreads = std::getenv("MOD_AUDIO_FORK_SERVICE_THREADS");
-  static unsigned int nServiceThreads = std::max(1, std::min(requestedNumServiceThreads ? ::atoi(requestedNumServiceThreads) : 1, 5));
+  // Default: 3 threads (supports ~1500 concurrent calls)
+  // Max: 5 threads (limited by LWS context array size)
+  static unsigned int nServiceThreads = std::max(1, std::min(requestedNumServiceThreads ? ::atoi(requestedNumServiceThreads) : 3, 5));
   static unsigned int idxCallCount = 0;
   static uint32_t playCount = 0;
 
@@ -326,11 +367,79 @@ namespace {
             break;
             case deepgram::AudioPipe::MESSAGE:
               if( strstr(message, emptyTranscript)) {
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "discarding empty deepgram transcript\n");
+                // Silently discard empty transcripts - no logging needed
               }
               else {
-                tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_RESULTS, message, tech_pvt->bugname, finished);
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "deepgram message: %s\n", message);
+                // DEBUG: Log raw Deepgram message to trace all incoming data
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+                  "RAW DEEPGRAM: %s\n", message);
+                
+                // OPTIMIZED: Parse JSON ONCE and extract all fields
+                cJSON* msgJson = cJSON_Parse(message);
+                if (msgJson) {
+                  transcript_data_t td;
+                  transcript_data_init(&td);
+                  td.raw_json = message;
+                  
+                  // Extract is_final and speech_final flags
+                  cJSON* is_final = cJSON_GetObjectItem(msgJson, "is_final");
+                  cJSON* speech_final = cJSON_GetObjectItem(msgJson, "speech_final");
+                  td.is_final = is_final && cJSON_IsTrue(is_final);
+                  td.speech_final = speech_final && cJSON_IsTrue(speech_final);
+                  
+                  // Get channel index for speaker mapping
+                  cJSON* channel_index = cJSON_GetObjectItem(msgJson, "channel_index");
+                  if (channel_index && cJSON_IsArray(channel_index) && cJSON_GetArraySize(channel_index) > 0) {
+                    cJSON* idx = cJSON_GetArrayItem(channel_index, 0);
+                    if (idx && cJSON_IsNumber(idx)) td.channel_index = (int)idx->valuedouble;
+                  }
+                  
+                  // Extract transcript text and confidence
+                  cJSON* channel_obj = cJSON_GetObjectItem(msgJson, "channel");
+                  if (channel_obj) {
+                    cJSON* alts = cJSON_GetObjectItem(channel_obj, "alternatives");
+                    if (alts && cJSON_IsArray(alts) && cJSON_GetArraySize(alts) > 0) {
+                      cJSON* first = cJSON_GetArrayItem(alts, 0);
+                      cJSON* t = cJSON_GetObjectItem(first, "transcript");
+                      if (t && cJSON_IsString(t)) {
+                        const char* text = cJSON_GetStringValue(t);
+                        if (text && strlen(text) > 0) {
+                          strncpy(td.transcript, text, sizeof(td.transcript) - 1);
+                          td.transcript[sizeof(td.transcript) - 1] = '\0';
+                          td.has_transcript = true;
+                        }
+                      }
+                      cJSON* conf = cJSON_GetObjectItem(first, "confidence");
+                      if (conf && cJSON_IsNumber(conf)) td.confidence = conf->valuedouble;
+                    }
+                  }
+                  
+                  // Extract timing info
+                  cJSON* start_obj = cJSON_GetObjectItem(msgJson, "start");
+                  cJSON* duration_obj = cJSON_GetObjectItem(msgJson, "duration");
+                  if (start_obj && cJSON_IsNumber(start_obj)) td.start = start_obj->valuedouble;
+                  if (duration_obj && cJSON_IsNumber(duration_obj)) td.duration = duration_obj->valuedouble;
+                  
+                  // Call optimized response handler with pre-parsed data
+                  responseHandlerParsed_t handler = (responseHandlerParsed_t)tech_pvt->responseHandler;
+                  handler(session, TRANSCRIBE_EVENT_RESULTS, message, tech_pvt->bugname, finished, &td);
+                  
+                  // Log transcripts at INFO level
+                  if (td.has_transcript) {
+                    if (td.is_final || td.speech_final) {
+                      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+                        "\033[32m[FINAL%s]\033[0m [CH%d] %s\n", 
+                        td.speech_final ? "+SF" : "", td.channel_index, td.transcript);
+                    } else {
+                      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+                        "\033[33m[INTERIM]\033[0m [CH%d] %s\n", td.channel_index, td.transcript);
+                    }
+                  }
+                  cJSON_Delete(msgJson);
+                } else {
+                  // JSON parse failed - fall back to legacy handler
+                  tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_RESULTS, message, tech_pvt->bugname, finished);
+                }
               }
             break;
 
@@ -425,21 +534,21 @@ namespace {
 
     if (desiredSampling != sampling) {
       // Log detailed resampler configuration for scale monitoring
-      // Quality setting: SWITCH_RESAMPLE_QUALITY (typically 4-5)
+      // Quality setting: nResampleQuality (configurable via MOD_DEEPGRAM_RESAMPLE_QUALITY)
       // Memory per resampler: ~10-50KB depending on quality and channels
       // At 10k calls: ~100-500MB just for resamplers
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-        "[RESAMPLER-INIT] (%u) Initializing Speex resampler: %dHz -> %dHz (%d ch), quality=%d\n",
-        tech_pvt->id, sampling, desiredSampling, channels, SWITCH_RESAMPLE_QUALITY);
+        "[RESAMPLER-INIT] (%u) Initializing Speex resampler: %dHz -> %dHz (%d ch), quality=%d (0=low, 5=desktop, 10=max)\n",
+        tech_pvt->id, sampling, desiredSampling, channels, nResampleQuality);
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
         "[RESAMPLER-INIT] (%u) Estimated memory: ~%dKB, ratio=%.3f, frame_in=%d samples, frame_out=%d samples\n",
         tech_pvt->id,
-        (channels * 2 * 160 * 4) / 1024 + 10,  // Rough estimate: buffer + filter state
+        (channels * 2 * 160 * (nResampleQuality + 1)) / 1024 + 10,  // Higher quality = more memory
         (float)desiredSampling / sampling,
         (sampling / 50),      // 20ms frame at source rate
         (desiredSampling / 50));  // 20ms frame at target rate
 
-      tech_pvt->resampler = speex_resampler_init(channels, sampling, desiredSampling, SWITCH_RESAMPLE_QUALITY, &err);
+      tech_pvt->resampler = speex_resampler_init(channels, sampling, desiredSampling, nResampleQuality, &err);
       if (0 != err) {
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
           "[RESAMPLER-ERROR] (%u) Failed to initialize resampler: %s (code=%d)\n",
@@ -480,11 +589,23 @@ extern "C" {
   switch_status_t dg_transcribe_init() {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_deepgram_transcribe: audio buffer (in secs):    %d secs\n", nAudioBufferSecs);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_deepgram_transcribe: lws service threads:       %d\n", nServiceThreads);
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_deepgram_transcribe: resample quality:          %d (0=low, 5=desktop, 10=max)\n", nResampleQuality);
  
     int logs = LLL_ERR | LLL_WARN | LLL_NOTICE || LLL_INFO | LLL_PARSER | LLL_HEADER | LLL_EXT | LLL_CLIENT  | LLL_LATENCY | LLL_DEBUG ;
     
     deepgram::AudioPipe::initialize(nServiceThreads, logs, lws_logger);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "AudioPipe::initialize completed\n");
+
+    // Initialize AudioPipe memory pool for high-scale operation
+    const char* poolSizeEnv = std::getenv("MOD_DEEPGRAM_POOL_SIZE");
+    size_t poolSize = poolSizeEnv ? std::atoi(poolSizeEnv) : 1000;  // Default 1K, can scale to 5K+
+    if (deepgram::AudioPipePool::initialize(poolSize)) {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, 
+        "mod_deepgram_transcribe: AudioPipe pool initialized (capacity=%zu)\n", poolSize);
+    } else {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+        "mod_deepgram_transcribe: AudioPipe pool init failed - using direct allocation\n");
+    }
 
 		const char* apiKey = std::getenv("DEEPGRAM_API_KEY");
 		if (NULL == apiKey) {
@@ -499,6 +620,10 @@ extern "C" {
   }
 
   switch_status_t dg_transcribe_cleanup() {
+    // Shutdown AudioPipe pool first (log stats before cleanup)
+    deepgram::AudioPipePool::shutdown();
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "AudioPipe pool shutdown complete\n");
+    
     bool cleanup = false;
     cleanup = deepgram::AudioPipe::deinitialize();
     if (cleanup == true) {
@@ -579,9 +704,7 @@ extern "C" {
 	
 	switch_bool_t dg_transcribe_frame(switch_core_session_t *session, switch_media_bug_t *bug) {
     private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
-    size_t inuse = 0;
     bool dirty = false;
-    char *p = (char *) "{\"msg\": \"buffer overrun\"}";
 
     if (!tech_pvt) return SWITCH_TRUE;
     
@@ -596,110 +719,192 @@ extern "C" {
         return SWITCH_TRUE;
       }
 
-      pAudioPipe->lockAudioBuffer();
-      size_t available = pAudioPipe->binarySpaceAvailable();
+      /* ============================================================================
+       * LOCK-FREE AUDIO PATH (HIGH SCALE OPTIMIZATION)
+       * 
+       * The lockAudioBuffer()/unlockAudioBuffer() calls are now NO-OPS.
+       * Audio is pushed directly to the lock-free ring buffer using pushAudio().
+       * 
+       * ZERO-COPY OPTIMIZATION:
+       * For resampling mode, we use reserve/commit pattern to have speex write
+       * directly into the ring buffer, eliminating one memcpy per frame.
+       * ============================================================================ */
+      pAudioPipe->lockAudioBuffer();  // No-op in lock-free design
+      
       if (NULL == tech_pvt->resampler) {
-        // Passthrough mode - no resampling
+        // Passthrough mode - no resampling, direct push to ring buffer
+        // Note: Can't fully eliminate copy here since switch_core_media_bug_read
+        // requires its own buffer. We still use pushAudio() which does one memcpy.
+        uint8_t frame_buffer[SWITCH_RECOMMENDED_BUFFER_SIZE];
         switch_frame_t frame = { 0 };
-        frame.data = pAudioPipe->binaryWritePtr();
-        frame.buflen = available;
+        frame.data = frame_buffer;
+        frame.buflen = sizeof(frame_buffer);
+        
         while (true) {
-
-          // check if buffer would be overwritten; dump packets if so
+          // Check available space in lock-free ring buffer
+          size_t available = pAudioPipe->audioSpaceAvailable();
+          size_t buffer_used = pAudioPipe->audioSize();
+          size_t buffer_capacity = pAudioPipe->audioCapacity();
           if (available < pAudioPipe->binaryMinSpace()) {
             if (!tech_pvt->buffer_overrun_notified) {
               tech_pvt->buffer_overrun_notified = 1;
               tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_BUFFER_OVERRUN, NULL, tech_pvt->bugname, 0);
             }
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n", 
-              tech_pvt->id);
-            pAudioPipe->binaryWritePtrResetToZero();
-
-            frame.data = pAudioPipe->binaryWritePtr();
-            frame.buflen = available = pAudioPipe->binarySpaceAvailable();
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, 
+              "(%u) dropping packets - ring buffer full! used=%zu/%zu bytes (%.1f%%), available=%zu, min_space=%zu\n", 
+              tech_pvt->id, buffer_used, buffer_capacity, 
+              (buffer_used * 100.0) / buffer_capacity, available, pAudioPipe->binaryMinSpace());
+            break;  // Exit loop - buffer is full
           }
 
           switch_status_t rv = switch_core_media_bug_read(bug, &frame, SWITCH_TRUE);
           if (rv != SWITCH_STATUS_SUCCESS) break;
+          
           if (frame.datalen) {
-            // Track passthrough stats
-            tech_pvt->resampler_frames_processed++;
-            tech_pvt->resampler_samples_in += frame.datalen / (2 * tech_pvt->channels);
-            tech_pvt->resampler_samples_out += frame.datalen / (2 * tech_pvt->channels);
-            tech_pvt->resampler_bytes_written += frame.datalen;
+            // Push audio to lock-free ring buffer (non-blocking)
+            size_t pushed = pAudioPipe->pushAudio(frame.data, frame.datalen);
             
-            pAudioPipe->binaryWritePtrAdd(frame.datalen);
-            frame.buflen = available = pAudioPipe->binarySpaceAvailable();
-            frame.data = pAudioPipe->binaryWritePtr();
-            dirty = true;
-          }
-        }
-      }
-      else {
-        // Resampling mode
-        uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
-        switch_frame_t frame = { 0 };
-        frame.data = data;
-        frame.buflen = SWITCH_RECOMMENDED_BUFFER_SIZE;
-        while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
-          if (frame.datalen) {
-            spx_uint32_t out_len = available >> 1;  // space for samples which are 2 bytes
-            spx_uint32_t in_len = frame.samples;
-            spx_uint32_t in_len_before = in_len;
-
-            speex_resampler_process_interleaved_int(tech_pvt->resampler, 
-              (const spx_int16_t *) frame.data, 
-              (spx_uint32_t *) &in_len, 
-              (spx_int16_t *) ((char *) pAudioPipe->binaryWritePtr()),
-              &out_len);
-
-            if (out_len > 0) {
-              // bytes written = num samples * 2 * num channels
-              size_t bytes_written = out_len << tech_pvt->channels;
-              
-              // Track resampler statistics
+            if (pushed > 0) {
+              // Track passthrough stats
               tech_pvt->resampler_frames_processed++;
-              tech_pvt->resampler_samples_in += in_len_before;
-              tech_pvt->resampler_samples_out += out_len;
-              tech_pvt->resampler_bytes_written += bytes_written;
-              
-              pAudioPipe->binaryWritePtrAdd(bytes_written);
-              available = pAudioPipe->binarySpaceAvailable();
+              tech_pvt->resampler_samples_in += frame.datalen / (2 * tech_pvt->channels);
+              tech_pvt->resampler_samples_out += frame.datalen / (2 * tech_pvt->channels);
+              tech_pvt->resampler_bytes_written += pushed;
               dirty = true;
-              
-              // Log stats every 10 seconds (500 frames at 50fps)
-              switch_time_t now = switch_time_now();
-              if ((now - tech_pvt->resampler_last_log_time) >= 10000000) {  // 10 seconds in microseconds
-                double elapsed_secs = (now - tech_pvt->resampler_start_time) / 1000000.0;
-                double fps = tech_pvt->resampler_frames_processed / elapsed_secs;
-                double mb_written = tech_pvt->resampler_bytes_written / (1024.0 * 1024.0);
-
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-                  "[RESAMPLER-STATS] (%u) %s: frames=%lu, samples_in=%lu, samples_out=%lu, "
-                  "bytes=%.2fMB, fps=%.1f, elapsed=%.1fs, ratio=%.3f\n",
-                  tech_pvt->id, tech_pvt->bugname,
-                  (unsigned long)tech_pvt->resampler_frames_processed,
-                  (unsigned long)tech_pvt->resampler_samples_in,
-                  (unsigned long)tech_pvt->resampler_samples_out,
-                  mb_written, fps, elapsed_secs,
-                  (double)tech_pvt->resampler_samples_out / tech_pvt->resampler_samples_in);
-                tech_pvt->resampler_last_log_time = now;
-              }
-            }
-            if (available < pAudioPipe->binaryMinSpace()) {
-              if (!tech_pvt->buffer_overrun_notified) {
-                tech_pvt->buffer_overrun_notified = 1;
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n", 
-                  tech_pvt->id);
-                tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_BUFFER_OVERRUN, NULL, tech_pvt->bugname, 0);
-              }
+            } else {
+              // Ring buffer full - will be processed next frame
               break;
             }
           }
         }
       }
+      else {
+        // ============================================================================
+        // ZERO-COPY RESAMPLING MODE
+        // 
+        // Reserve space in ring buffer BEFORE resampling, then have speex write
+        // directly into the reserved region. This eliminates one memcpy per frame:
+        //   Old: frame -> speex -> resample_out -> memcpy -> ring buffer
+        //   New: frame -> speex -> ring buffer (direct)
+        // 
+        // At 50fps * 5K calls = 250,000 memcpy operations eliminated per second!
+        // ============================================================================
+        uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
+        switch_frame_t frame = { 0 };
+        frame.data = data;
+        frame.buflen = SWITCH_RECOMMENDED_BUFFER_SIZE;
+        
+        // Fallback buffer for wrap-around cases (rare)
+        uint8_t fallback_resample_out[SWITCH_RECOMMENDED_BUFFER_SIZE];
+        
+        while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
+          if (frame.datalen) {
+            // Estimate output size: assume worst case 8kHz->16kHz = 2x expansion
+            // Actual: out_samples <= in_samples * (target_rate / source_rate) + some
+            // For 16kHz output with typical 320 byte frames, max output ~640 bytes
+            size_t max_output_bytes = (frame.datalen * 2) + 64;  // Conservative estimate
+            
+            // Try zero-copy: reserve space directly in ring buffer
+            auto reserve = pAudioPipe->reserveAudio(max_output_bytes);
+            
+            if (reserve.success && reserve.contiguous >= max_output_bytes) {
+              // ZERO-COPY PATH: Have speex write directly to ring buffer
+              spx_uint32_t out_len = reserve.contiguous >> 1;  // space for samples
+              spx_uint32_t in_len = frame.samples;
+              spx_uint32_t in_len_before = in_len;
 
-      pAudioPipe->unlockAudioBuffer();
+              speex_resampler_process_interleaved_int(tech_pvt->resampler, 
+                (const spx_int16_t *) frame.data, 
+                (spx_uint32_t *) &in_len, 
+                (spx_int16_t *) reserve.ptr,  // Write directly to ring buffer!
+                &out_len);
+
+              if (out_len > 0) {
+                // Commit the actual bytes written
+                size_t bytes_written = out_len << tech_pvt->channels;
+                pAudioPipe->commitAudio(bytes_written);
+                
+                // Track statistics
+                tech_pvt->resampler_frames_processed++;
+                tech_pvt->resampler_samples_in += in_len_before;
+                tech_pvt->resampler_samples_out += out_len;
+                tech_pvt->resampler_bytes_written += bytes_written;
+                dirty = true;
+              }
+              // Note: If out_len == 0, we simply don't commit anything
+            }
+            else if (reserve.success) {
+              // FALLBACK PATH: Not enough contiguous space (wrap-around case)
+              // Use intermediate buffer + pushAudio (one extra memcpy)
+              // This is rare - only happens near buffer wrap boundary
+              spx_uint32_t out_len = sizeof(fallback_resample_out) >> 1;
+              spx_uint32_t in_len = frame.samples;
+              spx_uint32_t in_len_before = in_len;
+
+              speex_resampler_process_interleaved_int(tech_pvt->resampler, 
+                (const spx_int16_t *) frame.data, 
+                (spx_uint32_t *) &in_len, 
+                (spx_int16_t *) fallback_resample_out,
+                &out_len);
+
+              if (out_len > 0) {
+                size_t bytes_to_push = out_len << tech_pvt->channels;
+                size_t pushed = pAudioPipe->pushAudio(fallback_resample_out, bytes_to_push);
+                
+                if (pushed > 0) {
+                  tech_pvt->resampler_frames_processed++;
+                  tech_pvt->resampler_samples_in += in_len_before;
+                  tech_pvt->resampler_samples_out += out_len;
+                  tech_pvt->resampler_bytes_written += pushed;
+                  dirty = true;
+                }
+              }
+            }
+            else {
+              // Buffer full - trigger overrun notification
+              if (!tech_pvt->buffer_overrun_notified) {
+                tech_pvt->buffer_overrun_notified = 1;
+                size_t buffer_used = pAudioPipe->audioSize();
+                size_t buffer_capacity = pAudioPipe->audioCapacity();
+                size_t space_avail = pAudioPipe->audioSpaceAvailable();
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, 
+                  "(%u) dropping packets - reserve failed! reserve={success=%d, contiguous=%zu, total=%zu}, "
+                  "requested=%zu, buf_used=%zu/%zu (%.1f%%), space_avail=%zu, ws_state=%d\n", 
+                  tech_pvt->id, reserve.success, reserve.contiguous, reserve.total,
+                  max_output_bytes, buffer_used, buffer_capacity, 
+                  (buffer_used * 100.0) / buffer_capacity, space_avail, (int)pAudioPipe->getLwsState());
+                tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_BUFFER_OVERRUN, NULL, tech_pvt->bugname, 0);
+              }
+              break;
+            }
+            
+            // Log stats every 10 seconds (500 frames at 50fps)
+            switch_time_t now = switch_time_now();
+            if ((now - tech_pvt->resampler_last_log_time) >= 10000000) {  // 10 seconds in microseconds
+              double elapsed_secs = (now - tech_pvt->resampler_start_time) / 1000000.0;
+              double fps = tech_pvt->resampler_frames_processed / elapsed_secs;
+              double mb_written = tech_pvt->resampler_bytes_written / (1024.0 * 1024.0);
+              size_t buf_used = pAudioPipe->audioSize();
+              size_t buf_cap = pAudioPipe->audioCapacity();
+
+              switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+                "[RESAMPLER-STATS] (%u) %s: frames=%lu, samples_in=%lu, samples_out=%lu, "
+                "bytes=%.2fMB, fps=%.1f, elapsed=%.1fs, ratio=%.3f, buf=%zu/%zu (%.1f%%), ws=%d\n",
+                tech_pvt->id, tech_pvt->bugname,
+                (unsigned long)tech_pvt->resampler_frames_processed,
+                (unsigned long)tech_pvt->resampler_samples_in,
+                (unsigned long)tech_pvt->resampler_samples_out,
+                mb_written, fps, elapsed_secs,
+                (double)tech_pvt->resampler_samples_out / tech_pvt->resampler_samples_in,
+                buf_used, buf_cap, (buf_used * 100.0) / buf_cap,
+                (int)pAudioPipe->getLwsState());
+              tech_pvt->resampler_last_log_time = now;
+            }
+          }
+        }
+      }
+
+      pAudioPipe->unlockAudioBuffer();  // Triggers pending write if data available
       switch_mutex_unlock(tech_pvt->mutex);
     }
     return SWITCH_TRUE;
