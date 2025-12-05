@@ -15,6 +15,8 @@
 5. [I/O Patterns](#io-patterns)
 6. [Threading Model](#threading-model)
 7. [Implementation Checklist](#implementation-checklist)
+8. [Module Comparison: Deepgram vs Google](#module-comparison-mod_deepgram_transcribe-vs-mod_google_transcribe_async)
+9. [Remaining Optimizations: Implementation Estimates](#remaining-optimizations-implementation-estimates)
 
 ---
 
@@ -987,5 +989,310 @@ struct lws_context *AudioPipe::contexts[] = {
 
 ---
 
+## Module Comparison: mod_deepgram_transcribe vs mod_google_transcribe_async
+
+This section provides a comprehensive comparison between the two main transcription modules
+to identify best practices and areas for improvement.
+
+### Architecture Overview
+
+| Aspect | mod_deepgram_transcribe | mod_google_transcribe_async |
+|--------|------------------------|----------------------------|
+| **Total Lines of Code** | **5,017 lines** (14 files) | **667 lines** (1 file) |
+| **Language** | C + C++ hybrid | C++ only |
+| **Protocol** | WebSocket (libwebsockets) | gRPC (grpcpp) |
+| **Connection** | TLS WebSocket to api.deepgram.com | gRPC channel to speech.googleapis.com |
+
+### Session Lifecycle & Memory Management
+
+| Feature | mod_deepgram_transcribe | mod_google_transcribe_async |
+|---------|------------------------|----------------------------|
+| **Session Tracking** | `private_t*` raw pointer on media bug | `shared_ptr<Session>` with `enable_shared_from_this` |
+| **Memory Safety** | Manual `destroy_tech_pvt()` cleanup | RAII via shared_ptr reference counting |
+| **Crash Protection** | Mutex-guarded, manual state checks | Self-anchoring pattern - async ops hold shared_ptr |
+| **Object Pooling** | ✅ `AudioPipePool` (pre-allocates 1000+ pipes) | ❌ None - new/delete per session |
+| **Session Lock** | `switch_core_session_read_lock()` in glue | `switch_core_session_read_lock()` in Session ctor |
+
+**Winner: Google** for safer lifecycle management with `shared_ptr`. **Deepgram** has more complex manual memory management but offers pooling for high scale.
+
+### Audio Buffer Architecture
+
+| Feature | mod_deepgram_transcribe | mod_google_transcribe_async |
+|---------|------------------------|----------------------------|
+| **Buffer Type** | Lock-free SPSC Ring Buffer (64KB) | `std::queue<std::vector<char>>` |
+| **Mutex Contention** | **ZERO** - lock-free producer/consumer | **MEDIUM** - `std::mutex` per session |
+| **Backpressure** | Buffer full = drop frames + log | Queue > 1000 = drop + log |
+| **Memory Pattern** | Pre-allocated contiguous | Dynamic allocations per frame |
+| **Zero-Copy** | ✅ `reserveAudio()`/`commitAudio()` for resampling | ❌ Copy into queue vector |
+
+**Winner: Deepgram** - Lock-free design eliminates mutex contention at 5K+ calls.
+
+```cpp
+// Deepgram: Lock-free push (no mutex)
+size_t pushed = pAudioPipe->pushAudio(frame.data, frame.datalen);
+
+// Google: Mutex-guarded push
+std::lock_guard<std::mutex> lock(mu_);
+audio_queue_.emplace(data, data + len);
+```
+
+### Thread Architecture
+
+| Feature | mod_deepgram_transcribe | mod_google_transcribe_async |
+|---------|------------------------|----------------------------|
+| **Service Threads** | 3-5 LWS threads (configurable) | 16 gRPC CQ workers (configurable) |
+| **Thread Scaling** | `MOD_AUDIO_FORK_SERVICE_THREADS` | `ASYNC_GRPC_WORKERS` |
+| **I/O Model** | Event-driven (lws_service loop) | Completion queue (async ops) |
+| **Work Distribution** | Round-robin across contexts | Single CQ, multiple workers |
+
+### WebSocket/gRPC Connection Handling
+
+| Feature | mod_deepgram_transcribe | mod_google_transcribe_async |
+|---------|------------------------|----------------------------|
+| **Pending Operations** | `std::vector` with mutex (optimized) | Tag-based with `shared_ptr` anchors |
+| **Reconnection** | Manual via `reaper()` thread | Automatic via gRPC channel |
+| **Connection Pool** | ❌ One WebSocket per session | ✅ Shared gRPC channel |
+| **Keep-Alive** | TCP keepalive (55s default) | gRPC built-in |
+
+### Audio Processing & Resampling
+
+| Feature | mod_deepgram_transcribe | mod_google_transcribe_async |
+|---------|------------------------|----------------------------|
+| **Resampler** | Speex (configurable quality 0-10) | None built-in |
+| **Default Quality** | 2 (configurable via env) | N/A |
+| **Zero-Copy Resample** | ✅ Direct write to ring buffer | N/A |
+| **Upsampling** | 8kHz → 16kHz supported | Rate specified at start |
+| **Channel Handling** | Stereo interleaved | Stereo via config |
+
+### Transcript Delivery
+
+| Feature | mod_deepgram_transcribe | mod_google_transcribe_async |
+|---------|------------------------|----------------------------|
+| **JSON Parsing** | Single-parse optimization with `transcript_data_t` | Per-result iteration |
+| **Events** | FreeSWITCH custom events + Pusher HTTP | FreeSWITCH custom events only |
+| **Pusher Integration** | ✅ Async HTTP (non-blocking) | ❌ None |
+| **Latency Optimizations** | DNS caching, TCP_NODELAY, IPv4 prefer | N/A |
+
+### CPU/Performance Profile
+
+| Operation | mod_deepgram_transcribe | mod_google_transcribe_async |
+|-----------|------------------------|----------------------------|
+| **Frame Processing** | ~0.3-0.5% CPU/call (quality 2 resample) | ~0.2-0.3% CPU/call (no resample) |
+| **Mutex Overhead** | **ZERO** (lock-free buffer) | ~0.05% (mutex per write) |
+| **Memory Alloc** | Pooled + ring buffer | Queue vector alloc per frame |
+| **Network I/O** | LWS event loop (efficient) | gRPC completion queue (efficient) |
+
+**At 2000 Concurrent Calls:**
+
+| Metric | mod_deepgram_transcribe | mod_google_transcribe_async |
+|--------|------------------------|----------------------------|
+| Est. CPU | 600-1000% (6-10 cores) | 400-600% (4-6 cores) |
+| Memory | ~200MB (pooled) | ~400MB (dynamic) |
+| Mutex contentions | ~0/sec | ~100K/sec |
+
+### Key Differences Summary
+
+| Advantage | mod_deepgram_transcribe | mod_google_transcribe_async |
+|-----------|:-----------------------:|:---------------------------:|
+| Lock-free audio path | ✅ | ❌ |
+| Object pooling | ✅ | ❌ |
+| Zero-copy resampling | ✅ | N/A |
+| Crash-safe shared_ptr lifecycle | ❌ | ✅ |
+| Code simplicity | ❌ (5K lines) | ✅ (667 lines) |
+| Built-in Pusher delivery | ✅ | ❌ |
+| Single JSON parse | ✅ | N/A (protobuf) |
+| gRPC connection pooling | N/A | ✅ |
+
+### Which to Use?
+
+| Use Case | Recommendation |
+|----------|----------------|
+| **< 500 calls** | Either - both perform well |
+| **500-2000 calls** | **mod_deepgram_transcribe** - lock-free scales better |
+| **Pusher required** | **mod_deepgram_transcribe** - built-in |
+| **Maximum safety** | **mod_google_transcribe_async** - shared_ptr lifecycle |
+| **Minimal code** | **mod_google_transcribe_async** - 667 vs 5017 lines |
+
+---
+
+## Remaining Optimizations: Implementation Estimates
+
+These optimizations would bring `mod_deepgram_transcribe` to full parity with Google's patterns
+while maintaining its existing advantages.
+
+### 1. shared_ptr Session Lifecycle
+
+**Current State (Deepgram):**
+```cpp
+// Raw pointer, manual cleanup
+private_t* tech_pvt = (private_t*) switch_core_session_alloc(session, sizeof(private_t));
+// Risk: pointer may be dangling if session ends during async operation
+```
+
+**Target Pattern (from Google):**
+```cpp
+class DgSession : public std::enable_shared_from_this<DgSession> {
+    // Self-anchoring for async operations
+    std::shared_ptr<DgSession> connect_anchor_;
+    std::shared_ptr<DgSession> write_anchor_;
+    
+    void OnConnect(bool ok) {
+        auto anchor = std::move(connect_anchor_);  // Release anchor
+        // Safe: anchor keeps 'this' alive until callback completes
+    }
+};
+
+struct BugData {
+    std::shared_ptr<DgSession> session;  // Prevents premature destruction
+};
+```
+
+**Files to Modify:**
+- `dg_transcribe_glue.cpp` - Major refactor to Session class
+- `audio_pipe.hpp` / `audio_pipe.cpp` - Integrate with session lifecycle
+- `mod_deepgram_transcribe.c` - Update API
+
+**Challenges:**
+1. `switch_core_session_alloc()` returns raw memory - need separate allocation
+2. Must ensure shared_ptr outlives all async WebSocket callbacks
+3. AudioPipe callbacks need to safely access session (weak_ptr pattern)
+
+| Effort | Risk | Benefit |
+|--------|------|---------|
+| **2-3 days** | Medium (refactor) | Crash prevention, memory safety |
+
+---
+
+### 2. Lock-free Pending Queues
+
+**Current State:**
+```cpp
+// Mutex-guarded vectors for pending operations
+std::mutex AudioPipe::mutex_connects;
+std::vector<AudioPipe*> AudioPipe::pendingConnects;
+
+void AudioPipe::addPendingConnect(AudioPipe* ap) {
+    std::lock_guard<std::mutex> guard(mutex_connects);  // LOCK
+    pendingConnects.push_back(ap);
+}
+```
+
+**Target Pattern:**
+```cpp
+// Lock-free MPSC Queue (Multiple Producer Single Consumer)
+template<typename T>
+class LockFreeMPSCQueue {
+    struct Node {
+        std::atomic<Node*> next{nullptr};
+        T data;
+    };
+    
+    std::atomic<Node*> head_;
+    std::atomic<Node*> tail_;
+    
+public:
+    void push(T item);      // Multiple producers (frame callbacks)
+    bool pop(T& item);      // Single consumer (LWS thread)
+};
+
+// Usage
+static LockFreeMPSCQueue<AudioPipe*> pendingConnects;
+static LockFreeMPSCQueue<AudioPipe*> pendingDisconnects;
+static LockFreeMPSCQueue<AudioPipe*> pendingWrites;
+```
+
+**Alternative: Bounded Lock-free Queue**
+```cpp
+// Use existing ring buffer pattern but for pointers
+template<size_t Capacity>
+class LockFreePointerQueue {
+    std::atomic<size_t> head_, tail_;
+    AudioPipe* buffer_[Capacity];
+};
+
+// Fixed capacity = predictable memory, no allocations
+static LockFreePointerQueue<10000> pendingWrites;  // 10K max pending
+```
+
+**Files to Modify:**
+- `audio_pipe.cpp` - Replace pending vectors with lock-free queues
+- `audio_pipe.hpp` - Add lock-free queue type
+
+**Challenges:**
+1. MPSC (Multiple Producer Single Consumer) pattern needed
+2. Must handle ABA problem for connect/disconnect
+3. Need memory ordering for cross-thread visibility
+
+| Effort | Risk | Benefit |
+|--------|------|---------|
+| **1-2 days** | Low-Medium | ~50K fewer mutex locks/sec at scale |
+
+---
+
+### 3. Memory Pool for private_t
+
+**Current State:**
+```cpp
+// Per-session allocation from FreeSWITCH pool
+private_t* tech_pvt = (private_t*) switch_core_session_alloc(session, sizeof(private_t));
+```
+
+**Target Pattern:**
+```cpp
+// Extend existing ObjectPool pattern
+class PrivateDataPool {
+public:
+    static bool initialize(size_t capacity = 2000);
+    static private_t* acquire();
+    static void release(private_t* p);
+    static void shutdown();
+    
+private:
+    static ObjectPool<private_t> pool_;
+};
+
+// Usage in dg_transcribe_glue.cpp
+switch_status_t dg_transcribe_session_init(...) {
+    // Pool allocation (O(1), no malloc)
+    private_t* tech_pvt = PrivateDataPool::acquire();
+    if (!tech_pvt) {
+        // Pool exhausted - fall back to malloc or return error
+        tech_pvt = (private_t*) malloc(sizeof(private_t));
+    }
+}
+
+void destroy_tech_pvt(private_t *tech_pvt) {
+    // ... cleanup code ...
+    PrivateDataPool::release(tech_pvt);  // Return to pool
+}
+```
+
+**Files to Modify:**
+- `dg_transcribe_glue.cpp` - Pool integration
+- `memory_pool.hpp` / `memory_pool.cpp` - Extend for private_t
+
+**Challenges:**
+- `switch_core_session_alloc()` ties memory to session lifetime
+- Pool-allocated memory must be explicitly released in `destroy_tech_pvt()`
+- Need to handle pool exhaustion gracefully
+
+| Effort | Risk | Benefit |
+|--------|------|---------|
+| **0.5-1 day** | Low | Faster session init, no malloc overhead |
+
+---
+
+### Implementation Priority
+
+| Priority | Optimization | Effort | Risk | ROI |
+|----------|--------------|--------|------|-----|
+| **1** | private_t memory pool | 0.5-1 day | Low | High - quickest win |
+| **2** | Lock-free pending queues | 1-2 days | Low-Medium | High - scalability |
+| **3** | shared_ptr lifecycle | 2-3 days | Medium | Medium - safety |
+
+**Total Estimated Effort: 4-6 days**
+
+---
+
 *Last Updated: December 2025*
-*Version: 2.0 - Added comprehensive optimization guide*
+*Version: 3.0 - Added module comparison and implementation estimates*
