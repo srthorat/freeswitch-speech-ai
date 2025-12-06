@@ -9,6 +9,7 @@
 #include <thread>
 
 #include <libwebsockets.h>
+#include "lockfree_ring_buffer.hpp"
 
 class AudioPipe {
 public:
@@ -48,25 +49,47 @@ public:
   LwsState_t getLwsState(void) { return m_state; }
   void connect(void);
   void bufferForSending(const char* text);
-  size_t binarySpaceAvailable(void) {
-    return m_audio_buffer_max_len - m_audio_buffer_write_offset;
+  
+  // Lock-free ring buffer API (Phase 1)
+  size_t getAudioDataAvailable(void) {
+    return m_audio_buffer.size();
   }
-  size_t binaryMinSpace(void) {
-    return m_audio_buffer_min_freespace;
+  
+  // Lock-free ring buffer status API
+  size_t getAvailableSpace() {
+    return m_audio_buffer.space_available();
   }
-  char * binaryWritePtr(void) { 
-    return (char *) m_audio_buffer + m_audio_buffer_write_offset;
+  
+  size_t getBufferCapacity() {
+    return m_audio_buffer.capacity();
   }
-  void binaryWritePtrAdd(size_t len) {
-    m_audio_buffer_write_offset += len;
+  
+  // Zero-copy write for producer (frame callback)
+  bool reserveAudioSpace(size_t requested_len, uint8_t** ptr1, size_t* len1, uint8_t** ptr2, size_t* len2) {
+    return m_audio_buffer.reserve_write(requested_len, ptr1, len1, ptr2, len2);
   }
-  void binaryWritePtrResetToZero(void) {
-    m_audio_buffer_write_offset = 0;
+  
+  void commitAudioData(size_t len) {
+    m_audio_buffer.commit_write(len);
+    if (len > 0) addPendingWrite(this);
   }
-  void lockAudioBuffer(void) {
-    m_audio_mutex.lock();
+  
+  // Fallback: traditional push (for wrap-around cases)
+  size_t pushAudio(const void* data, size_t len) {
+    return m_audio_buffer.push(data, len);
   }
-  void unlockAudioBuffer(void) ;
+  
+  // Direct write for immediate transmission (bypass ring buffer)
+  void writeAudioFrame(const void* data, size_t len);
+  
+  // Consumer API (LWS thread)
+  std::pair<const uint8_t*, size_t> peekAudioContiguous() {
+    return m_audio_buffer.peek_contiguous();
+  }
+  
+  void consumeAudio(size_t len) {
+    m_audio_buffer.consume(len);
+  }
   bool hasBasicAuth(void) {
     return !m_username.empty() && !m_password.empty();
   }
@@ -126,13 +149,16 @@ private:
   std::string m_path;
   std::string m_metadata;
   std::mutex m_text_mutex;
-  std::mutex m_audio_mutex;
   int m_sslFlags;
   struct lws *m_wsi;
-  uint8_t *m_audio_buffer;
-  size_t m_audio_buffer_max_len;
-  size_t m_audio_buffer_write_offset;
+  
+  // Phase 1: Lock-free ring buffer (replaces mutex + malloc buffer)
+  // 8KB capacity = 0.25 seconds at 8kHz stereo (minimal buffering for real-time)
+  // Very small buffer ensures low latency - old audio drops if network can't keep up
+  static constexpr size_t RING_BUFFER_CAPACITY = 8 * 1024;
+  audiofork::LockFreeRingBuffer<RING_BUFFER_CAPACITY> m_audio_buffer;
   size_t m_audio_buffer_min_freespace;
+  
   uint8_t* m_recv_buf;
   uint8_t* m_recv_buf_ptr;
   size_t m_recv_buf_len;

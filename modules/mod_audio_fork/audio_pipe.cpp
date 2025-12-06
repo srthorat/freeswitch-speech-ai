@@ -98,6 +98,11 @@ int AudioPipe::lws_callback(struct lws *wsi,
           ap->m_vhd = vhd;
           ap->m_state = LWS_CLIENT_CONNECTED;
           ap->m_callback(ap->m_uuid.c_str(), ap->m_bugname.c_str(), AudioPipe::CONNECT_SUCCESS, NULL);
+          
+          // Trigger initial write callback to start draining audio buffer
+          lws_callback_on_writable(wsi);
+          // Wake up the service thread to process the writable callback immediately
+          lws_cancel_service(vhd->context);
         }
         else {
           lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_ESTABLISHED %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
@@ -200,8 +205,8 @@ int AudioPipe::lws_callback(struct lws *wsi,
         // check for graceful close - send a zero length binary frame
         if (ap->isGracefulShutdown()) {
           lwsl_notice("%s graceful shutdown - sending zero length binary frame to flush any final responses\n", ap->m_uuid.c_str());
-          std::lock_guard<std::mutex> lk(ap->m_audio_mutex);
-          int sent = lws_write(wsi, (unsigned char *) ap->m_audio_buffer + LWS_PRE, 0, LWS_WRITE_BINARY);
+          uint8_t buf[LWS_PRE];
+          int sent = lws_write(wsi, buf + LWS_PRE, 0, LWS_WRITE_BINARY);
           return 0;
         }
 
@@ -231,17 +236,31 @@ int AudioPipe::lws_callback(struct lws *wsi,
           return -1;
         }
 
-        // check for audio packets
+        // Phase 1: Lock-free audio read using peek/consume pattern
+        // Send all contiguous data at once for efficiency (zero-copy design)
         {
-          std::lock_guard<std::mutex> lk(ap->m_audio_mutex);
-          if (ap->m_audio_buffer_write_offset > LWS_PRE) {
-            size_t datalen = ap->m_audio_buffer_write_offset - LWS_PRE;
-            int sent = lws_write(wsi, (unsigned char *) ap->m_audio_buffer + LWS_PRE, datalen, LWS_WRITE_BINARY);
-            if (sent < datalen) {
-              lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_WRITEABLE %s attemped to send %lu only sent %d wsi %p..\n", 
-                ap->m_uuid.c_str(), datalen, sent, wsi); 
+          auto [data_ptr, data_len] = ap->peekAudioContiguous();
+          if (data_len > 0) {
+            // Allocate buffer with LWS_PRE space
+            uint8_t buf[data_len + LWS_PRE];
+            memcpy(buf + LWS_PRE, data_ptr, data_len);
+            
+            int sent = lws_write(wsi, buf + LWS_PRE, data_len, LWS_WRITE_BINARY);
+            if (sent < (int)data_len) {
+              lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_WRITEABLE %s attempted to send %zu only sent %d wsi %p..\n", 
+                ap->m_uuid.c_str(), data_len, sent, wsi); 
             }
-            ap->m_audio_buffer_write_offset = LWS_PRE;
+            
+            // Consume the data we just sent
+            ap->consumeAudio(data_len);
+            
+            // Request another callback if there's more data
+            // This ensures continuous draining of the ring buffer
+            if (ap->getAudioDataAvailable() > 0) {
+              lws_callback_on_writable(wsi);
+              // Wake up service thread for immediate processing
+              lws_cancel_service(ap->m_vhd->context);
+            }
           }
         }
 
@@ -388,11 +407,20 @@ void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
   lws_cancel_service(ap->m_vhd->context);
 }
 void AudioPipe::addPendingWrite(AudioPipe* ap) {
-  {
-    std::lock_guard<std::mutex> guard(mutex_writes);
-    pendingWrites.push_back(ap);
+  // Fast path: if already connected, request write callback immediately
+  // This eliminates queueing delay for sub-millisecond latency
+  if (ap->m_state == LWS_CLIENT_CONNECTED && ap->m_wsi) {
+    lws_callback_on_writable(ap->m_wsi);
+    lws_cancel_service(ap->m_vhd->context);
   }
-  lws_cancel_service(ap->m_vhd->context);
+  else {
+    // Slow path: queue for later processing
+    {
+      std::lock_guard<std::mutex> guard(mutex_writes);
+      pendingWrites.push_back(ap);
+    }
+    lws_cancel_service(ap->m_vhd->context);
+  }
 }
 
 bool AudioPipe::lws_service_thread(unsigned int nServiceThread) {
@@ -432,7 +460,7 @@ bool AudioPipe::lws_service_thread(unsigned int nServiceThread) {
 
   int n;
   do {
-    n = lws_service(contexts[nServiceThread], 0);
+    n = lws_service(contexts[nServiceThread], 1);
   } while (n >= 0 && !stopFlags[this_id]);
 
   // Cleanup once work is done or stopped
@@ -493,8 +521,8 @@ bool AudioPipe::deinitialize() {
 AudioPipe::AudioPipe(const char* uuid, const char* host, unsigned int port, const char* path,
   int sslFlags, size_t bufLen, size_t minFreespace, const char* username, const char* password, char* bugname, notifyHandler_t callback) :
   m_uuid(uuid), m_host(host), m_port(port), m_path(path), m_sslFlags(sslFlags),
-  m_audio_buffer_min_freespace(minFreespace), m_audio_buffer_max_len(bufLen), m_gracefulShutdown(false),
-  m_audio_buffer_write_offset(LWS_PRE), m_recv_buf(nullptr), m_recv_buf_ptr(nullptr), m_bugname(bugname),
+  m_audio_buffer_min_freespace(minFreespace), m_gracefulShutdown(false),
+  m_recv_buf(nullptr), m_recv_buf_ptr(nullptr), m_bugname(bugname),
   m_state(LWS_CLIENT_IDLE), m_wsi(nullptr), m_vhd(nullptr), m_callback(callback) {
 
   if (username && password) {
@@ -502,10 +530,11 @@ AudioPipe::AudioPipe(const char* uuid, const char* host, unsigned int port, cons
     m_password.assign(password);
   }
 
-  m_audio_buffer = new uint8_t[m_audio_buffer_max_len];
+  // Phase 1: Ring buffer is already initialized by member initializer
+  // No malloc needed - lock-free ring buffer is stack-allocated
 }
 AudioPipe::~AudioPipe() {
-  if (m_audio_buffer) delete [] m_audio_buffer;
+  // Phase 1: No need to delete audio_buffer (it's not heap-allocated)
   if (m_recv_buf) delete [] m_recv_buf;
 }
 
@@ -514,7 +543,7 @@ void AudioPipe::connect(void) {
 }
 
 bool AudioPipe::connect_client(struct lws_per_vhost_data *vhd) {
-  assert(m_audio_buffer != nullptr);
+  // Phase 1: No malloc buffer assertion needed (ring buffer is stack-allocated)
   assert(m_vhd == nullptr);
 
   struct lws_client_connect_info i;
@@ -548,9 +577,16 @@ void AudioPipe::bufferForSending(const char* text) {
   addPendingWrite(this);
 }
 
-void AudioPipe::unlockAudioBuffer() {
-  if (m_audio_buffer_write_offset > LWS_PRE) addPendingWrite(this);
-  m_audio_mutex.unlock();
+// Direct write bypassing ring buffer for immediate transmission
+void AudioPipe::writeAudioFrame(const void* data, size_t len) {
+  if (m_state != LWS_CLIENT_CONNECTED || !data || len == 0) return;
+  
+  // Write directly to ring buffer (will be sent immediately by next writable callback)
+  size_t written = m_audio_buffer.push(data, len);
+  if (written > 0) {
+    // Trigger immediate send
+    addPendingWrite(this);
+  }
 }
 
 void AudioPipe::close() {

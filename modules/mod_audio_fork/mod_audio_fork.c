@@ -12,6 +12,9 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_audio_fork_shutdown);
 SWITCH_MODULE_RUNTIME_FUNCTION(mod_audio_fork_runtime);
 SWITCH_MODULE_LOAD_FUNCTION(mod_audio_fork_load);
 
+// Forward declaration
+static switch_status_t do_stop(switch_core_session_t *session, char* bugname, char* text);
+
 SWITCH_MODULE_DEFINITION(mod_audio_fork, mod_audio_fork_load, mod_audio_fork_shutdown, NULL /*mod_audio_fork_runtime*/);
 
 static void responseHandler(switch_core_session_t* session, const char * eventName, char * json) {
@@ -30,17 +33,23 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
 	switch_core_session_t *session = switch_core_media_bug_get_session(bug);
 	switch (type) {
 	case SWITCH_ABC_TYPE_INIT:
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Got SWITCH_ABC_TYPE_INIT.\n");
 		break;
 
 	case SWITCH_ABC_TYPE_CLOSE:
 		{
-      private_t* tech_pvt = (private_t *)  switch_core_media_bug_get_user_data(bug);
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Got SWITCH_ABC_TYPE_CLOSE for bug %s\n", tech_pvt->bugname);
-      fork_session_cleanup(session, tech_pvt->bugname, NULL, 1);
+			private_t* tech_pvt = (private_t *)  switch_core_media_bug_get_user_data(bug);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Got SWITCH_ABC_TYPE_CLOSE for bug %s\n", tech_pvt->bugname);
+			fork_session_cleanup(session, tech_pvt->bugname, NULL, 1);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Finished SWITCH_ABC_TYPE_CLOSE.\n");
 		}
 		break;
 	
 	case SWITCH_ABC_TYPE_READ:
+	// Fall through - handle same as READ_PING
+	case SWITCH_ABC_TYPE_READ_PING:
+		// Both READ and READ_PING trigger frame processing
+		// READ_PING gives more predictable 20ms timing in stereo mode
 		return fork_frame(session, bug);
 		break;
 
@@ -65,29 +74,43 @@ static switch_status_t start_capture(switch_core_session_t *session,
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	switch_media_bug_t *bug;
 	switch_status_t status;
-	switch_codec_t* read_codec;
-
+	switch_codec_implementation_t read_impl = { 0 };
 	void *pUserData = NULL;
-  int channels = (flags & SMBF_STEREO) ? 2 : 1;
-
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, 
-    "mod_audio_fork (%s): streaming %d sampling to %s path %s port %d tls: %s.\n", 
-    bugname, sampling, host, path, port, sslFlags ? "yes" : "no");
+	uint32_t samples_per_second;
+	int channels;
 
 	if (switch_channel_get_private(channel, bugname)) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "mod_audio_fork: bug %s already attached!\n", bugname);
-		return SWITCH_STATUS_FALSE;
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "removing bug from previous audio_fork\n");
+		do_stop(session, bugname, NULL);
 	}
 
-	read_codec = switch_core_session_get_read_codec(session);
+	switch_core_session_get_read_impl(session, &read_impl);
 
 	if (switch_channel_pre_answer(channel) != SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "mod_audio_fork: channel must have reached pre-answer status before calling start!\n");
 		return SWITCH_STATUS_FALSE;
 	}
 
+	// Determine actual samples per second from codec (handle G.722 special case)
+	samples_per_second = !strcasecmp(read_impl.iananame, "g722") ? read_impl.actual_samples_per_second : read_impl.samples_per_second;
+
+	// Override with requested sampling rate if different
+	if (sampling != samples_per_second) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Resampling from %d to %d\n", samples_per_second, sampling);
+		samples_per_second = sampling;
+	}
+
+	// Determine channel count based on flags
+	channels = (flags & SMBF_STEREO) ? 2 : 1;
+
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, 
+		"mod_audio_fork (%s): streaming %dHz %s to %s:%d%s (tls: %s)\n", 
+		bugname, samples_per_second, 
+		channels == 2 ? "stereo" : (flags & SMBF_WRITE_STREAM) ? "mixed" : "mono",
+		host, port, path, sslFlags ? "yes" : "no");
+
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "calling fork_session_init.\n");
-	if (SWITCH_STATUS_FALSE == fork_session_init(session, responseHandler, read_codec->implementation->actual_samples_per_second, 
+	if (SWITCH_STATUS_FALSE == fork_session_init(session, responseHandler, read_impl.actual_samples_per_second, 
 		host, port, path, sampling, sslFlags, channels, bugname, metadata, &pUserData)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error initializing mod_audio_fork session.\n");
 		return SWITCH_STATUS_FALSE;
@@ -227,48 +250,85 @@ SWITCH_STANDARD_API(fork_function)
       }
       else if (!strcasecmp(argv[1], "start")) {
 				switch_channel_t *channel = switch_core_session_get_channel(lsession);
-        char host[MAX_WS_URL_LEN], path[MAX_PATH_LEN];
-        unsigned int port;
-        int sslFlags;
-        int sampling = 8000;
-      	switch_media_bug_flag_t flags = SMBF_READ_STREAM ;
-        char *metadata = NULL;
-        if( argc > 6) {
-          bugname = argv[5];
-          metadata = argv[6];
-        }
-        else if (argc > 5) {
-          if (argv[5][0] == '{' || argv[5][0] == '[') metadata = argv[5];
-          else bugname = argv[5];
-        }
-        if (0 == strcmp(argv[3], "mixed")) {
-          flags |= SMBF_WRITE_STREAM ;
-        }
-        else if (0 == strcmp(argv[3], "stereo")) {
-          flags |= SMBF_WRITE_STREAM ;
-          flags |= SMBF_STEREO;
-        }
-        else if(0 != strcmp(argv[3], "mono")) {
-          switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "invalid mix type: %s, must be mono, mixed, or stereo\n", argv[3]);
-          switch_core_session_rwunlock(lsession);
-          goto done;
-        }
-        if (0 == strcmp(argv[4], "16k")) {
-          sampling = 16000;
-        }
-        else if (0 == strcmp(argv[4], "8k")) {
-          sampling = 8000;
-        }
-				else {
-					sampling = atoi(argv[4]);
+				char host[MAX_WS_URL_LEN], path[MAX_PATH_LEN];
+				unsigned int port;
+				int sslFlags;
+				int sampling = 8000;  // Default to 8kHz (native telephony rate)
+				char *metadata = NULL;
+				int is_stereo = 1;    // Default is stereo
+				
+				/* DEFAULT: Stereo mode with READ_PING for predictable frame timing */
+				switch_media_bug_flag_t flags = SMBF_READ_STREAM | SMBF_WRITE_STREAM | SMBF_STEREO | SMBF_READ_PING;
+
+				if (argc > 6) {
+					bugname = argv[5];
+					metadata = argv[6];
 				}
-        if (!parse_ws_uri(channel, argv[2], &host[0], &path[0], &port, &sslFlags)) {
-          switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "invalid websocket uri: %s\n", argv[2]);
-        }
-				else if (sampling % 8000 != 0) {
-          switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "invalid sample rate: %s\n", argv[4]);					
+				else if (argc > 5) {
+					if (argv[5][0] == '{' || argv[5][0] == '[') metadata = argv[5];
+					else bugname = argv[5];
 				}
-        status = start_capture(lsession, flags, host, port, path, sampling, sslFlags, bugname, metadata);
+				
+				/* Parse mix-type (argv[3]): stereo (DEFAULT), mono, mixed
+				 * 
+				 * DEFAULT: stereo - Best for speaker diarization
+				 *   - Channel 0 = Caller (A-leg)
+				 *   - Channel 1 = Callee (B-leg)
+				 *   - Uses SMBF_READ_PING for predictable 20ms frame timing
+				 */
+				if (0 == strcmp(argv[3], "mono")) {
+					/* Mono: Caller audio only (A-leg) */
+					flags = SMBF_READ_STREAM;
+					is_stereo = 0;
+				} else if (0 == strcmp(argv[3], "mixed")) {
+					/* Mixed: Both parties mixed into single channel */
+					flags = SMBF_READ_STREAM | SMBF_WRITE_STREAM;
+					is_stereo = 0;
+				} else if (0 == strcmp(argv[3], "stereo")) {
+					/* Stereo: Separate channels (default, already set) */
+					flags = SMBF_READ_STREAM | SMBF_WRITE_STREAM | SMBF_STEREO | SMBF_READ_PING;
+					is_stereo = 1;
+				} else {
+					/* Invalid mix type - throw error */
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+						"invalid mix type: %s, must be stereo (default), mono, or mixed\n", argv[3]);
+					switch_core_session_rwunlock(lsession);
+					goto done;
+				}
+				
+				/* Parse sampling rate (argv[4]): ONLY 8k or 16k allowed
+				 * 
+				 * DEFAULT: 8kHz (native telephony rate, no resampling needed)
+				 * OPTIONAL: 16kHz (better quality, requires upsampling from 8k source)
+				 * 
+				 * Other rates are NOT supported - throw error
+				 */
+				if (0 == strcmp(argv[4], "8k") || 0 == strcmp(argv[4], "8000")) {
+					sampling = 8000;
+				} else if (0 == strcmp(argv[4], "16k") || 0 == strcmp(argv[4], "16000")) {
+					sampling = 16000;
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+						"16kHz requested - upsampling from 8kHz telephony audio\n");
+				} else {
+					/* Invalid sampling rate - throw error */
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+						"invalid sample rate: %s, only 8k (default) or 16k supported\n", argv[4]);
+					switch_core_session_rwunlock(lsession);
+					goto done;
+				}
+				
+				if (!parse_ws_uri(channel, argv[2], &host[0], &path[0], &port, &sslFlags)) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "invalid websocket uri: %s\n", argv[2]);
+					switch_core_session_rwunlock(lsession);
+					goto done;
+				}
+				
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+					"start audio_fork mix=%s rate=%dHz bugname=%s metadata=%s\n",
+					is_stereo ? "stereo" : (flags & SMBF_WRITE_STREAM) ? "mixed" : "mono",
+					sampling, bugname, metadata ? metadata : "none");
+				
+				status = start_capture(lsession, flags, host, port, path, sampling, sslFlags, bugname, metadata);
 			}
       else {
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "unsupported mod_audio_fork cmd: %s\n", argv[1]);

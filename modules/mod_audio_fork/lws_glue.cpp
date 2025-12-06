@@ -17,6 +17,7 @@
 #include "parser.hpp"
 #include "mod_audio_fork.h"
 #include "audio_pipe.hpp"
+#include "memory_pool.hpp"
 
 #define RTP_PACKETIZATION_PERIOD 20
 #define FRAME_SIZE_8000  320 /*which means each 20ms frame as 320 bytes at 8 khz (1 channel only)*/
@@ -30,6 +31,13 @@ namespace {
   static unsigned int nServiceThreads = std::max(1, std::min(requestedNumServiceThreads ? ::atoi(requestedNumServiceThreads) : 1, 5));
   static unsigned int idxCallCount = 0;
   static uint32_t playCount = 0;
+  
+  // Phase 2: Memory Pools for high-scale performance
+  static const char* requestedPoolSize = std::getenv("MOD_AUDIO_FORK_POOL_SIZE");
+  static constexpr size_t DEFAULT_POOL_SIZE = 5000;
+  static constexpr size_t MAX_POOL_SIZE = 50000;
+  static audiofork::ObjectPool<private_t> g_private_pool;
+  static std::mutex g_pool_init_mutex;
 
   void processIncomingMessage(private_t* tech_pvt, switch_core_session_t* session, const char* message) {
     std::string msg = message;
@@ -373,6 +381,18 @@ extern "C" {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_audio_fork: sub-protocol:              %s\n", mySubProtocolName);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_audio_fork: lws service threads:       %d\n", nServiceThreads);
  
+    // Phase 2: Initialize memory pool for private_t objects
+    size_t poolSize = requestedPoolSize ? std::min((size_t)::atoi(requestedPoolSize), MAX_POOL_SIZE) : DEFAULT_POOL_SIZE;
+    std::lock_guard<std::mutex> lock(g_pool_init_mutex);
+    if (g_private_pool.initialize(poolSize)) {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, 
+        "mod_audio_fork: [POOL] Initialized private_t pool: capacity=%zu, memory=%.1fMB\n",
+        poolSize, (poolSize * sizeof(private_t)) / (1024.0 * 1024.0));
+    } else {
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, 
+        "mod_audio_fork: [POOL] Failed to initialize private_t pool!\n");
+    }
+ 
     int logs = LLL_ERR | LLL_WARN | LLL_NOTICE ;
      //LLL_INFO | LLL_PARSER | LLL_HEADER | LLL_EXT | LLL_CLIENT  | LLL_LATENCY | LLL_DEBUG ;
     AudioPipe::initialize(mySubProtocolName, nServiceThreads, logs, lws_logger);
@@ -380,6 +400,25 @@ extern "C" {
   }
 
   switch_status_t fork_cleanup() {
+    // Phase 2: Log pool statistics before shutdown
+    std::lock_guard<std::mutex> lock(g_pool_init_mutex);
+    if (g_private_pool.is_initialized()) {
+      const auto& stats = g_private_pool.stats();
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+        "[POOL-STATS] private_t pool: capacity=%zu, in_use=%lu, high_water=%lu, "
+        "acquires=%lu, releases=%lu, hits=%lu, misses=%lu\n",
+        g_private_pool.capacity(),
+        (unsigned long)stats.current_in_use.load(),
+        (unsigned long)stats.high_water_mark.load(),
+        (unsigned long)stats.acquires.load(),
+        (unsigned long)stats.releases.load(),
+        (unsigned long)stats.pool_hits.load(),
+        (unsigned long)stats.pool_misses.load());
+      
+      g_private_pool.shutdown();
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "[POOL] private_t pool shutdown complete\n");
+    }
+    
     bool cleanup = false;
     cleanup = AudioPipe::deinitialize();
     if (cleanup == true) {
@@ -403,11 +442,27 @@ extern "C" {
   {    	
     int err;
 
-    // allocate per-session data structure
-    private_t* tech_pvt = (private_t *) switch_core_session_alloc(session, sizeof(private_t));
+    // Phase 2: Try to acquire from pool first (fast path)
+    private_t* tech_pvt = nullptr;
+    if (g_private_pool.is_initialized()) {
+      tech_pvt = g_private_pool.acquire();
+      if (tech_pvt) {
+        // Zero out for reuse
+        memset(tech_pvt, 0, sizeof(private_t));
+      }
+    }
+    
+    // Fallback: allocate from FreeSWITCH pool (slow path)
     if (!tech_pvt) {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "error allocating memory!\n");
-      return SWITCH_STATUS_FALSE;
+      tech_pvt = (private_t *) switch_core_session_alloc(session, sizeof(private_t));
+      if (!tech_pvt) {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "error allocating memory!\n");
+        return SWITCH_STATUS_FALSE;
+      }
+      if (g_private_pool.is_initialized()) {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, 
+          "[POOL] Pool exhausted, using slow allocation (consider increasing pool size)\n");
+      }
     }
     if (SWITCH_STATUS_SUCCESS != fork_data_init(tech_pvt, session, host, port, path, sslFlags, samples_per_second, sampling, channels, 
       bugname, metadata, responseHandler)) {
@@ -468,6 +523,14 @@ extern "C" {
     if (pAudioPipe) pAudioPipe->close();
 
     destroy_tech_pvt(tech_pvt);
+    
+    // Phase 2: Return to pool if it came from there
+    if (g_private_pool.is_initialized()) {
+      g_private_pool.release(tech_pvt);
+    }
+    // Note: If tech_pvt was allocated from FreeSWITCH pool (not our pool),
+    // release() will safely ignore it since find_node() won't find it
+    
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "(%u) fork_session_cleanup: connection closed\n", id);
     return SWITCH_STATUS_SUCCESS;
   }
@@ -542,75 +605,72 @@ extern "C" {
         return SWITCH_TRUE;
       }
 
-      pAudioPipe->lockAudioBuffer();
-      size_t available = pAudioPipe->binarySpaceAvailable();
+      // Push audio frames into the ring buffer.
+      // The LWS service thread will then read from the buffer and send over the websocket.
       if (NULL == tech_pvt->resampler) {
+        // NO RESAMPLING PATH - Write to ring buffer
         switch_frame_t frame = { 0 };
-        frame.data = pAudioPipe->binaryWritePtr();
-        frame.buflen = available;
-        while (true) {
-
-          // check if buffer would be overwritten; dump packets if so
-          if (available < pAudioPipe->binaryMinSpace()) {
-            if (!tech_pvt->buffer_overrun_notified) {
-              tech_pvt->buffer_overrun_notified = 1;
-              tech_pvt->responseHandler(session, EVENT_BUFFER_OVERRUN, NULL);
-            }
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n", 
-              tech_pvt->id);
-            pAudioPipe->binaryWritePtrResetToZero();
-
-            frame.data = pAudioPipe->binaryWritePtr();
-            frame.buflen = available = pAudioPipe->binarySpaceAvailable();
-          }
-
-          switch_status_t rv = switch_core_media_bug_read(bug, &frame, SWITCH_TRUE);
-          if (rv != SWITCH_STATUS_SUCCESS) break;
+        uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
+        frame.data = data;
+        frame.buflen = SWITCH_RECOMMENDED_BUFFER_SIZE;
+        
+        while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
           if (frame.datalen) {
-            pAudioPipe->binaryWritePtrAdd(frame.datalen);
-            frame.buflen = available = pAudioPipe->binarySpaceAvailable();
-            frame.data = pAudioPipe->binaryWritePtr();
-            dirty = true;
+            uint8_t *p1, *p2;
+            size_t len1, len2;
+            if (pAudioPipe->reserveAudioSpace(frame.datalen, &p1, &len1, &p2, &len2)) {
+              memcpy(p1, frame.data, len1);
+              if (len2 > 0) {
+                memcpy(p2, (char *)frame.data + len1, len2);
+              }
+              pAudioPipe->commitAudioData(frame.datalen);
+              dirty = true;
+            }
           }
         }
       }
       else {
+        // RESAMPLING PATH - Write to ring buffer after resampling
         uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
+        uint8_t resampled_data[SWITCH_RECOMMENDED_BUFFER_SIZE * 2]; // Extra space for upsampling
         switch_frame_t frame = { 0 };
         frame.data = data;
         frame.buflen = SWITCH_RECOMMENDED_BUFFER_SIZE;
+        
         while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
           if (frame.datalen) {
-            spx_uint32_t out_len = available >> 1;  // space for samples which are 2 bytes
+            spx_uint32_t out_len = (SWITCH_RECOMMENDED_BUFFER_SIZE * 2) >> 1;  // max samples
             spx_uint32_t in_len = frame.samples;
 
             speex_resampler_process_interleaved_int(tech_pvt->resampler, 
               (const spx_int16_t *) frame.data, 
               (spx_uint32_t *) &in_len, 
-              (spx_int16_t *) ((char *) pAudioPipe->binaryWritePtr()),
+              (spx_int16_t *) resampled_data,
               &out_len);
 
             if (out_len > 0) {
               // bytes written = num samples * 2 * num channels
-              size_t bytes_written = out_len << tech_pvt->channels;
-              pAudioPipe->binaryWritePtrAdd(bytes_written);
-              available = pAudioPipe->binarySpaceAvailable();
-              dirty = true;
-            }
-            if (available < pAudioPipe->binaryMinSpace()) {
-              if (!tech_pvt->buffer_overrun_notified) {
-                tech_pvt->buffer_overrun_notified = 1;
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n", 
-                  tech_pvt->id);
-                tech_pvt->responseHandler(session, EVENT_BUFFER_OVERRUN, NULL);
+              size_t bytes_to_write = out_len << tech_pvt->channels;
+              
+              uint8_t *p1, *p2;
+              size_t len1, len2;
+              if (pAudioPipe->reserveAudioSpace(bytes_to_write, &p1, &len1, &p2, &len2)) {
+                memcpy(p1, resampled_data, len1);
+                if (len2 > 0) {
+                  memcpy(p2, resampled_data + len1, len2);
+                }
+                pAudioPipe->commitAudioData(bytes_to_write);
+                dirty = true;
               }
-              break;
             }
           }
         }
       }
 
-      pAudioPipe->unlockAudioBuffer();
+      // dirty flag indicates audio was added
+      // The LWS_CALLBACK_CLIENT_WRITEABLE callback will drain the buffer automatically
+      // via the continuous lws_callback_on_writable() chain
+
       switch_mutex_unlock(tech_pvt->mutex);
     }
     return SWITCH_TRUE;

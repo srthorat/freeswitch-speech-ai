@@ -842,7 +842,7 @@ fi
 # ============================================================================
 
 if should_install_module "mod_audio_fork"; then
-    log_step "[Step 4/7] Building mod_audio_fork"
+    log_step "[Step 4/7] Building mod_audio_fork (with lock-free optimizations)"
 
     cd ${SCRIPT_DIR}/../modules/mod_audio_fork || exit 1
 
@@ -851,9 +851,9 @@ if should_install_module "mod_audio_fork"; then
         gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include mod_audio_fork.c
     check_success "Failed to compile mod_audio_fork.c" "${LOG_DIR}/mod_audio_fork_c.log"
 
-    log_substep "Compiling C++ sources..."
+    log_substep "Compiling C++ sources (C++17 for lock-free ring buffer & memory pools)..."
     log_command "mod_audio_fork C++" "${LOG_DIR}/mod_audio_fork_cpp.log" \
-        g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
+        g++ -fPIC -c -std=c++17 -O2 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
     check_success "Failed to compile mod_audio_fork C++ sources" "${LOG_DIR}/mod_audio_fork_cpp.log"
 
     mkdir -p ${FS_PREFIX}/lib/freeswitch/mod
