@@ -1230,6 +1230,13 @@ if should_install_freeswitch; then
     echo "  - Restart service: sudo systemctl restart freeswitch"
     echo "  - After editing environment: sudo systemctl daemon-reload && sudo systemctl restart freeswitch"
 fi
+if should_install_module "mod_aws_transcribe"; then
+    echo ""
+    echo "HIGH-SCALE DEPLOYMENT (10K+ calls):"
+    echo "  - Production tuning guide: modules/mod_aws_transcribe/HIGH_SCALE_TUNING_10K_CALLS.md"
+    echo "  - Quick 10K setup: See 'Production Tuning for 10K+ Calls' section"
+    echo "  - Performance monitoring: fs_cli -x 'uuid_aws_transcribe stats'"
+fi
 if [ "$MODULE" != "freeswitch" ]; then
     echo "  - Reload FreeSWITCH: fs_cli -x 'reload mod_sofia'"
     echo "  - Verify modules: fs_cli -x 'show modules' | grep -E 'audio_fork|aws|deepgram|google'"
