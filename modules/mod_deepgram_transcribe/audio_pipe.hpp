@@ -50,7 +50,7 @@ public:
 
   static void initialize(unsigned int nThreads, int loglevel, log_emit_function logger);
   static bool deinitialize();
-  static bool lws_service_thread(unsigned int nServiceThread);
+  static void adaptive_lws_service_thread(unsigned int nServiceThread); // Phase 1: Adaptive algorithm
 
   // constructor
   AudioPipe(const char* uuid, const char* host, unsigned int port, const char* path, 
@@ -248,9 +248,12 @@ private:
 
   static int lws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len); 
   static unsigned int nchild;
-  static struct lws_context *contexts[];
   static unsigned int numContexts;
   static std::string protocolName;
+  
+  // Phase 1: Performance monitoring counters
+  static std::atomic<uint64_t> g_active_sessions;
+  static std::atomic<uint64_t> g_operations_processed;
   
   /* ============================================================================
    * LOCK-FREE PENDING QUEUES (HIGH SCALE OPTIMIZATION)
@@ -268,8 +271,8 @@ private:
   static BoundedMPSCQueue<AudioPipe, 16384> pendingDisconnectsQueue;
   static BoundedMPSCQueue<AudioPipe, 16384> pendingWritesQueue;
   
-  // Legacy mutex-based vectors - REQUIRED for findPendingConnect() during handshake
-  // Note: Cannot fully remove - LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER needs sync lookup
+  // Minimal mutex vectors - ONLY for handshake lookups (LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER)
+  // Primary operations use lock-free queues above
   static std::mutex mutex_connects;
   static std::mutex mutex_disconnects;
   static std::mutex mutex_writes;
@@ -277,8 +280,7 @@ private:
   static std::vector<AudioPipe*> pendingDisconnects;
   static std::vector<AudioPipe*> pendingWrites;
   
-  // Flag to enable/disable lock-free queues (for A/B testing)
-  static std::atomic<bool> useLockFreeQueues;
+  // PHASE 2: Pure lock-free queue system (no fallbacks)
   
   static log_emit_function logger;
 

@@ -19,6 +19,7 @@
 #include "audio_pipe.hpp"
 #include "memory_pool.hpp"
 #include "dg_session.hpp"
+#include "context_manager.hpp"
 
 #define RTP_PACKETIZATION_PERIOD 20
 #define FRAME_SIZE_8000  320 /*which means each 20ms frame as 320 bytes at 8 khz (1 channel only)*/
@@ -934,4 +935,100 @@ extern "C" {
     }
     return SWITCH_TRUE;
   }
+}
+
+/**
+ * PHASE 3: Performance Monitoring API Implementation
+ * 
+ * Provides comprehensive performance statistics for high-scale deployments.
+ * Called from CLI: fs_cli -x "uuid_deepgram_transcribe <uuid> stats [pool|context|audio|all]"
+ */
+extern "C" switch_status_t dg_get_stats(switch_core_session_t *session, const char* stats_type, switch_stream_handle_t *stream)
+{
+    if (!session || !stream || !stats_type) {
+        return SWITCH_STATUS_FALSE;
+    }
+    
+    // Handle different stats types
+    if (!strcmp(stats_type, "pool") || !strcmp(stats_type, "all")) {
+        // Memory pool statistics
+        if (deepgram::AudioPipePool::is_initialized()) {
+            const auto& pool_stats = deepgram::AudioPipePool::stats();
+            stream->write_function(stream,
+                "+OK AudioPipe Pool Stats: "
+                "Capacity: %zu, In Use: %lu, High Water: %lu, "
+                "Acquires: %lu, Releases: %lu, Hits: %lu, Misses: %lu\n",
+                pool_stats.pool_capacity,
+                (unsigned long)pool_stats.current_in_use.load(),
+                (unsigned long)pool_stats.high_water_mark.load(),
+                (unsigned long)pool_stats.acquires.load(),
+                (unsigned long)pool_stats.releases.load(),
+                (unsigned long)pool_stats.pool_hits.load(),
+                (unsigned long)pool_stats.pool_misses.load());
+        } else {
+            stream->write_function(stream, "+OK AudioPipe Pool: Not initialized\n");
+        }
+        
+        if (deepgram::PrivateDataPool::IsInitialized()) {
+            const auto& pvt_stats = deepgram::PrivateDataPool::GetStats();
+            stream->write_function(stream,
+                "+OK PrivateData Pool Stats: "
+                "Capacity: %zu, In Use: %lu, High Water: %lu, "
+                "Acquires: %lu, Releases: %lu, Hits: %lu, Misses: %lu\n",
+                pvt_stats.capacity,
+                (unsigned long)pvt_stats.current_in_use.load(),
+                (unsigned long)pvt_stats.high_water_mark.load(),
+                (unsigned long)pvt_stats.acquires.load(),
+                (unsigned long)pvt_stats.releases.load(),
+                (unsigned long)pvt_stats.pool_hits.load(),
+                (unsigned long)pvt_stats.pool_misses.load());
+        } else {
+            stream->write_function(stream, "+OK PrivateData Pool: Not initialized\n");
+        }
+    }
+    
+    if (!strcmp(stats_type, "context") || !strcmp(stats_type, "all")) {
+        // Thread-local context statistics
+        uint32_t total_contexts = deepgram::ContextManager::getTotalContexts();
+        stream->write_function(stream,
+            "+OK Context Manager Stats: "
+            "Total Contexts: %u (Thread-Local: Zero Contention)\n",
+            total_contexts);
+    }
+    
+    if (!strcmp(stats_type, "audio") || !strcmp(stats_type, "all")) {
+        // Session-specific audio statistics
+        switch_channel_t *channel = switch_core_session_get_channel(session);
+        switch_media_bug_t *bug = (switch_media_bug_t *) switch_channel_get_private(channel, "deepgram_transcribe");
+        
+        if (bug) {
+            private_t *tech_pvt = (private_t *) switch_core_media_bug_get_user_data(bug);
+            if (tech_pvt && tech_pvt->pAudioPipe) {
+                deepgram::AudioPipe* pAudioPipe = static_cast<deepgram::AudioPipe*>(tech_pvt->pAudioPipe);
+                
+                stream->write_function(stream,
+                    "+OK Audio Pipeline Stats: "
+                    "Session: %s, Buffer Capacity: %zu, Pending Bytes: %lu, "
+                    "Resampler Frames: %lu, Samples In: %lu, Samples Out: %lu\n",
+                    tech_pvt->sessionId,
+                    pAudioPipe->audioCapacity(),
+                    (unsigned long)pAudioPipe->audioDataAvailable(),
+                    (unsigned long)tech_pvt->resampler_frames_processed,
+                    (unsigned long)tech_pvt->resampler_samples_in,
+                    (unsigned long)tech_pvt->resampler_samples_out);
+            } else {
+                stream->write_function(stream, "+OK Audio Pipeline: Session has no active AudioPipe\n");
+            }
+        } else {
+            stream->write_function(stream, "+OK Audio Pipeline: Session has no active transcription\n");
+        }
+    }
+    
+    if (strcmp(stats_type, "pool") && strcmp(stats_type, "context") && 
+        strcmp(stats_type, "audio") && strcmp(stats_type, "all")) {
+        stream->write_function(stream, "-ERR Invalid stats type '%s'. Supported: pool, context, audio, all\n", stats_type);
+        return SWITCH_STATUS_FALSE;
+    }
+    
+    return SWITCH_STATUS_SUCCESS;
 }

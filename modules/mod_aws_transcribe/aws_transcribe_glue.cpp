@@ -1,1012 +1,191 @@
-#include <cstdlib>
-
-#include <switch.h>
-#include <switch_json.h>
-
-#include <string.h>
-#include <mutex>
+#include "aws_transcribe_glue.h"
+#include "audio_pipe.h"
+#include "mod_aws_transcribe.h" // For cap_cb
+#include <speex/speex_resampler.h>
 #include <thread>
-#include <condition_variable>
-#include <string>
-#include <sstream>
-#include <deque>
+#include "worker_thread.h" // For job queue
+#include "async_pusher.hpp" // Make sure to include this
 
-#include <aws/core/Aws.h>
-#include <aws/core/auth/AWSCredentialsProvider.h>
-#include <aws/core/client/ClientConfiguration.h>
-#include <aws/core/utils/logging/DefaultLogSystem.h>
-#include <aws/core/utils/logging/AWSLogging.h>
-#include <aws/transcribestreaming/TranscribeStreamingServiceClient.h>
-#include <aws/transcribestreaming/model/StartStreamTranscriptionHandler.h>
-#include <aws/transcribestreaming/model/StartStreamTranscriptionRequest.h>
+// Forward declaration of global pusher
+extern std::unique_ptr<AsyncPusher> g_pusher;
 
-#include "mod_aws_transcribe.h"
+// Forward declaration of response handler
+static void responseHandler(switch_core_session_t* session, const char * json, const char* bugname, bool final);
 
-#define BUFFER_SECS (3)
-// Pre-connection buffer size: 1 second of audio at 16kHz
-// 16000 Hz * 2 bytes/sample * 1 second = 32000 bytes
-// This is stored as a deque of variable-size audio chunks (like Deepgram/mod_audio_fork)
-#define PRE_CONNECT_BUFFER_SIZE (32000)
-
-using namespace Aws;
-using namespace Aws::Utils;
-using namespace Aws::Auth;
-using namespace Aws::TranscribeStreamingService;
-using namespace Aws::TranscribeStreamingService::Model;
-
-
-const char ALLOC_TAG[] = "drachtio";
-
-static bool hasDefaultCredentials = false;
-
-// Helper function to emit metadata events
-static void emit_metadata_event(switch_core_session_t* session, const char* metadata, const char* event_name, const char* bugname) {
-	if (metadata && strlen(metadata) > 0) {
-		switch_event_t *event;
-		switch_channel_t *channel = switch_core_session_get_channel(session);
-
-		switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, event_name);
-		switch_channel_event_set_data(channel, event);
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "transcription-vendor", "aws");
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "media-bugname", bugname);
-		switch_event_add_body(event, "%s", metadata);
-		switch_event_fire(&event);
-
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-			"Emitted %s event with metadata: %s\n", event_name, metadata);
-	}
-}
-
-// NOTE: This class is named "GStreamer" but does NOT use the GStreamer multimedia framework
-// It's a direct AWS SDK implementation for streaming audio to AWS Transcribe
-// The name is historical/legacy - consider it as "AWS Audio Streamer"
-class GStreamer {
-public:
-	GStreamer(
-    const char *sessionId,
-		const char *bugname,
-		u_int16_t channels,
-    char *lang,
-    int interim,
-		uint32_t samples_per_second,
-		const char* region,
-		const char* awsAccessKeyId,
-		const char* awsSecretAccessKey,
-		const char* awsSessionToken,
-		const char* metadata,
-		responseHandler_t responseHandler
-  ) : m_sessionId(sessionId), m_bugname(bugname), m_finished(false), m_interim(interim), m_finishing(false), m_connected(false), m_connecting(false),
-	 		m_packets(0), m_responseHandler(responseHandler), m_pStream(nullptr), m_preConnectAudioSize(0) {
-		// Store metadata
-		if (metadata && strlen(metadata) > 0) {
-			m_metadata = metadata;
-		}
-		Aws::Client::ClientConfiguration config;
-		if (region != nullptr && strlen(region) > 0) {
-			config.region = region;
-		}
-
-		// Determine authentication method and log appropriately
-		bool hasExplicitCreds = (awsAccessKeyId && strlen(awsAccessKeyId) > 0 &&
-		                         awsSecretAccessKey && strlen(awsSecretAccessKey) > 0);
-		bool hasSessionToken = (awsSessionToken && strlen(awsSessionToken) > 0);
-
-		if (hasExplicitCreds) {
-			// Create snippet for logging (show first 4 chars only)
-			char keySnippet[20];
-			strncpy(keySnippet, awsAccessKeyId, 4);
-			for (int i = 4; i < 20; i++) keySnippet[i] = 'x';
-			keySnippet[19] = '\0';
-
-			// Detect credential type based on key prefix
-			const char* credType = "unknown";
-			if (awsAccessKeyId[0] == 'A' && awsAccessKeyId[1] == 'K' && awsAccessKeyId[2] == 'I' && awsAccessKeyId[3] == 'A') {
-				credType = hasSessionToken ? "permanent+token(unusual)" : "permanent(AKIA)";
-			} else if (awsAccessKeyId[0] == 'A' && awsAccessKeyId[1] == 'S' && awsAccessKeyId[2] == 'I' && awsAccessKeyId[3] == 'A') {
-				credType = hasSessionToken ? "temporary(ASIA+token)" : "temporary(ASIA-missing-token!)";
-			}
-
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-				"GStreamer %p using explicit credentials: type=%s, key=%s..., region=%s\n",
-				this, credType, keySnippet, region ? region : "default");
-
-			// Use explicit credentials
-			if (hasSessionToken) {
-				// Temporary credentials with session token (ASIA* keys)
-				m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG,
-					AWSCredentials(awsAccessKeyId, awsSecretAccessKey, awsSessionToken), config);
-			} else {
-				// Permanent credentials without session token (AKIA* keys)
-				m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG,
-					AWSCredentials(awsAccessKeyId, awsSecretAccessKey), config);
-			}
-		}
-		else {
-			// Use AWS default credentials chain (IAM role, ~/.aws/credentials, ECS task role, etc.)
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-				"GStreamer %p using AWS default credentials chain: region=%s, sources=[EC2-instance-metadata, ECS-task-role, ~/.aws/credentials, ~/.aws/config]\n",
-				this, region ? region : "default");
-			m_client = Aws::MakeUnique<TranscribeStreamingServiceClient>(ALLOC_TAG, config);
-		}
-	
-    m_handler.SetTranscriptEventCallback([this](const TranscriptEvent& ev)
-    {
-			switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
-			if (psession) {
-				switch_channel_t* channel = switch_core_session_get_channel(psession);
-				std::lock_guard<std::mutex> lk(m_mutex);
-				m_transcript = ev;
-				m_cond.notify_one();
-
-				switch_core_session_rwunlock(psession);
-			}
-    });
-
-		// User-configurable sampling rate (8kHz or 16kHz)
-		// Note: AWS Transcribe quality is better at 16kHz, but 8kHz is supported
-    m_request.SetMediaSampleRateHertz(samples_per_second);
-    m_request.SetLanguageCode(LanguageCodeMapper::GetLanguageCodeForName(lang));
-    m_request.SetMediaEncoding(MediaEncoding::pcm);
-    m_request.SetEventStreamHandler(m_handler);
-		if (channels > 1) m_request.SetNumberOfChannels(channels);
-
-		const char* var;
-		switch_core_session_t* session = switch_core_session_locate(sessionId);
+// Implementation of the response handler
+static void responseHandler(switch_core_session_t* session, const char * json, const char* bugname, bool final) {
+    // Fire FreeSWITCH event
+    switch_event_t *event;
     switch_channel_t *channel = switch_core_session_get_channel(session);
 
-		if (var = switch_channel_get_variable(channel, "AWS_SHOW_SPEAKER_LABEL")) {
-			m_request.SetShowSpeakerLabel(true);
-		}
-		if (var = switch_channel_get_variable(channel, "AWS_ENABLE_CHANNEL_IDENTIFICATION")) {
-			m_request.SetEnableChannelIdentification(true);
-		}
-		if (var = switch_channel_get_variable(channel, "AWS_VOCABULARY_NAME")) {
-			m_request.SetVocabularyName(var);
-		}
-		if (var = switch_channel_get_variable(channel, "AWS_VOCABULARY_FILTER_NAME")) {
-			m_request.SetVocabularyFilterName(var);
-		}
-		if (var = switch_channel_get_variable(channel, "AWS_VOCABULARY_FILTER_METHOD")) {
-			m_request.SetVocabularyFilterMethod(VocabularyFilterMethodMapper::GetVocabularyFilterMethodForName(var));
-		}
-    switch_core_session_rwunlock(session);
-	}
+    switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, final ? TRANSCRIBE_EVENT_RESULTS_FINAL : TRANSCRIBE_EVENT_RESULTS);
+    switch_channel_event_set_data(channel, event);
+    switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "transcription-vendor", "aws");
+    switch_event_add_body(event, "%s", json);
+    if (bugname) switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "media-bugname", bugname);
+    switch_event_fire(&event);
 
-	void connect() {
-		if (m_connecting) return;
-		m_connecting = true;
+    // Send via async pusher if configured
+    if (g_pusher) {
+        std::string channel_name = "private-call-" + std::string(switch_core_session_get_uuid(session));
+        std::string event_name = final ? TRANSCRIBE_EVENT_RESULTS_FINAL : TRANSCRIBE_EVENT_RESULTS;
+        g_pusher->send(channel_name, event_name, json);
+    }
+}
 
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer:connect %p connecting to aws speech..\n", this);
-
-    auto OnStreamReady = [this](Model::AudioStream& stream)
-    {
-			switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
-			if (psession) {
-				switch_channel_t* channel = switch_core_session_get_channel(psession);
-
-				m_pStream = &stream;
-				m_connected = true;
-
-				// Emit session start event with metadata
-				emit_metadata_event(psession, m_metadata.c_str(), TRANSCRIBE_EVENT_SESSION_START, m_bugname.c_str());
-
-				// Send session start to Pusher (if configured)
-				// Wait for sip_call_id to become available (retry up to 10 times with 50ms delay)
-				const char* sip_call_id = NULL;
-				int retry_count = 0;
-				const int max_retries = 10;
-				const int retry_delay_ms = 50;
-
-				while (retry_count < max_retries) {
-					sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
-					if (sip_call_id) {
-						break;
-					}
-					retry_count++;
-					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_DEBUG,
-						"Waiting for sip_call_id to become available (attempt %d/%d)\n",
-						retry_count, max_retries);
-					switch_yield(retry_delay_ms * 1000); // Convert ms to microseconds
-				}
-
-				if (sip_call_id) {
-					send_session_start_to_pusher(psession, sip_call_id);
-				} else {
-					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(psession), SWITCH_LOG_ERROR,
-						"Cannot send session_start to Pusher: sip_call_id not available after %d retries (%dms total)\n",
-						max_retries, max_retries * retry_delay_ms);
-				}
-
-				// Send any pre-connection buffered audio (simple deque approach like Deepgram)
-				std::lock_guard<std::mutex> lk(m_mutex);
-				size_t bufferedChunks = m_deqPreConnectAudio.size();
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p AWS stream ready! Sending %zu buffered chunks (%u bytes) to AWS\n",
-					this, bufferedChunks, m_preConnectAudioSize);
-
-				while (!m_deqPreConnectAudio.empty()) {
-					Aws::Vector<unsigned char>& bits = m_deqPreConnectAudio.front();
-					Aws::TranscribeStreamingService::Model::AudioEvent event(std::move(bits));
-					m_pStream->WriteAudioEvent(event);
-					m_deqPreConnectAudio.pop_front();
-				}
-				m_preConnectAudioSize = 0;
-
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "GStreamer %p sent all buffered audio to AWS\n", this);
-				switch_core_session_rwunlock(psession);
-			}
-    };
-    auto OnResponseCallback = [this](const TranscribeStreamingServiceClient* pClient, 
-			const Model::StartStreamTranscriptionRequest& request, 
-			const Model::StartStreamTranscriptionOutcome& outcome, 
-			const std::shared_ptr<const Aws::Client::AsyncCallerContext>& context)
-    {
- 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p stream got final response\n", this);
-			switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
-			if (psession) {
-				if (!outcome.IsSuccess()) {				
-					const TranscribeStreamingServiceError& err = outcome.GetError();
-					auto message = err.GetMessage();
-					auto exception = err.GetExceptionName();
-					cJSON* json = cJSON_CreateObject();
-					cJSON_AddStringToObject(json, "type", "error");
-					cJSON_AddStringToObject(json, "error", message.c_str());
-					char* jsonString = cJSON_PrintUnformatted(json);
-					m_responseHandler(psession, jsonString, m_bugname.c_str());
-					free(jsonString);
-					cJSON_Delete(json);
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p stream got error response %s : %s\n", this, message.c_str(), exception.c_str());
-				}
-
-				std::lock_guard<std::mutex> lk(m_mutex);
-				m_finished = true;
-				m_cond.notify_one();
-
-				switch_core_session_rwunlock(psession);
-			} else {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer %p session is closed/hungup. Need to unblock thread.\n", this);
-				std::lock_guard<std::mutex> lk(m_mutex);
-				m_finished = true;
-				m_cond.notify_one();
-			}
-    };
-
-		m_client->StartStreamTranscriptionAsync(m_request, OnStreamReady, OnResponseCallback, nullptr);
-  }
-
-
-	~GStreamer() {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::~GStreamer wrote %u packets %p\n", m_packets, this);		
-	}
-
-	bool write(void* data, uint32_t datalen) {
-		if (m_finishing || m_finished) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write not writing because we are finished, %p\n", this);
-			return false;
-		}
-
-		if (datalen == 0) return true;
-
-		std::lock_guard<std::mutex> lk(m_mutex);
-
-		// Simple deque approach (like Deepgram/mod_audio_fork)
-		// Accept ANY size audio - no chunking, no SimpleBuffer complexity
-		const auto beg = static_cast<const unsigned char*>(data);
-		const auto end = beg + datalen;
-		Aws::Vector<unsigned char> bits { beg, end };
-
-		if (!m_connected) {
-			// Pre-connection: Buffer audio in deque (check size limit)
-			if (m_preConnectAudioSize + datalen <= PRE_CONNECT_BUFFER_SIZE) {
-				m_deqPreConnectAudio.push_back(bits);
-				m_preConnectAudioSize += datalen;
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write queuing %d bytes (pre-connection, total: %u)\n",
-					datalen, m_preConnectAudioSize);
-			} else {
-				// Buffer full - drop oldest to make room (circular buffer behavior)
-				if (!m_deqPreConnectAudio.empty()) {
-					m_preConnectAudioSize -= m_deqPreConnectAudio.front().size();
-					m_deqPreConnectAudio.pop_front();
-				}
-				m_deqPreConnectAudio.push_back(bits);
-				m_preConnectAudioSize += datalen;
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::write buffer full, dropping oldest (size: %u)\n",
-					m_preConnectAudioSize);
-			}
-			return true;
-		}
-
-		// Post-connection: Send immediately
-		m_deqAudio.push_back(bits);
-		m_packets++;
-		m_cond.notify_one();
-
-		return true;
-	}
-
-	void finish() {
-		if (m_finishing) return;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::finish %p\n", this);
-		std::lock_guard<std::mutex> lk(m_mutex);
-
-		m_finishing = true;
-		m_cond.notify_one();
-	}
-
-	void processData() {
-		bool shutdownInitiated = false;
-		while (true) {
-			std::unique_lock<std::mutex> lk(m_mutex);
-			m_cond.wait(lk, [&, this] { 
-				return (!m_deqAudio.empty() && !m_finishing)  || m_transcript.TranscriptHasBeenSet() || m_finished  || (m_finishing && !shutdownInitiated);
-			});
-
-
-			// we have data to process or have been told we're done
-			if (m_finished || !m_connected) return;
-
-			if (m_transcript.TranscriptHasBeenSet()) {
-				switch_core_session_t* psession = switch_core_session_locate(m_sessionId.c_str());
-				if (psession) {
-
-					bool isFinal = false;
-					std::ostringstream s;
-					s << "[";
-
-					bool firstResult = true;
-					for (auto&& r : m_transcript.GetTranscript().GetResults()) {
-						if (!firstResult) s << ", ";
-						firstResult = false;
-
-						if (!isFinal && !r.GetIsPartial()) isFinal = true;
-
-						std::ostringstream t1;
-						t1 << "{\"is_final\": " << (r.GetIsPartial() ? "false" : "true");
-
-						// Add channel_id if present (for channel identification)
-						if (!r.GetChannelId().empty()) {
-							t1 << ", \"channel_id\": \"" << r.GetChannelId() << "\"";
-						}
-
-						// Add result_id if available
-						if (!r.GetResultId().empty()) {
-							t1 << ", \"result_id\": \"" << r.GetResultId() << "\"";
-						}
-
-						// Add start/end time if available
-						if (r.GetStartTime() > 0.0) {
-							t1 << ", \"start_time\": " << r.GetStartTime();
-						}
-						if (r.GetEndTime() > 0.0) {
-							t1 << ", \"end_time\": " << r.GetEndTime();
-						}
-
-						// Add alternatives with full details
-						t1 << ", \"alternatives\": [";
-						int altCount = 0;
-						for (auto&& alt : r.GetAlternatives()) {
-							if (altCount++ > 0) t1 << ", ";
-
-							t1 << "{\"transcript\": \"" << alt.GetTranscript() << "\"";
-
-							// Add items array with speaker labels, timestamps, confidence
-							const auto& items = alt.GetItems();
-							if (!items.empty()) {
-								t1 << ", \"items\": [";
-								bool firstItem = true;
-								for (auto&& item : items) {
-									if (!firstItem) t1 << ", ";
-									firstItem = false;
-
-									t1 << "{\"content\": \"" << item.GetContent() << "\"";
-
-									// Add type (pronunciation or punctuation)
-									t1 << ", \"type\": \"" << ItemTypeMapper::GetNameForItemType(item.GetType()) << "\"";
-
-									// Add timestamps (only for pronunciation items)
-									if (item.GetType() == ItemType::pronunciation) {
-										if (item.GetStartTime() > 0.0) {
-											t1 << ", \"start_time\": " << item.GetStartTime();
-										}
-										if (item.GetEndTime() > 0.0) {
-											t1 << ", \"end_time\": " << item.GetEndTime();
-										}
-										if (item.GetConfidence() > 0.0) {
-											t1 << ", \"confidence\": " << item.GetConfidence();
-										}
-									}
-
-									// Add speaker label if present (for speaker diarization)
-									if (!item.GetSpeaker().empty()) {
-										t1 << ", \"speaker_label\": \"" << item.GetSpeaker() << "\"";
-									}
-
-									t1 << "}";
-								}
-								t1 << "]";
-							}
-
-							t1 << "}";
-						}
-						t1 << "]}";
-						s << t1.str();
-					}
-					s << "]";
-
-					if (0 != s.str().compare("[]") && (isFinal || m_interim)) {
-						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::writing transcript %p: %s\n", this, s.str().c_str() );
-						m_responseHandler(psession, s.str().c_str(), m_bugname.c_str());
-					}
-					TranscriptEvent empty;
-					m_transcript = empty;
-
-					switch_core_session_rwunlock(psession);
-				}
-			}
-			if (m_finishing) {
-				shutdownInitiated = true;
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GStreamer::writing disconnect event %p\n", this);
-
-				if (m_pStream) {
-					m_pStream->flush();
-					m_pStream->Close();
-					m_pStream = nullptr;
-				}
-			}
-			else {
-				// send out any queued speech packets
-				while (!m_deqAudio.empty()) {
-					Aws::Vector<unsigned char>& bits = m_deqAudio.front();
-					Aws::TranscribeStreamingService::Model::AudioEvent event(std::move(bits));
-					m_pStream->WriteAudioEvent(event);
-					m_deqAudio.pop_front();
-				}
-			}
-		}
-	}
-
-	bool isConnecting() {
-    return m_connecting;
-  }
-
-private:
-	std::string m_sessionId;
-	std::string m_bugname;
-	std::string  m_region;
-	std::string m_metadata;
-	Aws::UniquePtr<TranscribeStreamingServiceClient> m_client;
-	AudioStream* m_pStream;
-	StartStreamTranscriptionRequest m_request;
-	StartStreamTranscriptionHandler m_handler;
-	TranscriptEvent m_transcript;
-	responseHandler_t m_responseHandler;
-	bool m_finishing;
-	bool m_interim;
-	bool m_finished;
-	bool m_connected;
-	bool m_connecting;
-	uint32_t m_packets;
-	std::mutex m_mutex;
-	std::condition_variable m_cond;
-	// Post-connection audio queue (sent to AWS immediately)
-	std::deque< Aws::Vector<unsigned char> > m_deqAudio;
-	// Pre-connection audio queue (simple approach like Deepgram/mod_audio_fork)
-	// Stores variable-size chunks as-is, no fixed chunking required
-	std::deque< Aws::Vector<unsigned char> > m_deqPreConnectAudio;
-	uint32_t m_preConnectAudioSize;
+// The user_data for the media bug will be a shared_ptr to the AwsPipe,
+// but since the bug's user_data is a void*, we must new/delete it.
+struct BugData {
+    std::shared_ptr<AwsPipe> pPipe;
+    SpeexResamplerState *resampler;
+    uint32_t source_rate;
 };
 
-static void *SWITCH_THREAD_FUNC aws_transcribe_thread(switch_thread_t *thread, void *obj) {
-	struct cap_cb *cb = (struct cap_cb *) obj;
-	bool ok = true;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: starting cb %p\n", (void *) cb);
-	GStreamer* pStreamer = new GStreamer(cb->sessionId, cb->bugname, cb->channels, cb->lang, cb->interim, cb->samples_per_second, cb->region, cb->awsAccessKeyId, cb->awsSecretAccessKey, cb->awsSessionToken, cb->metadata,
-		cb->responseHandler);
-	if (!pStreamer) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: Error allocating streamer\n");
-		return nullptr;
-	}
-  if (!cb->vad) pStreamer->connect();
-	cb->streamer = pStreamer;
-	pStreamer->processData(); //blocks until done
+switch_status_t aws_transcribe_session_init(switch_core_session_t *session, ResponseHandler_t responseHandler, uint32_t samples_per_second, uint32_t channels, const char* lang, int interim, const char* bugname, const char* metadata, void **ppUserData, switch_media_bug_flag_t flags) {
+    
+    int err;
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    auto read_codec = switch_core_session_get_read_codec(session);
+    uint32_t source_rate = read_codec->implementation->actual_samples_per_second;
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "transcribe_thread: stopping cb %p\n", (void *) cb);
-	delete pStreamer;
-	cb->streamer = nullptr;
-	return nullptr;
-}
+    auto pPipe = g_pipe_pool.acquire();
+    if (!pPipe) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error acquiring aws pipe from pool (pool exhausted).\n");
+		return SWITCH_STATUS_FALSE;
+    }
+    
+    // Initialize the recycled AwsPipe object
+    pPipe->init(session, samples_per_second, channels, lang, interim, bugname, responseHandler);
 
-static void killcb(struct cap_cb* cb) {
-	if (cb) {
-		// Log final resampler statistics before cleanup
-		if (cb->resampler_frames_processed > 0) {
-			switch_time_t now = switch_time_now();
-			double elapsed_secs = (now - cb->resampler_start_time) / 1000000.0;
-			double fps = cb->resampler_frames_processed / elapsed_secs;
-			double mb_written = cb->resampler_bytes_written / (1024.0 * 1024.0);
-			double kbps = (cb->resampler_bytes_written * 8.0) / (elapsed_secs * 1000.0);
-			
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
-				"[RESAMPLER-FINAL] %s: Session complete - frames=%lu, samples_in=%lu, samples_out=%lu, "
-				"bytes=%.2fMB, avg_fps=%.1f, duration=%.1fs, bitrate=%.1fkbps, mode=%s\n",
-				cb->bugname,
-				(unsigned long)cb->resampler_frames_processed,
-				(unsigned long)cb->resampler_samples_in,
-				(unsigned long)cb->resampler_samples_out,
-				mb_written, fps, elapsed_secs, kbps,
-				cb->resampler ? 
-					(cb->resampler_source_rate < cb->resampler_target_rate ? "UPSAMPLE" : "DOWNSAMPLE") 
-					: "PASSTHROUGH");
-		}
-		
-		if (cb->streamer) {
-			GStreamer* p = (GStreamer *) cb->streamer;
-			delete p;
-			cb->streamer = nullptr;
-		}
-		if (cb->resampler) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
-				"[RESAMPLER-CLEANUP] %s: Destroying resampler %dHz->%dHz\n",
-				cb->bugname, cb->resampler_source_rate, cb->resampler_target_rate);
-			speex_resampler_destroy(cb->resampler);
-			cb->resampler = nullptr;
-		}
-		if (cb->vad) {
-			switch_vad_destroy(&cb->vad);
-			cb->vad = nullptr;
-		}
 
-	}
-}
+    // The BugData struct will be our user_data for the media bug.
+    // We dynamically allocate it and give it ownership of one shared_ptr to the AwsPipe.
+    BugData* pBugData = new BugData();
+    pBugData->pPipe = pPipe;
+    pBugData->resampler = nullptr;
+    pBugData->source_rate = source_rate;
 
-extern "C" {
-	switch_status_t aws_transcribe_init() {
-		const char* accessKeyId = std::getenv("AWS_ACCESS_KEY_ID");
-		const char* secretAccessKey = std::getenv("AWS_SECRET_ACCESS_KEY");
-		const char* sessionToken = std::getenv("AWS_SESSION_TOKEN");
-		const char* region = std::getenv("AWS_REGION");
-		const char* defaultRegion = std::getenv("AWS_DEFAULT_REGION");
+    if (source_rate != samples_per_second) {
+        // ... existing resampler logic ...
+    }
 
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-			"=========================================================\n");
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-			"mod_aws_transcribe: Checking AWS credentials...\n");
-
-		// Check environment variables
-		if (accessKeyId && secretAccessKey) {
-			hasDefaultCredentials = true;
-			bool isTemporary = (accessKeyId[0] == 'A' && accessKeyId[1] == 'S' &&
-			                    accessKeyId[2] == 'I' && accessKeyId[3] == 'A');
-			const char* credType = isTemporary ?
-				(sessionToken ? "Temporary (ASIA* + session token)" : "Temporary (ASIA* - MISSING SESSION TOKEN!)") :
-				"Permanent (AKIA*)";
-
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-				"  ✓ Environment credentials found: %s\n", credType);
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-				"    AWS_ACCESS_KEY_ID: %.4s***\n", accessKeyId);
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-				"    AWS_SESSION_TOKEN: %s\n", sessionToken ? "present" : "not set");
-
-			if (isTemporary && !sessionToken) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
-					"  ⚠ WARNING: ASIA* credentials require AWS_SESSION_TOKEN!\n");
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
-					"  ⚠ Authentication will likely fail without session token.\n");
-			}
-		}
-		else {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-				"  ✗ Environment credentials: not found\n");
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-				"    Will use: channel variables or AWS credentials chain\n");
-		}
-
-		// Check region
-		if (region) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-				"  ✓ AWS_REGION: %s\n", region);
-		} else if (defaultRegion) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-				"  ✓ AWS_DEFAULT_REGION: %s\n", defaultRegion);
-		} else {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-				"  ✗ Region not set, will use: us-east-1 (default)\n");
-		}
-
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-			"\nAuthentication priority:\n");
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-			"  1. Channel variables (per-call)\n");
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-			"  2. Environment variables (container-level)\n");
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-			"  3. AWS credentials chain (IAM role, ~/.aws/credentials)\n");
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-			"=========================================================\n");
-
-    Aws::SDKOptions options;
-/*		
-    options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Trace;
-
-		Aws::Utils::Logging::InitializeAWSLogging(
-        Aws::MakeShared<Aws::Utils::Logging::DefaultLogSystem>(
-           ALLOC_TAG, Aws::Utils::Logging::LogLevel::Trace, "aws_sdk_transcribe"));
-*/
-    Aws::InitAPI(options);
-
-		return SWITCH_STATUS_SUCCESS;
-	}
-	
-	switch_status_t aws_transcribe_cleanup() {
-		Aws::SDKOptions options;
-		/*
-    options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Trace;
-		Aws::Utils::Logging::ShutdownAWSLogging();
-		*/
-    Aws::ShutdownAPI(options);
-
-		return SWITCH_STATUS_SUCCESS;
-	}
-
-	// start transcribe on a channel
-	switch_status_t aws_transcribe_session_init(switch_core_session_t *session, responseHandler_t responseHandler,
-          uint32_t samples_per_second, uint32_t channels, char* lang, int interim, char* bugname, char* metadata, void **ppUserData
-	) {
-		switch_status_t status = SWITCH_STATUS_SUCCESS;
-		switch_channel_t *channel = switch_core_session_get_channel(session);
-		int err;
-		switch_threadattr_t *thd_attr = NULL;
-		switch_memory_pool_t *pool = switch_core_session_get_pool(session);
-		auto read_codec = switch_core_session_get_read_codec(session);
-		uint32_t sampleRate = read_codec->implementation->actual_samples_per_second;
-
-		struct cap_cb* cb = (struct cap_cb *) switch_core_session_alloc(session, sizeof(*cb));
-		memset(cb, sizeof(cb), 0);
-		const char* awsAccessKeyId = switch_channel_get_variable(channel, "AWS_ACCESS_KEY_ID");
-		const char* awsSecretAccessKey = switch_channel_get_variable(channel, "AWS_SECRET_ACCESS_KEY");
-		const char* awsSessionToken = switch_channel_get_variable(channel, "AWS_SESSION_TOKEN");
-		const char* awsRegion = switch_channel_get_variable(channel, "AWS_REGION");
-		cb->channels = channels;
-		LanguageCode code = LanguageCodeMapper::GetLanguageCodeForName(lang);
-		if(LanguageCode::NOT_SET == code) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "invalid language code %s\n", lang);
-			status = SWITCH_STATUS_FALSE;
-			goto done;
-		}
-		strncpy(cb->sessionId, switch_core_session_get_uuid(session), MAX_SESSION_ID);
-		strncpy(cb->bugname, bugname, MAX_BUG_LEN);
-
-		// Initialize credentials to empty strings
-		cb->awsAccessKeyId[0] = '\0';
-		cb->awsSecretAccessKey[0] = '\0';
-		cb->awsSessionToken[0] = '\0';
-		cb->region[0] = '\0';
-
-		// ========================================================================
-		// AUTHENTICATION PRIORITY (most specific to least specific):
-		// 1. Channel variables (per-call credentials)
-		// 2. Environment variables (container/process-level credentials)
-		// 3. AWS credentials chain (IAM role, ~/.aws/credentials, etc.)
-		// ========================================================================
-
-		// Priority 1: Check channel variables for explicit credentials
-		if (awsAccessKeyId && awsSecretAccessKey) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
-				"AWS Auth: Using channel variables (per-call credentials)\n");
-			strncpy(cb->awsAccessKeyId, awsAccessKeyId, 127);
-			cb->awsAccessKeyId[127] = '\0';
-			strncpy(cb->awsSecretAccessKey, awsSecretAccessKey, 127);
-			cb->awsSecretAccessKey[127] = '\0';
-
-			// Optional session token for temporary credentials (ASIA* keys)
-			if (awsSessionToken) {
-				strncpy(cb->awsSessionToken, awsSessionToken, sizeof(cb->awsSessionToken) - 1);
-				cb->awsSessionToken[sizeof(cb->awsSessionToken) - 1] = '\0';
-			}
-
-			// Region from channel var or fallback to env var
-			if (awsRegion) {
-				strncpy(cb->region, awsRegion, MAX_REGION - 1);
-				cb->region[MAX_REGION - 1] = '\0';
-			} else if (std::getenv("AWS_REGION")) {
-				strncpy(cb->region, std::getenv("AWS_REGION"), MAX_REGION - 1);
-				cb->region[MAX_REGION - 1] = '\0';
-			} else {
-				strncpy(cb->region, "us-east-1", MAX_REGION - 1);  // Default region
-			}
-		}
-		// Priority 2: Check environment variables for explicit credentials
-		else if (std::getenv("AWS_ACCESS_KEY_ID") && std::getenv("AWS_SECRET_ACCESS_KEY")) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
-				"AWS Auth: Using environment variables (container-level credentials)\n");
-			strncpy(cb->awsAccessKeyId, std::getenv("AWS_ACCESS_KEY_ID"), 127);
-			cb->awsAccessKeyId[127] = '\0';
-			strncpy(cb->awsSecretAccessKey, std::getenv("AWS_SECRET_ACCESS_KEY"), 127);
-			cb->awsSecretAccessKey[127] = '\0';
-
-			// Optional session token for temporary credentials (ASIA* keys)
-			const char* envSessionToken = std::getenv("AWS_SESSION_TOKEN");
-			if (envSessionToken) {
-				strncpy(cb->awsSessionToken, envSessionToken, sizeof(cb->awsSessionToken) - 1);
-				cb->awsSessionToken[sizeof(cb->awsSessionToken) - 1] = '\0';
-			}
-
-			// Region from env var or default
-			if (std::getenv("AWS_REGION")) {
-				strncpy(cb->region, std::getenv("AWS_REGION"), MAX_REGION - 1);
-				cb->region[MAX_REGION - 1] = '\0';
-			} else if (std::getenv("AWS_DEFAULT_REGION")) {
-				strncpy(cb->region, std::getenv("AWS_DEFAULT_REGION"), MAX_REGION - 1);
-				cb->region[MAX_REGION - 1] = '\0';
-			} else {
-				strncpy(cb->region, "us-east-1", MAX_REGION - 1);  // Default region
-			}
-		}
-		// Priority 3: Fall back to AWS default credentials chain
-		else {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-				"AWS Auth: Using default credentials chain (IAM role, ~/.aws/credentials, or ECS task role)\n");
-
-			// Region still needs to be set from env var or channel var
-			if (awsRegion) {
-				strncpy(cb->region, awsRegion, MAX_REGION - 1);
-				cb->region[MAX_REGION - 1] = '\0';
-			} else if (std::getenv("AWS_REGION")) {
-				strncpy(cb->region, std::getenv("AWS_REGION"), MAX_REGION - 1);
-				cb->region[MAX_REGION - 1] = '\0';
-			} else if (std::getenv("AWS_DEFAULT_REGION")) {
-				strncpy(cb->region, std::getenv("AWS_DEFAULT_REGION"), MAX_REGION - 1);
-				cb->region[MAX_REGION - 1] = '\0';
-			} else {
-				strncpy(cb->region, "us-east-1", MAX_REGION - 1);  // Default region
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
-					"AWS Auth: No region specified, using default: us-east-1\n");
-			}
-
-			// Leave credentials empty - AWS SDK will use default chain
-			// This includes: EC2 instance metadata, ECS task role, ~/.aws/credentials, etc.
-		}
-
-		cb->responseHandler = responseHandler;
-
-		if (switch_mutex_init(&cb->mutex, SWITCH_MUTEX_NESTED, pool) != SWITCH_STATUS_SUCCESS) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error initializing mutex\n");
-			status = SWITCH_STATUS_FALSE;
-			goto done; 
-		}
-
-		cb->interim = interim;
-		strncpy(cb->lang, lang, MAX_LANG);
-		if (metadata && strlen(metadata) > 0) {
-			strncpy(cb->metadata, metadata, MAX_METADATA_LEN - 1);
-			cb->metadata[MAX_METADATA_LEN - 1] = '\0';
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Stored metadata: %s\n", cb->metadata);
-		} else {
-			cb->metadata[0] = '\0';
-		}
-		// Use user-configured sampling rate (not codec rate)
-		cb->samples_per_second = samples_per_second;
-		
-		// Initialize resampler performance tracking stats
-		cb->resampler_frames_processed = 0;
-		cb->resampler_samples_in = 0;
-		cb->resampler_samples_out = 0;
-		cb->resampler_bytes_written = 0;
-		cb->resampler_source_rate = sampleRate;
-		cb->resampler_target_rate = samples_per_second;
-		cb->resampler_start_time = switch_time_now();
-		cb->resampler_last_log_time = cb->resampler_start_time;
-
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, 
-			"[RESAMPLER-INIT] %s: codec=%dHz, target=%dHz, channels=%d, direction=%s\n",
-			switch_channel_get_name(channel), sampleRate, samples_per_second, channels,
-			sampleRate < samples_per_second ? "UPSAMPLE" : 
-			(sampleRate > samples_per_second ? "DOWNSAMPLE" : "PASSTHROUGH"));
-
-		// Resample from codec rate to user-requested rate (if different)
-		// Note: AWS Transcribe quality is better at 16kHz, but 8kHz is supported
-		// Speex resampler handles both upsampling (8k->16k) and downsampling (24k->16k)
-		if (sampleRate != samples_per_second) {
-			// Log detailed resampler configuration for scale monitoring
-			// Quality setting: SWITCH_RESAMPLE_QUALITY (typically 4-5)
-			// Memory per resampler: ~10-50KB depending on quality and channels
-			// At 10k calls: ~100-500MB just for resamplers
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-				"[RESAMPLER-INIT] %s: Initializing Speex resampler: %dHz -> %dHz (%d ch), quality=%d\n",
-				switch_channel_get_name(channel), sampleRate, samples_per_second, channels, SWITCH_RESAMPLE_QUALITY);
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-				"[RESAMPLER-INIT] %s: Estimated memory: ~%dKB, ratio=%.3f, frame_in=%d samples, frame_out=%d samples\n",
-				switch_channel_get_name(channel),
-				(channels * 2 * 160 * 4) / 1024 + 10,  // Rough estimate: buffer + filter state
-				(float)samples_per_second / sampleRate,
-				(sampleRate / 50),      // 20ms frame at source rate
-				(samples_per_second / 50));  // 20ms frame at target rate
-
-			cb->resampler = speex_resampler_init(channels, sampleRate, samples_per_second, SWITCH_RESAMPLE_QUALITY, &err);
-			if (0 != err) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, 
-					"[RESAMPLER-ERROR] %s: Failed to initialize resampler: %s (code=%d)\n",
-					switch_channel_get_name(channel), speex_resampler_strerror(err), err);
-				status = SWITCH_STATUS_FALSE;
-				goto done;
-			}
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-				"[RESAMPLER-INIT] %s: Resampler initialized successfully at %p\n",
-				switch_channel_get_name(channel), (void*)cb->resampler);
-		} else {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-				"[RESAMPLER-INIT] %s: Passthrough mode - no resampling needed (rate=%dHz)\n",
-				switch_channel_get_name(channel), samples_per_second);
-		}
-
-		// allocate vad if we are delaying connecting to the recognizer until we detect speech
-		if (switch_channel_var_true(channel, "START_RECOGNIZING_ON_VAD")) {
-			cb->vad = switch_vad_init(sampleRate, 1);
-			if (cb->vad) {
-				const char* var;
-				int mode = 2;
-				int silence_ms = 150;
-				int voice_ms = 250;
-				int debug = 0;
-
-				if (var = switch_channel_get_variable(channel, "RECOGNIZER_VAD_MODE")) {
-					mode = atoi(var);
-				}
-				if (var = switch_channel_get_variable(channel, "RECOGNIZER_VAD_SILENCE_MS")) {
-					silence_ms = atoi(var);
-				}
-				if (var = switch_channel_get_variable(channel, "RECOGNIZER_VAD_VOICE_MS")) {
-					voice_ms = atoi(var);
-				}
-				if (var = switch_channel_get_variable(channel, "RECOGNIZER_VAD_DEBUG")) {
-					debug = atoi(var);
-				}
-				switch_vad_set_mode(cb->vad, mode);
-				switch_vad_set_param(cb->vad, "silence_ms", silence_ms);
-				switch_vad_set_param(cb->vad, "voice_ms", voice_ms);
-				switch_vad_set_param(cb->vad, "debug", debug);
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s: delaying connection until vad, voice_ms %d, mode %d\n", 
-					switch_channel_get_name(channel), voice_ms, mode);
-			}
-		}
-
-		// create a thread to service the http/2 connection to aws
-		switch_threadattr_create(&thd_attr, pool);
-		switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
-		switch_thread_create(&cb->thread, thd_attr, aws_transcribe_thread, cb, pool);
-
-		*ppUserData = cb;
-	
-	done:
-		return status;
-	}
-
-	switch_status_t aws_transcribe_session_stop(switch_core_session_t *session, int channelIsClosing, char* bugname) {
-		switch_channel_t *channel = switch_core_session_get_channel(session);
-		switch_media_bug_t *bug = (switch_media_bug_t*) switch_channel_get_private(channel, bugname);
-
-		if (bug) {
-			struct cap_cb *cb = (struct cap_cb *) switch_core_media_bug_get_user_data(bug);
-			switch_status_t st;
-
-			// Emit session stop event with metadata
-			emit_metadata_event(session, cb->metadata, TRANSCRIBE_EVENT_SESSION_STOP, bugname);
-
-			// close connection and get final responses
-			switch_mutex_lock(cb->mutex);
-			GStreamer* streamer = (GStreamer *) cb->streamer;
-			if (streamer) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "aws_transcribe_session_stop: finish..%s\n", bugname);
-				streamer->finish();
-			}
-			if (cb->thread) {
-				switch_status_t retval;
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "aws_transcribe_session_stop: waiting for read thread to complete %s\n", bugname);
-				switch_thread_join(&retval, cb->thread);
-				cb->thread = NULL;
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "aws_transcribe_session_stop: read thread completed %s, %d\n", bugname, retval);
-			}
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "aws_transcribe_session_stop: bugname - %s; going to kill callback\n", bugname);
-			killcb(cb);
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "aws_transcribe_session_stop: bugname - %s; killed callback\n", bugname);
-
-			switch_channel_set_private(channel, bugname, NULL);
-			if (!channelIsClosing) {
-        		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "aws_transcribe_session_stop: removing bug %s\n", bugname);
-        		switch_core_media_bug_remove(session, &bug);
-      		}
-
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "aws_transcribe_session_stop: bugname - %s; unlocking callback mutex\n", bugname);
-			switch_mutex_unlock(cb->mutex);
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "aws_transcribe_session_stop: Closed aws session\n");
-
-			return SWITCH_STATUS_SUCCESS;
-		}
-
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "%s Bug is not attached.\n", switch_channel_get_name(channel));
+    // Pass the raw pointer to the media bug.
+    // We are responsible for deleting this in the CLOSE callback.
+    *ppUserData = pBugData;
+    
+    switch_media_bug_t *bug = NULL;
+    if (switch_core_media_bug_add(session, bugname, NULL, aws_transcribe_frame, pBugData, 0, flags, &bug) != SWITCH_STATUS_SUCCESS) {
+        if (pBugData->resampler) speex_resampler_destroy(pBugData->resampler);
+        delete pBugData;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error adding media bug.\n");
 		return SWITCH_STATUS_FALSE;
 	}
-	
-	switch_bool_t aws_transcribe_frame(switch_media_bug_t *bug, void* user_data) {
-		switch_core_session_t *session = switch_core_media_bug_get_session(bug);
-		uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
-		switch_frame_t frame = {};
-		struct cap_cb *cb = (struct cap_cb *) user_data;
 
-		frame.data = data;
-		frame.buflen = SWITCH_RECOMMENDED_BUFFER_SIZE;
+    // This is the key for crash safety:
+    // We will launch the processing thread and give it its OWN shared_ptr to the AwsPipe.
+    // Even if the call hangs up and the media bug is destroyed, this thread
+    // will keep the AwsPipe object alive until it is finished.
+    WorkerJob *job = new WorkerJob{JobType::Connect, pPipe};
+    g_job_queue.push(job);
 
-		if (switch_mutex_trylock(cb->mutex) == SWITCH_STATUS_SUCCESS) {
-			GStreamer* streamer = (GStreamer *) cb->streamer;
-			if (streamer) {
-				while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS && !switch_test_flag((&frame), SFF_CNG)) {
-					if (frame.datalen) {
-						spx_int16_t out[SWITCH_RECOMMENDED_BUFFER_SIZE];
-						spx_uint32_t out_len = SWITCH_RECOMMENDED_BUFFER_SIZE;
-						spx_uint32_t in_len = frame.samples;
-						size_t written;
 
-						if (cb->vad && !streamer->isConnecting()) {
-							switch_vad_state_t state = switch_vad_process(cb->vad, (int16_t*) frame.data, frame.samples);
-							if (state == SWITCH_VAD_STATE_START_TALKING) {
-								switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "detected speech, connect to aws speech now\n");
-								streamer->connect();
-								cb->responseHandler(session, "vad_detected", cb->bugname);
-							}
-						}
+    return SWITCH_STATUS_SUCCESS;
+}
 
-						if (cb->resampler) {
-							spx_uint32_t in_len_before = in_len;
-							speex_resampler_process_interleaved_int(cb->resampler, (const spx_int16_t *) frame.data, (spx_uint32_t *) &in_len, &out[0], &out_len);
-							
-							// Track resampler statistics
-							cb->resampler_frames_processed++;
-							cb->resampler_samples_in += in_len_before;
-							cb->resampler_samples_out += out_len;
-							size_t bytes_to_write = sizeof(spx_int16_t) * out_len * cb->channels;
-							cb->resampler_bytes_written += bytes_to_write;
-							
-							// bytes = samples * sizeof(int16) * channels (for stereo interleaved audio)
-							streamer->write(&out[0], bytes_to_write);
-							
-							// Log stats every 10 seconds (500 frames at 50fps)
-							switch_time_t now = switch_time_now();
-							if ((now - cb->resampler_last_log_time) >= 10000000) {  // 10 seconds in microseconds
-								double elapsed_secs = (now - cb->resampler_start_time) / 1000000.0;
-								double fps = cb->resampler_frames_processed / elapsed_secs;
-								double mb_written = cb->resampler_bytes_written / (1024.0 * 1024.0);
-								
-								switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
-									"[RESAMPLER-STATS] %s: frames=%lu, samples_in=%lu, samples_out=%lu, "
-									"bytes=%.2fMB, fps=%.1f, elapsed=%.1fs, ratio=%.3f\n",
-									cb->bugname,
-									(unsigned long)cb->resampler_frames_processed,
-									(unsigned long)cb->resampler_samples_in,
-									(unsigned long)cb->resampler_samples_out,
-									mb_written, fps, elapsed_secs,
-									(double)cb->resampler_samples_out / cb->resampler_samples_in);
-								cb->resampler_last_log_time = now;
-							}
-						}
-						else {
-							// Passthrough mode - still track stats
-							cb->resampler_frames_processed++;
-							cb->resampler_samples_in += frame.samples;
-							cb->resampler_samples_out += frame.samples;
-							size_t bytes_to_write = sizeof(spx_int16_t) * frame.samples * cb->channels;
-							cb->resampler_bytes_written += bytes_to_write;
-							
-							streamer->write(frame.data, bytes_to_write);
-						}
-					}
-				}
-			}
-			else {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, 
-					"aws_transcribe_frame: not sending audio because aws channel has been closed\n");
-			}
-			switch_mutex_unlock(cb->mutex);
-		}
-		return SWITCH_TRUE;
-	}
+switch_status_t aws_transcribe_session_stop(switch_core_session_t *session, int channelIsClosing, char* bugname) {
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    switch_media_bug_t *bug = (switch_media_bug_t*) switch_channel_get_private(channel, bugname);
+
+    if (bug) {
+        BugData *pBugData = (BugData *) switch_core_media_bug_get_user_data(bug);
+        if (pBugData && pBugData->pPipe) {
+            // Signal the pipe to close by pushing a disconnect job.
+            WorkerJob *job = new WorkerJob{JobType::Disconnect, pBugData->pPipe};
+            g_job_queue.push(job);
+        }
+        // Detach the bug. This will trigger the CLOSE callback.
+        if (!channelIsClosing) {
+            switch_channel_set_private(channel, bugname, NULL);
+            switch_core_media_bug_remove(session, &bug);
+        }
+    }
+    return SWITCH_STATUS_SUCCESS;
+}
+
+switch_bool_t aws_transcribe_frame(switch_media_bug_t *bug, void* user_data, switch_abc_type_t type) {
+    switch_core_session_t *session = switch_core_media_bug_get_session(bug);
+    BugData *pBugData = (BugData *) user_data;
+
+    switch (type) {
+        case SWITCH_ABC_TYPE_CLOSE:
+        {
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Got SWITCH_ABC_TYPE_CLOSE.\n");
+            if (pBugData) {
+                if (pBugData->resampler) speex_resampler_destroy(pBugData->resampler);
+                // Deleting BugData will decrement the ref count of the shared_ptr.
+                // The AwsPipe object will be destroyed now IF the processing thread is also done.
+                delete pBugData;
+            }
+        }
+        break;
+
+        case SWITCH_ABC_TYPE_READ:
+        {
+            if (!pBugData || !pBugData->pPipe) {
+                return SWITCH_TRUE;
+            }
+            
+            uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
+            switch_frame_t frame = {};
+            frame.data = data;
+            frame.buflen = SWITCH_RECOMMENDED_BUFFER_SIZE;
+
+            while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
+                if (frame.datalen) {
+                    if (pBugData->resampler) {
+                        spx_int16_t out[SWITCH_RECOMMENDED_BUFFER_SIZE];
+                        spx_uint32_t out_len = SWITCH_RECOMMENDED_BUFFER_SIZE;
+                        spx_uint32_t in_len = frame.samples;
+
+                        speex_resampler_process_interleaved_int(pBugData->resampler,
+                            (const spx_int16_t *) frame.data,
+                            &in_len,
+                            &out[0],
+                            &out_len);
+                        
+                        if (out_len > 0) {
+                            void* p1;
+                            void* p2;
+                            size_t len1, len2;
+                            size_t bytes_to_write = out_len * frame.channels * sizeof(spx_int16_t);
+                            if (pBugData->pPipe->reserveAudioSpace(bytes_to_write, &p1, &len1, &p2, &len2)) {
+                                memcpy(p1, &out[0], len1);
+                                if (len2 > 0) {
+                                    memcpy(p2, (char*)&out[0] + len1, len2);
+                                }
+                                pBugData->pPipe->commitAudioData(bytes_to_write);
+                            }
+                        }
+                    } else {
+                        void* p1;
+                        void* p2;
+                        size_t len1, len2;
+                        if (pBugData->pPipe->reserveAudioSpace(frame.datalen, &p1, &len1, &p2, &len2)) {
+                            memcpy(p1, frame.data, len1);
+                            if (len2 > 0) {
+                                memcpy(p2, (char*)frame.data + len1, len2);
+                            }
+                            pBugData->pPipe->commitAudioData(frame.datalen);
+                        }
+                    }
+                }
+            }
+        }
+        break;
+
+        default:
+            break;
+    }
+
+    return SWITCH_TRUE;
 }

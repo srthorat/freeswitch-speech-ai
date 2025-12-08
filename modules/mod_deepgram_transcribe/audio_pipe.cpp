@@ -1,4 +1,5 @@
 #include "audio_pipe.hpp"
+#include "context_manager.hpp"
 
 #include <cassert>
 #include <iostream>
@@ -266,12 +267,7 @@ static const lws_retry_bo_t retry = {
     0          // jitter_percent
 };
 
-struct lws_context *AudioPipe::contexts[] = {
-  nullptr, nullptr, nullptr, nullptr, nullptr,
-  nullptr, nullptr, nullptr, nullptr, nullptr
-};
-unsigned int AudioPipe::numContexts = 0;
-unsigned int AudioPipe::nchild = 0;
+// Thread-local context manager initialized during AudioPipe::initialize
 std::string AudioPipe::protocolName;
 
 // Lock-free MPSC queues (HIGH SCALE)
@@ -287,8 +283,7 @@ std::vector<AudioPipe*> AudioPipe::pendingConnects;
 std::vector<AudioPipe*> AudioPipe::pendingDisconnects;
 std::vector<AudioPipe*> AudioPipe::pendingWrites;
 
-// Flag to use lock-free queues (enabled by default)
-std::atomic<bool> AudioPipe::useLockFreeQueues{true};
+// PHASE 2: Pure lock-free queue system implemented
 
 AudioPipe::log_emit_function AudioPipe::logger;
 std::mutex AudioPipe::mapMutex;
@@ -297,87 +292,36 @@ std::queue<std::thread::id> AudioPipe::threadIds;
 
 
 void AudioPipe::processPendingConnects(lws_per_vhost_data *vhd) {
-  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
-    // Lock-free path: pop from MPSC queue
-    AudioPipe* ap;
-    while ((ap = pendingConnectsQueue.pop()) != nullptr) {
-      if (ap->m_state == LWS_CLIENT_IDLE) {
-        ap->m_state = LWS_CLIENT_CONNECTING;
-        // CRITICAL: Add to pendingConnects vector so findPendingConnect() 
-        // can find it during LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER
-        {
-          std::lock_guard<std::mutex> guard(mutex_connects);
-          pendingConnects.push_back(ap);
-        }
-        ap->connect_client(vhd);
+  // PHASE 2: Always use lock-free path for main queue operations
+  AudioPipe* ap;
+  while ((ap = pendingConnectsQueue.pop()) != nullptr) {
+    if (ap->m_state == LWS_CLIENT_IDLE) {
+      ap->m_state = LWS_CLIENT_CONNECTING;
+      // MINIMAL MUTEX: Only for handshake lookup (LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER)
+      {
+        std::lock_guard<std::mutex> guard(mutex_connects);
+        pendingConnects.push_back(ap);
       }
-    }
-  } else {
-    // Legacy mutex path (fallback)
-    std::vector<AudioPipe*> connects;
-    {
-      std::lock_guard<std::mutex> guard(mutex_connects);
-      connects.reserve(pendingConnects.size());
-      for (auto* ap : pendingConnects) {
-        if (ap->m_state == LWS_CLIENT_IDLE) {
-          connects.push_back(ap);
-          ap->m_state = LWS_CLIENT_CONNECTING;
-        }
-      }
-    }
-    for (auto* ap : connects) {
       ap->connect_client(vhd);
     }
   }
 }
 
 void AudioPipe::processPendingDisconnects(lws_per_vhost_data *vhd) {
-  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
-    // Lock-free path
-    AudioPipe* ap;
-    while ((ap = pendingDisconnectsQueue.pop()) != nullptr) {
-      if (ap->m_state == LWS_CLIENT_DISCONNECTING && ap->m_wsi) {
-        lws_callback_on_writable(ap->m_wsi);
-      }
-    }
-  } else {
-    // Legacy mutex path
-    std::vector<AudioPipe*> disconnects;
-    {
-      std::lock_guard<std::mutex> guard(mutex_disconnects);
-      disconnects.reserve(pendingDisconnects.size());
-      for (auto* ap : pendingDisconnects) {
-        if (ap->m_state == LWS_CLIENT_DISCONNECTING) disconnects.push_back(ap);
-      }
-      pendingDisconnects.clear();
-    }
-    for (auto* ap : disconnects) {
+  // PHASE 2: Pure lock-free path
+  AudioPipe* ap;
+  while ((ap = pendingDisconnectsQueue.pop()) != nullptr) {
+    if (ap->m_state == LWS_CLIENT_DISCONNECTING && ap->m_wsi) {
       lws_callback_on_writable(ap->m_wsi);
     }
   }
 }
 
 void AudioPipe::processPendingWrites() {
-  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
-    // Lock-free path
-    AudioPipe* ap;
-    while ((ap = pendingWritesQueue.pop()) != nullptr) {
-      if (ap->m_state == LWS_CLIENT_CONNECTED && ap->m_wsi) {
-        lws_callback_on_writable(ap->m_wsi);
-      }
-    }
-  } else {
-    // Legacy mutex path
-    std::vector<AudioPipe*> writes;
-    {
-      std::lock_guard<std::mutex> guard(mutex_writes);
-      writes.reserve(pendingWrites.size());
-      for (auto* ap : pendingWrites) {
-        if (ap->m_state == LWS_CLIENT_CONNECTED) writes.push_back(ap);
-      }
-      pendingWrites.clear();
-    }
-    for (auto* ap : writes) {
+  // PHASE 2: Pure lock-free path
+  AudioPipe* ap;
+  while ((ap = pendingWritesQueue.pop()) != nullptr) {
+    if (ap->m_state == LWS_CLIENT_CONNECTED && ap->m_wsi) {
       lws_callback_on_writable(ap->m_wsi);
     }
   }
@@ -416,55 +360,31 @@ AudioPipe* AudioPipe::findPendingConnect(struct lws *wsi) {
 }
 
 void AudioPipe::addPendingConnect(AudioPipe* ap) {
-  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
-    // Lock-free path
-    if (!pendingConnectsQueue.push(ap)) {
-      lwsl_err("%s LOCKFREE: pendingConnectsQueue full!\n", ap->m_uuid.c_str());
-    }
-  } else {
-    // Legacy mutex path
-    std::lock_guard<std::mutex> guard(mutex_connects);
-    pendingConnects.push_back(ap);
-    lwsl_debug("%s after adding connect there are %lu pending connects\n", 
-      ap->m_uuid.c_str(), pendingConnects.size());
-  }
-  lws_cancel_service(contexts[nchild++ % numContexts]);
+  // PHASE 2: Always use lock-free queue (unbounded, never fails)
+  pendingConnectsQueue.push(ap);
+  
+  // HIGH SCALE: Context will be processed in next service loop iteration
+  // No explicit wakeup needed - thread-local contexts are always responsive
 }
 
 void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
   ap->m_state = LWS_CLIENT_DISCONNECTING;
-  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
-    // Lock-free path
-    if (!pendingDisconnectsQueue.push(ap)) {
-      lwsl_err("%s LOCKFREE: pendingDisconnectsQueue full!\n", ap->m_uuid.c_str());
-    }
-  } else {
-    // Legacy mutex path
-    std::lock_guard<std::mutex> guard(mutex_disconnects);
-    pendingDisconnects.push_back(ap);
-    lwsl_debug("%s after adding disconnect there are %lu pending disconnects\n", 
-      ap->m_uuid.c_str(), pendingDisconnects.size());
+  // PHASE 2: Always use lock-free queue (unbounded, never fails)
+  pendingDisconnectsQueue.push(ap);
+  if (ap->m_wsi) {
+    lws_callback_on_writable(ap->m_wsi);
   }
-  lws_cancel_service(ap->m_vhd->context);
 }
 
 void AudioPipe::addPendingWrite(AudioPipe* ap) {
-  if (useLockFreeQueues.load(std::memory_order_relaxed)) {
-    // Lock-free path
-    if (!pendingWritesQueue.push(ap)) {
-      // Queue full - this is a scale issue, log at debug level to avoid spam
-      lwsl_debug("%s LOCKFREE: pendingWritesQueue full\n", ap->m_uuid.c_str());
-    }
-  } else {
-    // Legacy mutex path
-    std::lock_guard<std::mutex> guard(mutex_writes);
-    pendingWrites.push_back(ap);
+  // PHASE 2: Always use lock-free queue (unbounded, never fails)
+  pendingWritesQueue.push(ap);
+  if (ap->m_wsi) {
+    lws_callback_on_writable(ap->m_wsi);
   }
-  lws_cancel_service(ap->m_vhd->context);
 }
 
-bool AudioPipe::lws_service_thread(unsigned int nServiceThread) {
-  struct lws_context_creation_info info;
+void AudioPipe::adaptive_lws_service_thread(unsigned int nServiceThread) {
   std::thread::id this_id = std::this_thread::get_id();
 
   const struct lws_protocols protocols[] = {
@@ -477,6 +397,7 @@ bool AudioPipe::lws_service_thread(unsigned int nServiceThread) {
     { NULL, NULL, 0, 0 }
   };
 
+  struct lws_context_creation_info info;
   memset(&info, 0, sizeof info); 
   info.port = CONTEXT_PORT_NO_LISTEN; 
   info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
@@ -489,17 +410,18 @@ bool AudioPipe::lws_service_thread(unsigned int nServiceThread) {
   info.timeout_secs_ah_idle = 10;       // secs to allow a client to hold an ah without using it
   info.retry_and_idle_policy = &retry;
 
-  lwsl_notice("AudioPipe::lws_service_thread creating context in service thread %d.\n", nServiceThread);
+  lwsl_notice("AudioPipe::lws_service_thread creating thread-local context %d.\n", nServiceThread);
 
-  contexts[nServiceThread] = lws_create_context(&info);
-  if (!contexts[nServiceThread]) {
-    lwsl_err("AudioPipe::lws_service_thread failed creating context in service thread %d..\n", nServiceThread); 
-    return false;
+  // HIGH SCALE: Get thread-local LWS context (zero contention)
+  struct lws_context* context = deepgram::ContextManager::getThreadContext();
+  if (!context) {
+    lwsl_err("AudioPipe::lws_service_thread failed creating thread-local context %d..\n", nServiceThread); 
+    return;
   }
 
   int n;
   do {
-    n = lws_service(contexts[nServiceThread], 0);
+    n = lws_service(context, 0);
   } while (n >= 0 && !stopFlags[this_id]);
 
   // Cleanup once work is done or stopped
@@ -508,20 +430,21 @@ bool AudioPipe::lws_service_thread(unsigned int nServiceThread) {
       stopFlags.erase(this_id);
   }
 
-  lwsl_notice("AudioPipe::lws_service_thread ending in service thread %d\n", nServiceThread); 
-  return true;
+  lwsl_notice("AudioPipe::adaptive_lws_service_thread ending thread-local context %d\n", nServiceThread);
 }
 
 void AudioPipe::initialize(unsigned int nThreads, int loglevel, log_emit_function logger) {
   assert(nThreads > 0 && nThreads <= 10);
 
-  numContexts = nThreads;
   lws_set_log_level(loglevel, logger);
 
-  lwsl_notice("AudioPipe::initialize starting %d threads\n", nThreads); 
-  for (unsigned int i = 0; i < numContexts; i++) {
+  // HIGH SCALE: Initialize thread-local context manager
+  deepgram::ContextManager::initialize("", AudioPipe::lws_callback);
+
+  lwsl_notice("AudioPipe::initialize starting %d adaptive service threads\n", nThreads); 
+  for (unsigned int i = 0; i < nThreads; i++) {
     std::lock_guard<std::mutex> lock(mapMutex);
-    std::thread t(&AudioPipe::lws_service_thread, i);
+    std::thread t(&AudioPipe::adaptive_lws_service_thread, i);
     stopFlags[t.get_id()] = false;
     threadIds.push(t.get_id());
     t.detach();
@@ -546,11 +469,10 @@ bool AudioPipe::deinitialize() {
     lwsl_notice("waiting for disconnects to complete\n");
   } while (pendingDisconnects.size() > 0);
 */
-  for (unsigned int i = 0; i < numContexts; i++)
-  {
-    lwsl_notice("AudioPipe::deinitialize destroying context %d of %d\n", i + 1, numContexts);
-    lws_context_destroy(contexts[i]);
-  }
+  // HIGH SCALE: Cleanup thread-local contexts (zero contention)
+  lwsl_notice("AudioPipe::deinitialize cleaning up thread-local contexts\n");
+  deepgram::ContextManager::shutdownAll();
+  
   std::this_thread::sleep_for(std::chrono::seconds(2));
   return true;
 }

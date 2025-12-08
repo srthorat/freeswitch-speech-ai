@@ -877,23 +877,16 @@ if should_install_module "mod_aws_transcribe"; then
 
     cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe || exit 1
 
-    log_substep "Compiling mod_aws_transcribe.c..."
-    log_command "mod_aws_transcribe.c" "${LOG_DIR}/mod_aws_transcribe_c.log" \
-        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c
-    check_success "Failed to compile mod_aws_transcribe.c" "${LOG_DIR}/mod_aws_transcribe_c.log"
-
     log_substep "Compiling C++ sources..."
     log_command "mod_aws_transcribe C++" "${LOG_DIR}/mod_aws_transcribe_cpp.log" \
-        g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp
+        g++ -fPIC -c -std=c++17 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include -I/usr/local/include/aws/core -I/usr/local/include/aws/transcribestreaming mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp async_http.cpp async_pusher.cpp
     check_success "Failed to compile mod_aws_transcribe C++ sources" "${LOG_DIR}/mod_aws_transcribe_cpp.log"
 
     log_substep "Linking mod_aws_transcribe.so..."
     log_command "mod_aws_transcribe link" "${LOG_DIR}/mod_aws_transcribe_link.log" \
         g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
-            mod_aws_transcribe.o aws_transcribe_glue.o \
-            -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
-            -laws-c-event-stream -laws-checksums -laws-c-common \
-            -lpthread -lcurl -lssl -lcrypto -lz
+            mod_aws_transcribe.o aws_transcribe_glue.o audio_pipe.o worker_thread.o aws_client_manager.o async_http.o async_pusher.o \
+            -L${FS_PREFIX}/libs/aws-sdk-cpp/build/.deps/install/lib -L${FS_PREFIX}/libs/aws-sdk-cpp/build/aws-cpp-sdk-core -L${FS_PREFIX}/libs/aws-sdk-cpp/build/aws-cpp-sdk-transcribestreaming -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core -laws-c-event-stream -laws-checksums -laws-c-common -lpthread -lcurl -lcrypto -lssl -lz
     check_success "Failed to link mod_aws_transcribe" "${LOG_DIR}/mod_aws_transcribe_link.log"
 
     log_success "mod_aws_transcribe built and installed"
@@ -925,19 +918,19 @@ if should_install_module "mod_deepgram_transcribe"; then
         gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_pusher.c
     check_success "Failed to compile async_pusher.c" "${LOG_DIR}/mod_deepgram_async_pusher.log"
 
-    log_substep "Compiling C++ sources (with lock-free ring buffer, zero-copy, shared_ptr lifecycle & memory pool)..."
+    log_substep "Compiling C++ sources (with thread-local contexts, lock-free queues, zero-copy & memory pools)..."
     log_command "mod_deepgram_transcribe C++" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log" \
-        g++ -fPIC -c -std=c++17 -O2 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp dg_session.cpp
+        g++ -fPIC -c -std=c++17 -O2 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp dg_session.cpp context_manager.cpp
     check_success "Failed to compile mod_deepgram_transcribe C++ sources" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log"
 
     log_substep "Linking mod_deepgram_transcribe.so..."
     log_command "mod_deepgram_transcribe link" "${LOG_DIR}/mod_deepgram_transcribe_link.log" \
         g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
-            mod_deepgram_transcribe.o async_http.o async_pusher.o dg_transcribe_glue.o audio_pipe.o memory_pool.o dg_session.o \
+            mod_deepgram_transcribe.o async_http.o async_pusher.o dg_transcribe_glue.o audio_pipe.o memory_pool.o dg_session.o context_manager.o \
             -lwebsockets -lcurl -lpthread -lssl -lcrypto
     check_success "Failed to link mod_deepgram_transcribe" "${LOG_DIR}/mod_deepgram_transcribe_link.log"
 
-    log_success "mod_deepgram_transcribe built and installed (async Pusher, lock-free buffer, zero-copy, shared_ptr lifecycle, memory pool)"
+    log_success "mod_deepgram_transcribe built and installed (thread-local contexts, pure lock-free queues, zero-copy, memory pools, performance monitoring)"
 else
     log_step "[Step 6/7] Skipping mod_deepgram_transcribe"
 fi

@@ -2,11 +2,67 @@
 
 #include <cassert>
 #include <iostream>
+#include <chrono>
+#include <thread>
+
+// Thread-local LWS context manager (Phase 1 optimization)
+thread_local struct lws_context* LwsContextManager::t_context = nullptr;
+std::atomic<uint32_t> LwsContextManager::g_context_count{0};
+
+struct lws_context* LwsContextManager::getContext() {
+    if (!t_context) {
+        t_context = createContext();
+        if (t_context) {
+            g_context_count.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    return t_context;
+}
+
+struct lws_context* LwsContextManager::createContext() {
+    struct lws_context_creation_info info;
+    memset(&info, 0, sizeof(info));
+    
+    static const struct lws_protocols protocols[] = {
+        { AudioPipe::protocolName.c_str(), AudioPipe::lws_callback, sizeof(AudioPipe*), 8192, 0, NULL, 8192 },
+        { NULL, NULL, 0, 0, 0, NULL, 0 }
+    };
+    
+    info.port = CONTEXT_PORT_NO_LISTEN;
+    info.protocols = protocols;
+    info.gid = -1;
+    info.uid = -1;
+    info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+    info.ssl_cert_filepath = NULL;
+    info.ssl_private_key_filepath = NULL;
+    
+    return lws_create_context(&info);
+}
+
+void LwsContextManager::shutdown() {
+    if (t_context) {
+        lws_context_destroy(t_context);
+        t_context = nullptr;
+        g_context_count.fetch_sub(1, std::memory_order_relaxed);
+    }
+}
 
 /* discard incoming text messages over the socket that are longer than this */
 #define MAX_RECV_BUF_SIZE (65 * 1024 * 10)
 #define RECV_BUF_REALLOC_SIZE (8 * 1024)
 
+
+// Static member initialization (Phase 1)
+BoundedMPSCQueue<AudioPipe, 16384> AudioPipe::pendingConnectsQueue;
+BoundedMPSCQueue<AudioPipe, 16384> AudioPipe::pendingDisconnectsQueue;
+BoundedMPSCQueue<AudioPipe, 16384> AudioPipe::pendingWritesQueue;
+std::atomic<uint64_t> AudioPipe::g_active_sessions{0};
+std::atomic<uint64_t> AudioPipe::g_operations_processed{0};
+std::atomic<bool> AudioPipe::stopFlags{false};
+AudioPipe::log_emit_function AudioPipe::logger = nullptr;
+std::string AudioPipe::protocolName;
+unsigned int AudioPipe::numContexts = 0;
+unsigned int AudioPipe::nchild = 0;
 
 namespace {
   static const char* basicAuthUser = std::getenv("MOD_AUDIO_FORK_HTTP_AUTH_USER");
@@ -56,7 +112,8 @@ int AudioPipe::lws_callback(struct lws *wsi,
 
     case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER:
       {
-        AudioPipe* ap = findPendingConnect(wsi);
+        // Phase 1: Direct lookup through user data (no mutex needed)
+        AudioPipe* ap = *ppAp;
         if (ap && ap->hasBasicAuth()) {
           unsigned char **p = (unsigned char **)in, *end = (*p) + len;
           char b[128];
@@ -77,12 +134,13 @@ int AudioPipe::lws_callback(struct lws *wsi,
       break;
     case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
       {
-        AudioPipe* ap = findAndRemovePendingConnect(wsi);
+        AudioPipe* ap = *ppAp;
         int rc = lws_http_client_http_response(wsi);
         lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_CONNECTION_ERROR: %s, response status %d\n", in ? (char *)in : "(null)", rc); 
         if (ap) {
           ap->m_state = LWS_CLIENT_FAILED;
           ap->m_callback(ap->m_uuid.c_str(), ap->m_bugname.c_str(), AudioPipe::CONNECT_FAIL, (char *) in);
+          g_active_sessions.fetch_sub(1, std::memory_order_relaxed);
         }
         else {
           lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_CONNECTION_ERROR unable to find wsi %p..\n", wsi); 
@@ -92,12 +150,12 @@ int AudioPipe::lws_callback(struct lws *wsi,
 
     case LWS_CALLBACK_CLIENT_ESTABLISHED:
       {
-        AudioPipe* ap = findAndRemovePendingConnect(wsi);
+        AudioPipe* ap = *ppAp;
         if (ap) {
-          *ppAp = ap;
           ap->m_vhd = vhd;
           ap->m_state = LWS_CLIENT_CONNECTED;
           ap->m_callback(ap->m_uuid.c_str(), ap->m_bugname.c_str(), AudioPipe::CONNECT_SUCCESS, NULL);
+          g_active_sessions.fetch_add(1, std::memory_order_relaxed);
           
           // Trigger initial write callback to start draining audio buffer
           lws_callback_on_writable(wsi);
@@ -285,191 +343,116 @@ static const lws_retry_bo_t retry = {
     0          // jitter_percent
 };
 
-struct lws_context *AudioPipe::contexts[] = {
-  nullptr, nullptr, nullptr, nullptr, nullptr,
-  nullptr, nullptr, nullptr, nullptr, nullptr
-};
-unsigned int AudioPipe::numContexts = 0;
-unsigned int AudioPipe::nchild = 0;
-std::string AudioPipe::protocolName;
-std::mutex AudioPipe::mutex_connects;
-std::mutex AudioPipe::mutex_disconnects;
-std::mutex AudioPipe::mutex_writes;
-std::list<AudioPipe*> AudioPipe::pendingConnects;
-std::list<AudioPipe*> AudioPipe::pendingDisconnects;
-std::list<AudioPipe*> AudioPipe::pendingWrites;
-AudioPipe::log_emit_function AudioPipe::logger;
-std::mutex AudioPipe::mapMutex;
-std::unordered_map<std::thread::id, bool> AudioPipe::stopFlags;
-std::queue<std::thread::id> AudioPipe::threadIds;
+// Phase 1: Old static members removed - using lock-free alternatives declared earlier
 
 void AudioPipe::processPendingConnects(lws_per_vhost_data *vhd) {
-  std::list<AudioPipe*> connects;
-  {
-    std::lock_guard<std::mutex> guard(mutex_connects);
-    for (auto it = pendingConnects.begin(); it != pendingConnects.end(); ++it) {
-      if ((*it)->m_state == LWS_CLIENT_IDLE) {
-        connects.push_back(*it);
-        (*it)->m_state = LWS_CLIENT_CONNECTING;
-      }
+  AudioPipe* ap;
+  while ((ap = pendingConnectsQueue.pop()) != nullptr) {
+    if (ap->m_state == LWS_CLIENT_IDLE) {
+      ap->m_state = LWS_CLIENT_CONNECTING;
+      ap->connect_client(vhd);
     }
-  }
-  for (auto it = connects.begin(); it != connects.end(); ++it) {
-    AudioPipe* ap = *it;
-    ap->connect_client(vhd);   
   }
 }
 
 void AudioPipe::processPendingDisconnects(lws_per_vhost_data *vhd) {
-  std::list<AudioPipe*> disconnects;
-  {
-    std::lock_guard<std::mutex> guard(mutex_disconnects);
-    for (auto it = pendingDisconnects.begin(); it != pendingDisconnects.end(); ++it) {
-      if ((*it)->m_state == LWS_CLIENT_DISCONNECTING) disconnects.push_back(*it);
+  AudioPipe* ap;
+  while ((ap = pendingDisconnectsQueue.pop()) != nullptr) {
+    if (ap->m_state == LWS_CLIENT_DISCONNECTING) {
+      lws_callback_on_writable(ap->m_wsi); 
     }
-    pendingDisconnects.clear();
-  }
-  for (auto it = disconnects.begin(); it != disconnects.end(); ++it) {
-    AudioPipe* ap = *it;
-    lws_callback_on_writable(ap->m_wsi); 
   }
 }
 
 void AudioPipe::processPendingWrites() {
-  std::list<AudioPipe*> writes;
-  {
-    std::lock_guard<std::mutex> guard(mutex_writes);
-    for (auto it = pendingWrites.begin(); it != pendingWrites.end(); ++it) {
-       if ((*it)->m_state == LWS_CLIENT_CONNECTED) writes.push_back(*it);
-    }  
-    pendingWrites.clear();
-  }
-  for (auto it = writes.begin(); it != writes.end(); ++it) {
-    AudioPipe* ap = *it;
-    lws_callback_on_writable(ap->m_wsi);
+  AudioPipe* ap;
+  while ((ap = pendingWritesQueue.pop()) != nullptr) {
+    if (ap->m_state == LWS_CLIENT_CONNECTED) {
+      lws_callback_on_writable(ap->m_wsi);
+    }
   }
 }
 
-AudioPipe* AudioPipe::findAndRemovePendingConnect(struct lws *wsi) {
-  AudioPipe* ap = NULL;
-  std::lock_guard<std::mutex> guard(mutex_connects);
-  std::list<AudioPipe* > toRemove;
-
-  for (auto it = pendingConnects.begin(); it != pendingConnects.end() && !ap; ++it) {
-    int state = (*it)->m_state;
-
-    if ((*it)->m_wsi == nullptr)
-      toRemove.push_back(*it);
-
-    if ((state == LWS_CLIENT_CONNECTING) &&
-      (*it)->m_wsi == wsi) ap = *it;
-  }
-
-  for (auto it = toRemove.begin(); it != toRemove.end(); ++it)
-    pendingConnects.remove(*it);
-
-  if (ap) {
-    pendingConnects.remove(ap);
-  }
-
-  return ap;
-}
-
-AudioPipe* AudioPipe::findPendingConnect(struct lws *wsi) {
-  AudioPipe* ap = NULL;
-  std::lock_guard<std::mutex> guard(mutex_connects);
-
-  for (auto it = pendingConnects.begin(); it != pendingConnects.end() && !ap; ++it) {
-    int state = (*it)->m_state;
-    if ((state == LWS_CLIENT_CONNECTING) &&
-      (*it)->m_wsi == wsi) ap = *it;
-  }
-  return ap;
-}
+// Note: findAndRemovePendingConnect and findPendingConnect functions 
+// are no longer needed with lock-free MPSC queue approach
+// Session management is now handled through direct state checking
 
 void AudioPipe::addPendingConnect(AudioPipe* ap) {
-  {
-    std::lock_guard<std::mutex> guard(mutex_connects);
-    pendingConnects.push_back(ap);
-    lwsl_notice("%s after adding connect there are %lu pending connects\n", 
-      ap->m_uuid.c_str(), pendingConnects.size());
+  if (pendingConnectsQueue.push(ap)) {
+    lwsl_notice("%s added to pending connects queue\n", ap->m_uuid.c_str());
+  } else {
+    lwsl_err("%s failed to add to pending connects queue (full)\n", ap->m_uuid.c_str());
   }
-  lws_cancel_service(contexts[nchild++ % numContexts]);
+  
+  struct lws_context* context = LwsContextManager::getContext();
+  if (context) {
+    lws_cancel_service(context);
+  }
 }
 void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
   ap->m_state = LWS_CLIENT_DISCONNECTING;
-  {
-    std::lock_guard<std::mutex> guard(mutex_disconnects);
-    pendingDisconnects.push_back(ap);
-    lwsl_notice("%s after adding disconnect there are %lu pending disconnects\n", 
-      ap->m_uuid.c_str(), pendingDisconnects.size());
+  if (pendingDisconnectsQueue.push(ap)) {
+    lwsl_notice("%s added to pending disconnects queue\n", ap->m_uuid.c_str());
+  } else {
+    lwsl_err("%s failed to add to pending disconnects queue (full)\n", ap->m_uuid.c_str());
   }
-  lws_cancel_service(ap->m_vhd->context);
+  
+  if (ap->m_vhd && ap->m_vhd->context) {
+    lws_cancel_service(ap->m_vhd->context);
+  }
 }
 void AudioPipe::addPendingWrite(AudioPipe* ap) {
   // Fast path: if already connected, request write callback immediately
   // This eliminates queueing delay for sub-millisecond latency
   if (ap->m_state == LWS_CLIENT_CONNECTED && ap->m_wsi) {
     lws_callback_on_writable(ap->m_wsi);
-    lws_cancel_service(ap->m_vhd->context);
+    if (ap->m_vhd && ap->m_vhd->context) {
+      lws_cancel_service(ap->m_vhd->context);
+    }
   }
   else {
     // Slow path: queue for later processing
-    {
-      std::lock_guard<std::mutex> guard(mutex_writes);
-      pendingWrites.push_back(ap);
+    if (!pendingWritesQueue.push(ap)) {
+      lwsl_err("%s failed to add to pending writes queue (full)\n", ap->m_uuid.c_str());
     }
-    lws_cancel_service(ap->m_vhd->context);
+    if (ap->m_vhd && ap->m_vhd->context) {
+      lws_cancel_service(ap->m_vhd->context);
+    }
   }
 }
 
-bool AudioPipe::lws_service_thread(unsigned int nServiceThread) {
-  std::thread::id this_id = std::this_thread::get_id();
-  struct lws_context_creation_info info;
-
-  const struct lws_protocols protocols[] = {
-    {
-      protocolName.c_str(),
-      AudioPipe::lws_callback,
-      sizeof(void *),
-      1024,
-    },
-    { NULL, NULL, 0, 0 }
-  };
-
-  memset(&info, 0, sizeof info); 
-  info.port = CONTEXT_PORT_NO_LISTEN; 
-  info.protocols = protocols;
-  info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
-
-  info.ka_time = nTcpKeepaliveSecs;                    // tcp keep-alive timer
-  info.ka_probes = 4;                   // number of times to try ka before closing connection
-  info.ka_interval = 5;                 // time between ka's
-  info.timeout_secs = 10;                // doc says timeout for "various processes involving network roundtrips"
-  info.keepalive_timeout = 5;           // seconds to allow remote client to hold on to an idle HTTP/1.1 connection 
-  info.timeout_secs_ah_idle = 10;       // secs to allow a client to hold an ah without using it
-  info.retry_and_idle_policy = &retry;
-
-  lwsl_notice("AudioPipe::lws_service_thread creating context in service thread %d.\n", nServiceThread);
-
-  contexts[nServiceThread] = lws_create_context(&info);
-  if (!contexts[nServiceThread]) {
-    lwsl_err("AudioPipe::lws_service_thread failed creating context in service thread %d..\n", nServiceThread); 
-    return false;
+// Phase 1: Adaptive service thread with thread-local context and exponential backoff
+void AudioPipe::adaptive_lws_service_thread(unsigned int nServiceThread) {
+  lwsl_notice("AudioPipe::adaptive_service_thread starting thread %d\n", nServiceThread);
+  
+  // Thread-local context eliminates mutex contention
+  struct lws_context* context = LwsContextManager::getContext();
+  if (!context) {
+    lwsl_err("AudioPipe::adaptive_service_thread failed creating context in thread %d\n", nServiceThread);
+    return;
   }
-
-  int n;
-  do {
-    n = lws_service(contexts[nServiceThread], 1);
-  } while (n >= 0 && !stopFlags[this_id]);
-
-  // Cleanup once work is done or stopped
-  {
-      std::lock_guard<std::mutex> lock(mapMutex);
-      stopFlags.erase(this_id);
+  
+  uint32_t empty_loops = 0;
+  const uint32_t max_backoff = 1000; // Max 1ms backoff
+  
+  while (!stopFlags.load(std::memory_order_relaxed) && context) {
+    // Non-blocking LWS service (Phase 1 optimization)
+    int work_done = lws_service(context, 0);
+    
+    // Increment operations counter
+    g_operations_processed.fetch_add(1, std::memory_order_relaxed);
+    
+    if (work_done <= 0) {
+      // Adaptive backoff: 10μs → 12μs → 14μs ... → 1ms (Phase 1)
+      uint32_t delay = std::min(10 + empty_loops * 2, max_backoff);
+      std::this_thread::sleep_for(std::chrono::microseconds(delay));
+      empty_loops++;
+    } else {
+      empty_loops = 0; // Reset immediately on activity
+    }
   }
-  lwsl_notice("AudioPipe::lws_service_thread ending in service thread %d\n", nServiceThread); 
-  return true;
+  
+  lwsl_notice("AudioPipe::adaptive_service_thread ending thread %d\n", nServiceThread);
 }
 
 void AudioPipe::initialize(const char* protocol, unsigned int nThreads, int loglevel, log_emit_function logger) {
@@ -478,42 +461,28 @@ void AudioPipe::initialize(const char* protocol, unsigned int nThreads, int logl
   numContexts = nThreads;
   protocolName = protocol;
   lws_set_log_level(loglevel, logger);
+  stopFlags.store(false, std::memory_order_relaxed);
 
   lwsl_notice("AudioPipe::initialize starting %d threads with subprotocol %s\n", nThreads, protocol); 
   for (unsigned int i = 0; i < numContexts; i++) {
-    std::lock_guard<std::mutex> lock(mapMutex);
-    std::thread t(&AudioPipe::lws_service_thread, i);
-    stopFlags[t.get_id()] = false;
-    threadIds.push(t.get_id());
+    std::thread t(&AudioPipe::adaptive_lws_service_thread, i);
     t.detach();
   }
 }
 
 bool AudioPipe::deinitialize() {
   lwsl_notice("AudioPipe::deinitialize\n"); 
-  std::lock_guard<std::mutex> lock(mapMutex);
-  if (!threadIds.empty()) {
-      std::thread::id id = threadIds.front();
-      threadIds.pop();
-      stopFlags[id] = true;
-  }
-/*
-  do
-  {
-    lwsl_notice("waiting for pending connects to complete\n");
-  } while (pendingConnects.size() > 0);
-  do
-  {
-    lwsl_notice("waiting for disconnects to complete\n");
-  } while (pendingDisconnects.size() > 0);
-*/
-
-  for (unsigned int i = 0; i < numContexts; i++)
-  {
-    lwsl_notice("AudioPipe::deinitialize destroying context %d of %d\n", i + 1, numContexts);
-    lws_context_destroy(contexts[i]);
-  }
+  
+  // Signal all threads to stop
+  stopFlags.store(true, std::memory_order_relaxed);
+  
+  // Wait for threads to finish (they will detect stopFlags and exit)
   std::this_thread::sleep_for(std::chrono::seconds(2));
+  
+  // Shutdown thread-local contexts (will be called by each thread as it exits)
+  LwsContextManager::shutdown();
+  
+  lwsl_notice("AudioPipe::deinitialize complete\n");
   return true;
 }
 

@@ -10,6 +10,27 @@
 
 #include <libwebsockets.h>
 #include "lockfree_ring_buffer.hpp"
+#include "lockfree_mpsc_queue.hpp"
+#include <atomic>
+#include <chrono>
+
+// Forward declaration
+class AudioPipe;
+
+// Thread-local LWS context manager (Phase 1 optimization)
+class LwsContextManager {
+public:
+  static struct lws_context* getContext();
+  static uint32_t getContextCount() { return g_context_count.load(std::memory_order_relaxed); }
+  static void shutdown();
+  
+private:
+  static struct lws_context* createContext();
+  thread_local static struct lws_context* t_context;
+  static std::atomic<uint32_t> g_context_count;
+  
+  friend class AudioPipe; // Allow access to AudioPipe's private members
+};
 
 class AudioPipe {
 public:
@@ -39,7 +60,7 @@ public:
 
   static void initialize(const char* protocolName, unsigned int nThreads, int loglevel, log_emit_function logger);
   static bool deinitialize();
-  static bool lws_service_thread(unsigned int nServiceThread);
+  static void adaptive_lws_service_thread(unsigned int nServiceThread); // Phase 1: Adaptive algorithm
 
   // constructor
   AudioPipe(const char* uuid, const char* host, unsigned int port, const char* path, int sslFlags, 
@@ -113,25 +134,24 @@ public:
 
 private:
 
-  static int lws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len); 
   static unsigned int nchild;
-  static struct lws_context *contexts[];
   static unsigned int numContexts;
+public:
   static std::string protocolName;
-  static std::mutex mutex_connects;
-  static std::mutex mutex_disconnects;
-  static std::mutex mutex_writes;
-  static std::list<AudioPipe*> pendingConnects;
-  static std::list<AudioPipe*> pendingDisconnects;
-  static std::list<AudioPipe*> pendingWrites;
+  static int lws_callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
+private:
+  
+  // Phase 1: Lock-free pending operations with atomic counters
+  static BoundedMPSCQueue<AudioPipe, 16384> pendingConnectsQueue;
+  static BoundedMPSCQueue<AudioPipe, 16384> pendingDisconnectsQueue;
+  static BoundedMPSCQueue<AudioPipe, 16384> pendingWritesQueue;
+  static std::atomic<uint64_t> g_active_sessions;
+  static std::atomic<uint64_t> g_operations_processed;
+  
   static log_emit_function logger;
+  static std::atomic<bool> stopFlags;
 
-  static std::mutex mapMutex;
-  static std::unordered_map<std::thread::id, bool> stopFlags;
-  static std::queue<std::thread::id> threadIds;
-
-  static AudioPipe* findAndRemovePendingConnect(struct lws *wsi);
-  static AudioPipe* findPendingConnect(struct lws *wsi);
+  // Phase 1: Lock-free pending operations
   static void addPendingConnect(AudioPipe* ap);
   static void addPendingDisconnect(AudioPipe* ap);
   static void addPendingWrite(AudioPipe* ap);

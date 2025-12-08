@@ -15,6 +15,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_deepgram_transcribe_load);
 SWITCH_MODULE_DEFINITION(mod_deepgram_transcribe, mod_deepgram_transcribe_load, mod_deepgram_transcribe_shutdown, NULL);
 
 static switch_status_t do_stop(switch_core_session_t *session, char* bugname);
+static switch_status_t dg_get_performance_stats(switch_core_session_t *session, const char* stats_type, switch_stream_handle_t *stream);
 
 /* ============================================================================
  * Async Pusher Integration (Non-Blocking)
@@ -482,7 +483,23 @@ static switch_status_t do_stop(switch_core_session_t *session,  char* bugname)
 	return status;
 }
 
-#define TRANSCRIBE_API_SYNTAX "<uuid> [start|stop] lang-code [interim] [stereo|mono|mixed] [8k|16k] [metadata]"
+/**
+ * PHASE 3: Performance monitoring API implementation
+ * 
+ * Provides real-time statistics for high-scale deployments.
+ * Usage: uuid_deepgram_transcribe <uuid> stats [pool|context|audio|all]
+ */
+static switch_status_t dg_get_performance_stats(switch_core_session_t *session, const char* stats_type, switch_stream_handle_t *stream)
+{
+	if (!session || !stream || !stats_type) {
+		return SWITCH_STATUS_FALSE;
+	}
+	
+	// Call C++ function to get performance statistics
+	return dg_get_stats(session, stats_type, stream);
+}
+
+#define TRANSCRIBE_API_SYNTAX "<uuid> [start|stop|stats] lang-code [interim] [stereo|mono|mixed] [8k|16k] [metadata]"
 SWITCH_STANDARD_API(dg_transcribe_function)
 {
 	char *mycmd = NULL, *argv[8] = { 0 };
@@ -599,6 +616,10 @@ SWITCH_STANDARD_API(dg_transcribe_function)
 					metadata ? metadata : "none");
 
 				status = start_capture(lsession, flags, lang, interim, bugname, sampling, metadata);
+			} else if (!strcasecmp(argv[1], "stats")) {
+				// PHASE 3: Performance monitoring API
+				char *stats_type = argc > 2 ? argv[2] : "all";
+				status = dg_get_performance_stats(lsession, stats_type, stream);
 			}
 			switch_core_session_rwunlock(lsession);
 		}

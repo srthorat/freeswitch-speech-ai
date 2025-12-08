@@ -256,19 +256,19 @@ log_command "async_pusher.c" "${LOG_DIR}/update_mod_deepgram_async_pusher.log" \
     gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_pusher.c
 check_success "Failed to compile async_pusher.c" "${LOG_DIR}/update_mod_deepgram_async_pusher.log"
 
-echo "  Compiling mod_deepgram_transcribe C++ sources (lock-free buffer, zero-copy, shared_ptr lifecycle & memory pool)..."
+echo "  Compiling mod_deepgram_transcribe C++ sources (thread-local contexts, lock-free queues, zero-copy & memory pools)..."
 log_command "mod_deepgram_transcribe C++" "${LOG_DIR}/update_mod_deepgram_transcribe_cpp.log" \
-    g++ -fPIC -c -std=c++17 -O2 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp dg_session.cpp
+    g++ -fPIC -c -std=c++17 -O2 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp dg_session.cpp context_manager.cpp
 check_success "Failed to compile mod_deepgram_transcribe C++ sources" "${LOG_DIR}/update_mod_deepgram_transcribe_cpp.log"
 
 echo "  Linking mod_deepgram_transcribe..."
 log_command "mod_deepgram_transcribe link" "${LOG_DIR}/update_mod_deepgram_transcribe_link.log" \
     g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
-    mod_deepgram_transcribe.o async_http.o async_pusher.o dg_transcribe_glue.o audio_pipe.o memory_pool.o dg_session.o \
+    mod_deepgram_transcribe.o async_http.o async_pusher.o dg_transcribe_glue.o audio_pipe.o memory_pool.o dg_session.o context_manager.o \
     -lwebsockets -lcurl -lpthread -lssl -lcrypto
 check_success "Failed to link mod_deepgram_transcribe" "${LOG_DIR}/update_mod_deepgram_transcribe_link.log"
 
-echo -e "${GREEN}✓ mod_deepgram_transcribe (async Pusher, lock-free buffer, zero-copy, shared_ptr lifecycle, memory pool)${NC}"
+echo -e "${GREEN}✓ mod_deepgram_transcribe (thread-local contexts, pure lock-free queues, zero-copy, memory pools, performance monitoring)${NC}"
 
 # Build mod_google_transcribe
 echo "Building mod_google_transcribe..."

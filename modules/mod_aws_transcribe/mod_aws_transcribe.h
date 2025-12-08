@@ -2,69 +2,30 @@
 #define __MOD_AWS_TRANSCRIBE_H__
 
 #include <switch.h>
-#include <speex/speex_resampler.h>
+#include "memory_pool.hpp"
 
-#include <unistd.h>
+// Forward declaration
+class AwsPipe;
 
-#define MY_BUG_NAME "aws_transcribe"
-#define MAX_BUG_LEN (64)
-#define MAX_SESSION_ID (256)
-#define TRANSCRIBE_EVENT_RESULTS "aws_transcribe::transcription"
-#define TRANSCRIBE_EVENT_END_OF_TRANSCRIPT "aws_transcribe::end_of_transcript"
-#define TRANSCRIBE_EVENT_NO_AUDIO_DETECTED "aws_transcribe::no_audio_detected"
-#define TRANSCRIBE_EVENT_MAX_DURATION_EXCEEDED "aws_transcribe::max_duration_exceeded"
-#define TRANSCRIBE_EVENT_VAD_DETECTED "aws_transcribe::vad_detected"
-#define TRANSCRIBE_EVENT_ERROR      "jambonz_transcribe::error"
-#define TRANSCRIBE_EVENT_SESSION_START "aws_transcribe::session_start"
-#define TRANSCRIBE_EVENT_SESSION_STOP "aws_transcribe::session_stop"
-
-#define MAX_LANG (12)
-#define MAX_REGION (32)
-#define MAX_METADATA_LEN (8192)
-
-/* per-channel data */
-typedef void (*responseHandler_t)(switch_core_session_t* session, const char * json, const char* bugname);
-
-struct cap_cb {
-	switch_mutex_t *mutex;
-	char bugname[MAX_BUG_LEN+1];
-	char sessionId[MAX_SESSION_ID+1];
-  char awsAccessKeyId[128];
-  char awsSecretAccessKey[128];
-  char awsSessionToken[2048];
-	uint32_t channels;
-  SpeexResamplerState *resampler;
-	void* streamer;
-	responseHandler_t responseHandler;
-	switch_thread_t* thread;
-	int interim;
-
-	char lang[MAX_LANG];
-	char region[MAX_REGION];
-	char metadata[MAX_METADATA_LEN];
-
-	switch_vad_t * vad;
-	uint32_t samples_per_second;
-
-	/* Resampler performance statistics for high-scale monitoring */
-	uint64_t resampler_frames_processed;     /* Total frames processed */
-	uint64_t resampler_samples_in;           /* Total input samples */
-	uint64_t resampler_samples_out;          /* Total output samples */
-	uint64_t resampler_bytes_written;        /* Total bytes sent to transcription */
-	uint32_t resampler_source_rate;          /* Source sample rate (codec) */
-	uint32_t resampler_target_rate;          /* Target sample rate (requested) */
-	switch_time_t resampler_start_time;      /* When resampling started */
-	switch_time_t resampler_last_log_time;   /* Last stats log time */
-};
+extern deepgram::ObjectPool<AwsPipe> g_pipe_pool;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void send_session_start_to_pusher(switch_core_session_t* session, const char* callId);
+// Event subclasses
+#define TRANSCRIBE_EVENT_RESULTS					"aws_transcribe::transcription"
+#define TRANSCRIBE_EVENT_RESULTS_FINAL				"aws_transcribe::final_transcription"
+#define TRANSCRIBE_EVENT_ERROR						"aws_transcribe::error"
+#define TRANSCRIBE_EVENT_VAD_DETECTED				"aws_transcribe::vad_detected"
+#define TRANSCRIBE_EVENT_SESSION_START				"aws_transcribe::session_start"
+#define TRANSCRIBE_EVENT_SESSION_STOP				"aws_transcribe::session_stop"
+#define TRANSCRIBE_EVENT_END_OF_TRANSCRIPT			"aws_transcribe::end_of_transcript"
+#define TRANSCRIBE_EVENT_MAX_DURATION_EXCEEDED		"aws_transcribe::max_duration_exceeded"
+#define TRANSCRIBE_EVENT_NO_AUDIO_DETECTED			"aws_transcribe::no_audio_detected"
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif // __MOD_AWS_TRANSCRIBE_H__
