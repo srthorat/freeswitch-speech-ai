@@ -30,9 +30,117 @@ deepgram::ObjectPool<AwsPipe> g_pipe_pool; // Definition of the global object po
 // Global pusher client
 std::unique_ptr<AsyncPusher> g_pusher;
 
+// Track session start events to avoid duplicates
+static std::unordered_set<std::string> g_session_start_sent;
+static std::mutex g_session_start_mutex;
+
+// Send session start event to Pusher (matches Deepgram pattern)
+static void send_session_start_to_pusher(switch_core_session_t* session, const char* call_id) {
+    if (!g_pusher || !call_id) return;
+
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    
+    // Track that we've sent session_start for this call
+    {
+        std::lock_guard<std::mutex> lock(g_session_start_mutex);
+        std::string call_id_str(call_id);
+        if (g_session_start_sent.find(call_id_str) != g_session_start_sent.end()) {
+            // Already sent for this call
+            return;
+        }
+        g_session_start_sent.insert(call_id_str);
+    }
+    
+    // Get caller/callee metadata
+    const char* caller_name = switch_channel_get_variable(channel, "caller_id_name");
+    const char* caller_number = switch_channel_get_variable(channel, "caller_id_number");
+    const char* callee_name = switch_channel_get_variable(channel, "callee_id_name");
+    if (!callee_name) callee_name = switch_channel_get_variable(channel, "effective_callee_id_name");
+    const char* callee_number = switch_channel_get_variable(channel, "destination_number");
+    if (!callee_number) callee_number = switch_channel_get_variable(channel, "callee_id_number");
+    
+    // Build caller/callee ID strings
+    char caller_id[256], callee_id[256];
+    snprintf(caller_id, sizeof(caller_id), "%s(%s)",
+        caller_name ? caller_name : "Unknown",
+        caller_number ? caller_number : "Unknown");
+    snprintf(callee_id, sizeof(callee_id), "%s(%s)",
+        callee_name ? callee_name : "Unknown",
+        callee_number ? callee_number : "Unknown");
+    
+    // Build timestamp
+    time_t now = time(NULL);
+    struct tm tm_info;
+    gmtime_r(&now, &tm_info);
+    char timestamp[32];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
+    
+    // Build session start JSON
+    cJSON* data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "type", "session_start");
+    cJSON_AddStringToObject(data, "caller_id", caller_id);
+    cJSON_AddStringToObject(data, "callee_id", callee_id);
+    cJSON_AddStringToObject(data, "timestamp", timestamp);
+    
+    char* data_json = cJSON_PrintUnformatted(data);
+    cJSON_Delete(data);
+    
+    if (data_json) {
+        std::string channel_name = "call-" + std::string(call_id);
+        const char* prefix = std::getenv("PUSHER_CHANNEL_PREFIX");
+        if (prefix) channel_name = std::string(prefix) + std::string(call_id);
+        
+        std::string event_name = "session-start";
+        const char* evt_session_start = std::getenv("PUSHER_EVENT_SESSION_START");
+        if (evt_session_start) event_name = evt_session_start;
+        
+        g_pusher->send(channel_name, event_name, data_json);
+        free(data_json);
+    }
+}
+
 static void responseHandler(switch_core_session_t* session, const transcript_data_t* td, const char* bugname) {
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
+
+    // Handle connection success event - send session_start to Pusher (matches Deepgram pattern)
+    if (td->is_connection_event && g_pusher) {
+        // Wait for sip_call_id to become available (retry up to 10 times with 50ms delay)
+        const char* sip_call_id = nullptr;
+        int retry_count = 0;
+        const int max_retries = 10;
+        const int retry_delay_ms = 50;
+
+        while (retry_count < max_retries) {
+            sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+            if (sip_call_id) {
+                break;
+            }
+            retry_count++;
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+                "Waiting for sip_call_id to become available (attempt %d/%d)\n",
+                retry_count, max_retries);
+            switch_yield(retry_delay_ms * 1000); // Convert ms to microseconds
+        }
+
+        // Use sip_call_id if available, otherwise fallback to UUID
+        const char* call_id = sip_call_id;
+        if (!call_id) {
+            call_id = switch_core_session_get_uuid(session);
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+                "sip_call_id not available after %d retries, using UUID for Pusher channel\n", max_retries);
+        }
+        
+        send_session_start_to_pusher(session, call_id);
+        
+        // Don't fire FreeSWITCH event for connection events
+        return;
+    }
+
+    // Skip empty transcripts
+    if (!td->has_transcript) {
+        return;
+    }
 
     cJSON* jMessage = cJSON_CreateObject();
     cJSON_AddBoolToObject(jMessage, "is_final", td->is_final);
@@ -50,6 +158,77 @@ static void responseHandler(switch_core_session_t* session, const transcript_dat
 	
     if (bugname) switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "media-bugname", bugname);
 	switch_event_fire(&event);
+
+    // Pusher Integration - Send Transcription (matches Deepgram pattern)
+    if (g_pusher) {
+        // Use sip_call_id if available, otherwise fallback to UUID
+        const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
+        const char* call_id = sip_call_id;
+        if (!call_id) {
+            call_id = switch_core_session_get_uuid(session);
+        }
+        
+        // Fallback: Send session_start on first transcript if we couldn't send it on connection
+        {
+            std::lock_guard<std::mutex> lock(g_session_start_mutex);
+            std::string call_id_str(call_id);
+            if (g_session_start_sent.find(call_id_str) == g_session_start_sent.end()) {
+                send_session_start_to_pusher(session, call_id);
+            }
+        }
+            
+        // Get caller/callee metadata
+        const char* caller_name = switch_channel_get_variable(channel, "caller_id_name");
+        const char* caller_number = switch_channel_get_variable(channel, "caller_id_number");
+        const char* callee_name = switch_channel_get_variable(channel, "callee_id_name");
+        if (!callee_name) callee_name = switch_channel_get_variable(channel, "effective_callee_id_name");
+        const char* callee_number = switch_channel_get_variable(channel, "destination_number");
+        if (!callee_number) callee_number = switch_channel_get_variable(channel, "callee_id_number");
+
+        // Build speaker ID
+        char speaker_id[256];
+        if (td->channel_index == 0) {
+            snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
+                caller_name ? caller_name : "Unknown",
+                caller_number ? caller_number : "Unknown");
+        } else {
+            snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
+                callee_name ? callee_name : "Unknown",
+                callee_number ? callee_number : "Unknown");
+        }
+
+        // Build timestamp
+        time_t now = time(NULL);
+        struct tm tm_info;
+        gmtime_r(&now, &tm_info);
+        char timestamp[32];
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
+
+        // Build Pusher data JSON
+        cJSON* pusher_data = cJSON_CreateObject();
+        cJSON_AddStringToObject(pusher_data, "type", td->is_final ? "final" : "interim");
+        cJSON_AddStringToObject(pusher_data, "speaker_id", speaker_id);
+        cJSON_AddStringToObject(pusher_data, "text", td->transcript);
+        cJSON_AddStringToObject(pusher_data, "timestamp", timestamp);
+
+        char* data_json = cJSON_PrintUnformatted(pusher_data);
+        cJSON_Delete(pusher_data);
+
+        if (data_json) {
+            std::string channel_name = "call-" + std::string(call_id);
+            const char* prefix = std::getenv("PUSHER_CHANNEL_PREFIX");
+            if (prefix) channel_name = std::string(prefix) + std::string(call_id);
+
+            std::string event_name = td->is_final ? "transcription-final" : "transcription-interim";
+            const char* evt_final = std::getenv("PUSHER_EVENT_FINAL");
+            const char* evt_interim = std::getenv("PUSHER_EVENT_INTERIM");
+            if (td->is_final && evt_final) event_name = evt_final;
+            if (!td->is_final && evt_interim) event_name = evt_interim;
+
+            g_pusher->send(channel_name, event_name, data_json);
+            free(data_json);
+        }
+    }
 
     free(json);
     cJSON_Delete(jMessage);

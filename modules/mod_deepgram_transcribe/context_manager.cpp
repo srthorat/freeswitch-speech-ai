@@ -8,15 +8,19 @@
 
 #include "context_manager.hpp"
 #include <cstring>
+#include <vector>
 
 namespace deepgram {
 
 // Static member initialization
 thread_local struct lws_context* ContextManager::t_lws_context = nullptr;
+thread_local void* ContextManager::t_vhd = nullptr;
 std::atomic<uint32_t> ContextManager::g_total_contexts{0};
 const char* ContextManager::s_protocol_name = nullptr;
 int (*ContextManager::s_lws_callback)(struct lws*, enum lws_callback_reasons, void*, void*, size_t) = nullptr;
 bool ContextManager::s_initialized = false;
+std::map<struct lws_context*, void*> ContextManager::s_context_vhd_map;
+std::mutex ContextManager::s_vhd_map_mutex;
 
 bool ContextManager::initialize(const char* protocol_name,
                                int (*callback)(struct lws*, enum lws_callback_reasons, void*, void*, size_t)) {
@@ -100,12 +104,62 @@ void ContextManager::shutdownThreadContext() {
     }
 }
 
+void* ContextManager::getThreadVhd() {
+    return t_vhd;
+}
+
+void ContextManager::setThreadVhd(void* vhd) {
+    t_vhd = vhd;
+}
+
+void* ContextManager::getContextVhd(struct lws_context* context) {
+    if (!context) return nullptr;
+    
+    std::lock_guard<std::mutex> lock(s_vhd_map_mutex);
+    auto it = s_context_vhd_map.find(context);
+    return (it != s_context_vhd_map.end()) ? it->second : nullptr;
+}
+
+void ContextManager::setContextVhd(struct lws_context* context, void* vhd) {
+    if (!context) return;
+    
+    std::lock_guard<std::mutex> lock(s_vhd_map_mutex);
+    s_context_vhd_map[context] = vhd;
+}
+
 void ContextManager::shutdownAll() {
     // Each thread will clean up its own context via thread_local destructor
     // Just mark as no longer initialized
     s_initialized = false;
     s_protocol_name = nullptr;
     s_lws_callback = nullptr;
+}
+
+void ContextManager::wakeAllServiceThreads() {
+    // CRITICAL FIX: Wake up all sleeping service threads
+    // Without this, threads sleep in poll() for up to 1ms per iteration,
+    // accumulating 18+ second delays while connection requests wait in queues
+    
+    // SAFETY: Copy context pointers while holding mutex, then release mutex
+    // before calling lws_cancel_service() to avoid deadlock
+    std::vector<struct lws_context*> contexts;
+    {
+        std::lock_guard<std::mutex> lock(s_vhd_map_mutex);
+        contexts.reserve(s_context_vhd_map.size());
+        for (const auto& pair : s_context_vhd_map) {
+            // Only wake contexts that are fully initialized (have vhd)
+            if (pair.first && pair.second) {
+                contexts.push_back(pair.first);
+            }
+        }
+    }
+    
+    // Wake all contexts WITHOUT holding mutex (avoid deadlock)
+    for (auto* ctx : contexts) {
+        if (ctx) {
+            lws_cancel_service(ctx);
+        }
+    }
 }
 
 } // namespace deepgram

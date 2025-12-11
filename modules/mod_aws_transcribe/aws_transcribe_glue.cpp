@@ -54,8 +54,54 @@ switch_status_t aws_transcribe_session_init(switch_core_session_t *session, Resp
 		return SWITCH_STATUS_FALSE;
     }
     
+    // Populate options from channel variables
+    AwsTranscribeOptions options;
+    options.lang = lang;
+    options.interim = interim;
+    options.bugname = bugname;
+    
+    const char* var;
+    if ((var = switch_channel_get_variable(channel, "AWS_VOCABULARY_NAME"))) options.vocabularyName = var;
+    if ((var = switch_channel_get_variable(channel, "AWS_VOCABULARY_FILTER_NAME"))) options.vocabularyFilterName = var;
+    if ((var = switch_channel_get_variable(channel, "AWS_VOCABULARY_FILTER_METHOD"))) options.vocabularyFilterMethod = var;
+    if ((var = switch_channel_get_variable(channel, "AWS_SESSION_ID"))) options.sessionId = var;
+    
+    if ((var = switch_channel_get_variable(channel, "AWS_SHOW_SPEAKER_LABEL"))) {
+        options.showSpeakerLabel = switch_true(var);
+    } else if ((var = switch_channel_get_variable(channel, "AWS_SPEAKER_LABEL"))) { // Deprecated
+        options.showSpeakerLabel = switch_true(var);
+    } else {
+        options.showSpeakerLabel = false;
+    }
+
+    if ((var = switch_channel_get_variable(channel, "AWS_NUMBER_OF_CHANNELS"))) {
+        options.numberOfChannels = atoi(var);
+    } else {
+        options.numberOfChannels = channels;
+    }
+
+    if ((var = switch_channel_get_variable(channel, "AWS_ENABLE_CHANNEL_IDENTIFICATION"))) {
+        options.enableChannelIdentification = switch_true(var);
+    } else {
+        // Default to true if stereo
+        options.enableChannelIdentification = (options.numberOfChannels > 1);
+    }
+
+    if ((var = switch_channel_get_variable(channel, "START_RECOGNIZING_ON_VAD"))) {
+        options.startOnVad = switch_true(var);
+    } else {
+        options.startOnVad = false;
+    }
+
+    if (metadata) {
+        options.metadata = metadata;
+        switch_channel_set_variable(channel, "AWS_METADATA", metadata);
+    } else if ((var = switch_channel_get_variable(channel, "AWS_METADATA"))) {
+        options.metadata = var;
+    }
+
     // Initialize the recycled AwsPipe object
-    pPipe->init(session, samples_per_second, channels, lang, interim, bugname, responseHandler);
+    pPipe->init(session, samples_per_second, channels, options, responseHandler);
 
 
     // The BugData struct will be our user_data for the media bug.
@@ -66,7 +112,13 @@ switch_status_t aws_transcribe_session_init(switch_core_session_t *session, Resp
     pBugData->source_rate = source_rate;
 
     if (source_rate != samples_per_second) {
-        // ... existing resampler logic ...
+        pBugData->resampler = speex_resampler_init(channels, source_rate, samples_per_second, 2, &err);
+        if (!pBugData->resampler) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create resampler: %s\n", speex_resampler_strerror(err));
+            delete pBugData;
+            return SWITCH_STATUS_FALSE;
+        }
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Created resampler: %u -> %u\n", source_rate, samples_per_second);
     }
 
     // Pass the raw pointer to the media bug.
@@ -86,7 +138,7 @@ switch_status_t aws_transcribe_session_init(switch_core_session_t *session, Resp
     // Even if the call hangs up and the media bug is destroyed, this thread
     // will keep the AwsPipe object alive until it is finished.
     WorkerJob *job = new WorkerJob{JobType::Connect, pPipe};
-    g_job_queue.push(job);
+    push_job(job);
 
 
     return SWITCH_STATUS_SUCCESS;

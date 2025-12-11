@@ -21,6 +21,8 @@
 #include <libwebsockets.h>
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <map>
 
 namespace deepgram {
 
@@ -55,6 +57,32 @@ public:
     }
     
     /**
+     * Set vhd for a specific context (called from PROTOCOL_INIT callback)
+     * @param context The LWS context
+     * @param vhd The per-vhost data
+     */
+    static void setContextVhd(struct lws_context* context, void* vhd);
+    
+    /**
+     * Get vhd for a specific context (any thread can access)
+     * @param context The LWS context
+     * @return The vhd or nullptr if not found
+     */
+    static void* getContextVhd(struct lws_context* context);
+    
+    /**
+     * Get thread-local vhd (for current thread's context only)
+     * @return The vhd for current thread or nullptr
+     */
+    static void* getThreadVhd();
+    
+    /**
+     * Set thread-local vhd (called from PROTOCOL_INIT)
+     * @param vhd The per-vhost data
+     */
+    static void setThreadVhd(void* vhd);
+    
+    /**
      * Initialize context manager with protocol configuration
      * 
      * @param protocol_name Protocol name for LWS
@@ -73,6 +101,13 @@ public:
      * Shutdown all contexts (module cleanup)
      */
     static void shutdownAll();
+    
+    /**
+     * Wake up all service threads immediately
+     * CRITICAL: Call this when adding work to queues to prevent thread starvation
+     * Without this, threads can sleep for seconds while work waits in queues
+     */
+    static void wakeAllServiceThreads();
 
 private:
     /**
@@ -84,6 +119,13 @@ private:
     
     // Thread-local context storage (Phase 1: eliminates mutex contention)
     thread_local static struct lws_context* t_lws_context;
+    
+    // Thread-local vhd storage (per-thread, zero contention)
+    thread_local static void* t_vhd;
+    
+    // Map: context -> vhd (shared across threads, requires mutex)
+    static std::map<struct lws_context*, void*> s_context_vhd_map;
+    static std::mutex s_vhd_map_mutex;
     
     // Atomic counters for monitoring (Phase 1: lock-free statistics)
     static std::atomic<uint32_t> g_total_contexts;

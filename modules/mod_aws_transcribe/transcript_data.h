@@ -8,6 +8,7 @@ typedef struct {
     bool is_final;
     bool speech_final;
     bool has_transcript;
+    bool is_connection_event; // Special flag for connection_success events
     
     // Channel/speaker info
     int channel_index;

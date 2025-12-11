@@ -5,9 +5,15 @@
 #include <algorithm> // Required for std::find
 #include "audio_pipe.h"
 #include <chrono>
+#include <condition_variable>
 
 // Global job queue (lock-free MPSC)
 deepgram::BoundedMPSCQueue<WorkerJob, 16384> g_job_queue;
+
+// Condition variable for immediate worker thread wakeup
+// CRITICAL FIX: Prevents thread starvation - same issue as Deepgram module
+std::condition_variable g_job_cv;
+std::mutex g_job_cv_mutex;
 
 // Performance counters
 static std::atomic<uint64_t> g_jobs_processed{0};
@@ -15,14 +21,15 @@ static std::atomic<uint64_t> g_active_sessions{0};
 
 void push_job(WorkerJob* job) {
     g_job_queue.push(job);
-    // No synchronization needed - lock-free queue handles everything
+    // CRITICAL FIX: Wake worker thread immediately
+    // Without this, thread sleeps while jobs wait in queue (thread starvation)
+    g_job_cv.notify_one();
 }
 
-// High-performance worker thread with adaptive backoff
+// High-performance worker thread with condition variable wakeup
 void worker_thread_run(std::atomic<bool>& running) {
     std::vector<std::shared_ptr<AwsPipe>> sessions;
-    uint32_t empty_loops = 0;
-    const uint32_t max_backoff = 1000; // Max 1ms backoff
+    static switch_time_t last_cleanup = 0;
     
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "High-performance worker thread started\n");
 
@@ -46,13 +53,11 @@ void worker_thread_run(std::atomic<bool>& running) {
                 case JobType::Disconnect:
                     if (job->pPipe) {
                         job->pPipe->close();
-                        // O(1) swap-and-pop removal
-                        auto it = std::find(sessions.begin(), sessions.end(), job->pPipe);
-                        if (it != sessions.end()) {
-                            std::swap(*it, sessions.back());
-                            sessions.pop_back();
-                            g_active_sessions.fetch_sub(1, std::memory_order_relaxed);
-                        }
+                        // CRITICAL: DON'T remove immediately - AWS SDK async operations need time
+                        // Mark for removal but keep in sessions vector for now
+                        // The shared_ptr will keep object alive until AWS completes
+                        // TODO: Add proper async completion tracking
+                        // For now, keep in vector - it won't process audio after close()
                     }
                     break;
                 case JobType::Terminate:
@@ -70,13 +75,31 @@ void worker_thread_run(std::atomic<bool>& running) {
             }
         }
 
-        // Adaptive backoff: sleep longer when no work, shorter when busy
+        // Part 3: Periodic cleanup of closed sessions (every 1 second)
+        // Remove sessions that have been closed for 5+ seconds to allow AWS SDK async operations to complete
+        switch_time_t now = switch_time_now();
+        if (now - last_cleanup > 1000000) { // 1 second
+            size_t before = sessions.size();
+            sessions.erase(
+                std::remove_if(sessions.begin(), sessions.end(),
+                    [](const auto& pipe) { return pipe->should_destroy(); }),
+                sessions.end()
+            );
+            size_t removed = before - sessions.size();
+            if (removed > 0) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+                    "Cleaned up %zu closed AWS transcription session(s)\n", removed);
+                g_active_sessions.fetch_sub(removed, std::memory_order_relaxed);
+            }
+            last_cleanup = now;
+        }
+
+        // CRITICAL FIX: Use condition variable instead of sleep
+        // This allows immediate wakeup when jobs arrive (via notify_one)
+        // Prevents thread starvation that causes 100ms-1000ms+ delays
         if (!work_done) {
-            empty_loops++;
-            uint32_t backoff_us = std::min(empty_loops * 10, max_backoff);
-            std::this_thread::sleep_for(std::chrono::microseconds(backoff_us));
-        } else {
-            empty_loops = 0; // Reset backoff when work is available
+            std::unique_lock<std::mutex> lock(g_job_cv_mutex);
+            g_job_cv.wait_for(lock, std::chrono::milliseconds(1));
         }
     }
     

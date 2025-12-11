@@ -57,15 +57,24 @@ void AsyncPusher::send(const std::string& channel, const std::string& event, con
     std::string host = "api-" + m_cluster + ".pusher.com";
     std::string url = "https://" + host + path;
     
-    // Escape data for JSON (basic escaping)
-    std::string escaped_data = data;
-    size_t pos = 0;
-    while ((pos = escaped_data.find('"', pos)) != std::string::npos) {
-        escaped_data.replace(pos, 1, "\\\"");
-        pos += 2;
+    // Escape data for JSON (robust escaping matching Deepgram implementation)
+    std::string escaped_data;
+    escaped_data.reserve(data.length() * 2);
+    for (char c : data) {
+        switch (c) {
+            case '"':  escaped_data += "\\\""; break;
+            case '\\': escaped_data += "\\\\"; break;
+            case '\n': escaped_data += "\\n"; break;
+            case '\r': escaped_data += "\\r"; break;
+            case '\t': escaped_data += "\\t"; break;
+            default:   escaped_data += c; break;
+        }
     }
     
-    std::string body = "{\"channels\":[\"" + channel + "\"],\"name\":\"" + event + "\",\"data\":\"" + escaped_data + "\"}";
+    // Build Pusher request body matching Deepgram implementation (use channels array)
+    std::string body = "{\"name\":\"" + event + "\",\"channels\":[\"" + channel + "\"],\"data\":\"" + escaped_data + "\"}";
+    
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Pusher request body: %s\n", body.c_str());
     
     long timestamp = time(nullptr);
     std::string body_md5 = md5_hash(body);
@@ -78,6 +87,8 @@ void AsyncPusher::send(const std::string& channel, const std::string& event, con
     
     // Complete URL with authentication
     std::string auth_url = url + "?" + query_string + "&auth_signature=" + signature;
+    
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Pusher URL: %s\n", auth_url.c_str());
     
     std::vector<std::string> headers;
     headers.push_back("Content-Type: application/json");

@@ -18,6 +18,10 @@ struct WorkerJob {
 
 extern deepgram::BoundedMPSCQueue<WorkerJob, 16384> g_job_queue;
 
+// Condition variable for immediate worker thread wakeup
+extern std::condition_variable g_job_cv;
+extern std::mutex g_job_cv_mutex;
+
 void push_job(WorkerJob* job);
 void worker_thread_run(std::atomic<bool>& running);
 

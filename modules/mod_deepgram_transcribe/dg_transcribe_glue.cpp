@@ -600,7 +600,7 @@ extern "C" {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_deepgram_transcribe: lws service threads:       %d\n", nServiceThreads);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_deepgram_transcribe: resample quality:          %d (0=low, 5=desktop, 10=max)\n", nResampleQuality);
  
-    int logs = LLL_ERR | LLL_WARN | LLL_NOTICE || LLL_INFO | LLL_PARSER | LLL_HEADER | LLL_EXT | LLL_CLIENT  | LLL_LATENCY | LLL_DEBUG ;
+    int logs = LLL_ERR | LLL_WARN | LLL_NOTICE | LLL_INFO | LLL_PARSER | LLL_HEADER | LLL_EXT | LLL_CLIENT  | LLL_LATENCY | LLL_DEBUG ;
     
     deepgram::AudioPipe::initialize(nServiceThreads, logs, lws_logger);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "AudioPipe::initialize completed\n");
@@ -740,7 +740,12 @@ extern "C" {
         return SWITCH_TRUE;
       }
       deepgram::AudioPipe *pAudioPipe = static_cast<deepgram::AudioPipe *>(tech_pvt->pAudioPipe);
+      
+      // CRITICAL FIX: Don't buffer audio until WebSocket connection is fully established
+      // This prevents buffer overflow and data loss during the initial connection phase
       if (pAudioPipe->getLwsState() != deepgram::AudioPipe::LWS_CLIENT_CONNECTED) {
+        // Connection not ready yet - discard audio frames instead of buffering
+        // This is intentional: first ~3s of audio won't be transcribed, but no data corruption
         switch_mutex_unlock(tech_pvt->mutex);
         return SWITCH_TRUE;
       }

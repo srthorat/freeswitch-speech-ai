@@ -30,6 +30,8 @@ int AudioPipe::lws_callback(struct lws *wsi,
   enum lws_callback_reasons reason,
   void *user, void *in, size_t len) {
 
+  // Only log errors and connection state changes at appropriate levels
+
   struct AudioPipe::lws_per_vhost_data *vhd = 
     (struct AudioPipe::lws_per_vhost_data *) lws_protocol_vh_priv_get(lws_get_vhost(wsi), lws_get_protocol(wsi));
 
@@ -38,10 +40,20 @@ int AudioPipe::lws_callback(struct lws *wsi,
 
   switch (reason) {
     case LWS_CALLBACK_PROTOCOL_INIT:
-      vhd = (struct AudioPipe::lws_per_vhost_data *) lws_protocol_vh_priv_zalloc(lws_get_vhost(wsi), lws_get_protocol(wsi), sizeof(struct AudioPipe::lws_per_vhost_data));
-      vhd->context = lws_get_context(wsi);
-      vhd->protocol = lws_get_protocol(wsi);
-      vhd->vhost = lws_get_vhost(wsi);
+      {
+        auto init_time = std::chrono::steady_clock::now();
+        static auto first_init = init_time;
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(init_time - first_init).count();
+        
+        vhd = (struct AudioPipe::lws_per_vhost_data *) lws_protocol_vh_priv_zalloc(lws_get_vhost(wsi), lws_get_protocol(wsi), sizeof(struct AudioPipe::lws_per_vhost_data));
+        vhd->context = lws_get_context(wsi);
+        vhd->protocol = lws_get_protocol(wsi);
+        vhd->vhost = lws_get_vhost(wsi);
+        
+        // Store vhd in BOTH thread-local storage AND context map
+        deepgram::ContextManager::setThreadVhd(vhd);
+        deepgram::ContextManager::setContextVhd(vhd->context, vhd);
+      }
       break;
 
     case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER:
@@ -51,9 +63,6 @@ int AudioPipe::lws_callback(struct lws *wsi,
           std::string apiKey = ap->getApiKey();
           if (apiKey.empty()) {
             lwsl_err("AudioPipe: API key is EMPTY for session %s\n", ap->m_uuid.c_str());
-          } else {
-            lwsl_info("AudioPipe: Adding auth header for session %s (key length=%zu)\n", 
-                      ap->m_uuid.c_str(), apiKey.length());
           }
           unsigned char **p = (unsigned char **)in, *end = (*p) + len;
           char b[256];
@@ -294,7 +303,18 @@ std::queue<std::thread::id> AudioPipe::threadIds;
 void AudioPipe::processPendingConnects(lws_per_vhost_data *vhd) {
   // PHASE 2: Always use lock-free path for main queue operations
   AudioPipe* ap;
+  
+  if (!vhd) {
+    lwsl_err("processPendingConnects: vhd is NULL!\n");
+    return;
+  }
+  
+  int count = 0;
   while ((ap = pendingConnectsQueue.pop()) != nullptr) {
+    count++;
+    // lwsl_notice("[DEBUG] Processing pending connect #%d: ap=%p, uuid=%s, state=%d\n",   // Disabled - too noisy
+    //             count, ap, ap->m_uuid.c_str(), ap->m_state);
+    
     if (ap->m_state == LWS_CLIENT_IDLE) {
       ap->m_state = LWS_CLIENT_CONNECTING;
       // MINIMAL MUTEX: Only for handshake lookup (LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER)
@@ -302,7 +322,18 @@ void AudioPipe::processPendingConnects(lws_per_vhost_data *vhd) {
         std::lock_guard<std::mutex> guard(mutex_connects);
         pendingConnects.push_back(ap);
       }
+      
+      // CRITICAL: Validate vhd before passing to connect_client
+      if (!vhd || !vhd->context) {
+        lwsl_err("Cannot connect %s - vhd or context is NULL (vhd=%p, context=%p)\n", 
+                 ap->m_uuid.c_str(), vhd, vhd ? vhd->context : nullptr);
+        ap->m_state = LWS_CLIENT_IDLE;  // Reset state so it can retry
+        continue;
+      }
+      
       ap->connect_client(vhd);
+    } else {
+      lwsl_warn("Skipping connect for %s - wrong state: %d\n", ap->m_uuid.c_str(), ap->m_state);
     }
   }
 }
@@ -363,8 +394,10 @@ void AudioPipe::addPendingConnect(AudioPipe* ap) {
   // PHASE 2: Always use lock-free queue (unbounded, never fails)
   pendingConnectsQueue.push(ap);
   
-  // HIGH SCALE: Context will be processed in next service loop iteration
-  // No explicit wakeup needed - thread-local contexts are always responsive
+  // CRITICAL FIX: Wake up ALL service threads immediately
+  // Without this, threads sleep in poll() for seconds while work waits in queue
+  // This was causing 18+ second delays from addPendingConnect to connect_client
+  deepgram::ContextManager::wakeAllServiceThreads();
 }
 
 void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
@@ -374,11 +407,15 @@ void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
   if (ap->m_wsi) {
     lws_callback_on_writable(ap->m_wsi);
   }
+  // Wake threads to process disconnect immediately
+  deepgram::ContextManager::wakeAllServiceThreads();
 }
 
 void AudioPipe::addPendingWrite(AudioPipe* ap) {
   // PHASE 2: Always use lock-free queue (unbounded, never fails)
   pendingWritesQueue.push(ap);
+  // Wake threads to send data immediately
+  deepgram::ContextManager::wakeAllServiceThreads();
   if (ap->m_wsi) {
     lws_callback_on_writable(ap->m_wsi);
   }
@@ -419,9 +456,91 @@ void AudioPipe::adaptive_lws_service_thread(unsigned int nServiceThread) {
     return;
   }
 
+  lwsl_notice("[DEBUG] Service thread %d initialized with context %p\n", nServiceThread, context);
+
+  // Wait for PROTOCOL_INIT to fire and vhd to be initialized
+  // This happens asynchronously when lws_create_context() creates the vhost
+  lwsl_notice("[PERF] Service thread %d: Waiting for PROTOCOL_INIT to initialize vhd...\n", nServiceThread);
+  
+  auto thread_start = std::chrono::steady_clock::now();
+  bool vhd_ready = false;
+  for (int i = 0; i < 1000 && !vhd_ready; i++) {
+    lws_service(context, 0);
+    void* vhd_check = deepgram::ContextManager::getContextVhd(context);
+    if (vhd_check) {
+      auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - thread_start).count();
+      lwsl_notice("[PERF] Service thread %d: VHD READY after %d lws_service() calls (T+%ldms) - CAN NOW PROCESS CONNECTIONS\n", 
+                  nServiceThread, i + 1, elapsed_ms);
+      vhd_ready = true;
+      break;
+    }
+    if (i == 99) {
+      auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - thread_start).count();
+      lwsl_warn("[PERF] Service thread %d: VHD STILL NOT READY after 100 calls (T+%ldms) - WILL CAUSE CONNECTION DELAYS!\n",
+                nServiceThread, elapsed_ms);
+    }
+  }
+
   int n;
+  uint32_t iterations = 0;
+  uint32_t empty_loops = 0;
+  uint32_t queue_checks = 0;
+  uint32_t vhd_null_count = 0;
+  
   do {
-    n = lws_service(context, 0);
+    // HIGH SCALE OPTIMIZATION: Use 0ms timeout with adaptive backoff
+    // This allows immediate queue processing while being CPU-friendly during idle
+    n = lws_service(context, 0);  // Non-blocking
+    iterations++;
+    
+    // CRITICAL: Get vhd from context-based map (not thread-local)
+    // This ensures we use the correct vhd even if AudioPipe was created on different thread
+    struct lws_per_vhost_data* vhd = (struct lws_per_vhost_data*)deepgram::ContextManager::getContextVhd(context);
+    
+    // CRITICAL FIX: Check queue status BEFORE vhd check to prevent sleeping with pending work
+    // Without this, service thread sleeps 1ms per iteration even when connections are waiting,
+    // causing 25+ second delays (25,000 iterations × 1ms)
+    bool has_pending_work = !pendingConnectsQueue.empty() ||
+                           !pendingDisconnectsQueue.empty() || 
+                           !pendingWritesQueue.empty();
+    
+    // Process shared queues - any thread can process any pending item
+    if (vhd) {
+      queue_checks++;
+      processPendingConnects(vhd);
+      processPendingDisconnects(vhd);
+      processPendingWrites();
+    } else {
+      vhd_null_count++;
+      
+      // CRITICAL FIX: Log delay immediately when vhd is NULL
+      if (vhd_null_count == 1) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - thread_start).count();
+        lwsl_notice("[PERF] Service thread %d: vhd is NULL at iteration %u (T+%ldms)\n", 
+                    nServiceThread, iterations, elapsed);
+      }
+      
+      if (vhd_null_count == 100) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - thread_start).count();
+        lwsl_warn("[PERF] Service thread %d: vhd STILL NULL after %u iterations (T+%ldms) - BLOCKING QUEUE PROCESSING\n", 
+                  nServiceThread, iterations, elapsed);
+      }
+    }
+    
+    // Adaptive backoff: only sleep when truly idle (no network activity AND no pending work)
+    if (n <= 0 && !has_pending_work) {
+      // Exponential backoff: 10μs → 12μs → 14μs ... → 1ms max
+      uint32_t delay_us = std::min(10u + empty_loops * 2, 1000u);
+      std::this_thread::sleep_for(std::chrono::microseconds(delay_us));
+      empty_loops = std::min(empty_loops + 1, 500u);
+    } else {
+      empty_loops = 0;  // Reset backoff when busy
+    }
+    
   } while (n >= 0 && !stopFlags[this_id]);
 
   // Cleanup once work is done or stopped
@@ -500,6 +619,8 @@ void AudioPipe::connect(void) {
 }
 
 bool AudioPipe::connect_client(struct lws_per_vhost_data *vhd) {
+  lwsl_notice("[DEBUG] connect_client called for %s, vhd=%p, m_vhd=%p\n", m_uuid.c_str(), vhd, m_vhd);
+  
   assert(m_vhd == nullptr);
   struct lws_client_connect_info i;
 
@@ -514,11 +635,19 @@ bool AudioPipe::connect_client(struct lws_per_vhost_data *vhd) {
   //i.protocol = protocolName.c_str();
   i.pwsi = &(m_wsi);
 
+  lwsl_notice("[DEBUG] Connection info: host=%s, port=%d, path=%s\n", i.address, i.port, i.path);
+
   m_state = LWS_CLIENT_CONNECTING;
   m_vhd = vhd;
 
   m_wsi = lws_client_connect_via_info(&i);
-  lwsl_debug("%s attempting connection, wsi is %p\n", m_uuid.c_str(), m_wsi);
+  lwsl_notice("[DEBUG] %s attempting connection, wsi is %p\n", m_uuid.c_str(), m_wsi);
+
+  if (m_wsi) {
+    lwsl_notice("[DEBUG] %s: lws_client_connect_via_info SUCCESS\n", m_uuid.c_str());
+  } else {
+    lwsl_err("[DEBUG] %s: lws_client_connect_via_info FAILED\n", m_uuid.c_str());
+  }
 
   return nullptr != m_wsi;
 }

@@ -13,6 +13,12 @@ struct HttpJob {
     std::string body;
 };
 
+// Callback to capture HTTP response
+static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
+    ((std::string*)userp)->append((char*)contents, size * nmemb);
+    return size * nmemb;
+}
+
 class AsyncHttp::AsyncHttpImpl {
 public:
     AsyncHttpImpl() : m_running(false), m_curl_multi(nullptr) {}
@@ -58,9 +64,9 @@ public:
 
 private:
     void run() {
-        m_curl_multi = curl_multi_init();
+        // m_curl_multi is already initialized in start()
         if (!m_curl_multi) {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to initialize curl_multi\n");
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "curl_multi not initialized\n");
             return;
         }
 
@@ -87,7 +93,28 @@ private:
             while ((msg = curl_multi_info_read(m_curl_multi, &msgs_left))) {
                 if (msg->msg == CURLMSG_DONE) {
                     CURL *easy_handle = msg->easy_handle;
-                    // You can check msg->data.result for the outcome
+                    
+                    // Retrieve response data
+                    long response_code = 0;
+                    std::string *response_body = nullptr;
+                    curl_easy_getinfo(easy_handle, CURLINFO_RESPONSE_CODE, &response_code);
+                    curl_easy_getinfo(easy_handle, CURLINFO_PRIVATE, &response_body);
+                    
+                    if (msg->data.result != CURLE_OK) {
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, 
+                            "Pusher HTTP error: %s (code=%d)\n", 
+                            curl_easy_strerror(msg->data.result), msg->data.result);
+                    } else if (response_code < 200 || response_code >= 300) {
+                        const char* response_text = response_body ? response_body->c_str() : "(no body)";
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, 
+                            "Pusher HTTP %ld: %s\n", response_code, response_text);
+                    } else {
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
+                            "Pusher HTTP %ld: Success\n", response_code);
+                    }
+                    
+                    // Clean up
+                    delete response_body;
                     curl_multi_remove_handle(m_curl_multi, easy_handle);
                     curl_easy_cleanup(easy_handle);
                 }
@@ -102,6 +129,12 @@ private:
             curl_easy_setopt(easy_handle, CURLOPT_URL, job.url.c_str());
             curl_easy_setopt(easy_handle, CURLOPT_POSTFIELDS, job.body.c_str());
             curl_easy_setopt(easy_handle, CURLOPT_POSTFIELDSIZE, job.body.length());
+            
+            // Capture response body
+            std::string *response_body = new std::string();
+            curl_easy_setopt(easy_handle, CURLOPT_WRITEFUNCTION, write_callback);
+            curl_easy_setopt(easy_handle, CURLOPT_WRITEDATA, response_body);
+            curl_easy_setopt(easy_handle, CURLOPT_PRIVATE, response_body);
             
             struct curl_slist *chunk = NULL;
             for (const auto& header : job.headers) {
