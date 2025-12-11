@@ -103,7 +103,7 @@ static void responseHandler(switch_core_session_t* session, const transcript_dat
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 
-    // Handle connection success event - send session_start to Pusher (matches Deepgram pattern)
+    // Handle connection success event - send session_start to Pusher (EXACT Deepgram pattern)
     if (td->is_connection_event && g_pusher) {
         // Wait for sip_call_id to become available (retry up to 10 times with 50ms delay)
         const char* sip_call_id = nullptr;
@@ -123,16 +123,15 @@ static void responseHandler(switch_core_session_t* session, const transcript_dat
             switch_yield(retry_delay_ms * 1000); // Convert ms to microseconds
         }
 
-        // Use sip_call_id if available, otherwise fallback to UUID
-        const char* call_id = sip_call_id;
-        if (!call_id) {
-            call_id = switch_core_session_get_uuid(session);
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
-                "sip_call_id not available after %d retries, using UUID for Pusher channel\n", max_retries);
+        // ONLY send if sip_call_id is available (matching Deepgram - NO UUID fallback!)
+        if (sip_call_id) {
+            send_session_start_to_pusher(session, sip_call_id);
+        } else {
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+                "Cannot send session_start to Pusher: sip_call_id not available after %d retries (%dms total)\n",
+                max_retries, max_retries * retry_delay_ms);
         }
-        
-        send_session_start_to_pusher(session, call_id);
-        
+
         // Don't fire FreeSWITCH event for connection events
         return;
     }
@@ -159,23 +158,28 @@ static void responseHandler(switch_core_session_t* session, const transcript_dat
     if (bugname) switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "media-bugname", bugname);
 	switch_event_fire(&event);
 
-    // Pusher Integration - Send Transcription (matches Deepgram pattern)
+    // Pusher Integration - Send Transcription (EXACT Deepgram pattern - ONLY use sip_call_id)
     if (g_pusher) {
-        // Use sip_call_id if available, otherwise fallback to UUID
         const char* sip_call_id = switch_channel_get_variable(channel, "sip_call_id");
-        const char* call_id = sip_call_id;
-        if (!call_id) {
-            call_id = switch_core_session_get_uuid(session);
+
+        // ONLY send if sip_call_id is available (matching Deepgram - NO UUID fallback!)
+        if (!sip_call_id) {
+            // Skip Pusher send if sip_call_id not available
+            free(json);
+            cJSON_Delete(jMessage);
+            return;
         }
-        
+
         // Fallback: Send session_start on first transcript if we couldn't send it on connection
         {
             std::lock_guard<std::mutex> lock(g_session_start_mutex);
-            std::string call_id_str(call_id);
+            std::string call_id_str(sip_call_id);
             if (g_session_start_sent.find(call_id_str) == g_session_start_sent.end()) {
-                send_session_start_to_pusher(session, call_id);
+                send_session_start_to_pusher(session, sip_call_id);
             }
         }
+
+        const char* call_id = sip_call_id;  // Use sip_call_id directly
             
         // Get caller/callee metadata
         const char* caller_name = switch_channel_get_variable(channel, "caller_id_name");
