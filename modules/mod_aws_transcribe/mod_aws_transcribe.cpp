@@ -2,7 +2,15 @@
 #include "aws_transcribe_glue.h"
 // #include "aws.h" // For aws_init and aws_cleanup - removed, using AWS SDK directly
 #include "transcript_data.h"
-#include "async_pusher.hpp"
+#include <unordered_set>
+#include <mutex>
+#include <string>
+#include <cstdlib>
+#include <ctime>
+
+extern "C" {
+#include "async_pusher.h"
+}
 #include "worker_thread.h"
 #include "aws_client_manager.h"
 
@@ -28,7 +36,7 @@ namespace {
 deepgram::ObjectPool<AwsPipe> g_pipe_pool; // Definition of the global object pool
 
 // Global pusher client
-std::unique_ptr<AsyncPusher> g_pusher;
+async_pusher_t* g_pusher = nullptr;
 
 // Track session start events to avoid duplicates
 static std::unordered_set<std::string> g_session_start_sent;
@@ -94,7 +102,7 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
         const char* evt_session_start = std::getenv("PUSHER_EVENT_SESSION_START");
         if (evt_session_start) event_name = evt_session_start;
         
-        g_pusher->send(channel_name, event_name, data_json);
+        async_pusher_send(g_pusher, channel_name.c_str(), event_name.c_str(), data_json);
         free(data_json);
     }
 }
@@ -229,7 +237,7 @@ static void responseHandler(switch_core_session_t* session, const transcript_dat
             if (td->is_final && evt_final) event_name = evt_final;
             if (!td->is_final && evt_interim) event_name = evt_interim;
 
-            g_pusher->send(channel_name, event_name, data_json);
+            async_pusher_send(g_pusher, channel_name.c_str(), event_name.c_str(), data_json);
             free(data_json);
         }
     }
@@ -368,8 +376,12 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aws_transcribe_load)
     const char* pusher_cluster = std::getenv("PUSHER_CLUSTER");
 
     if (pusher_app_id && pusher_key && pusher_secret && pusher_cluster) {
-        g_pusher.reset(new AsyncPusher(pusher_app_id, pusher_key, pusher_secret, pusher_cluster));
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "AsyncPusher initialized.\n");
+        g_pusher = async_pusher_create(pusher_app_id, pusher_key, pusher_secret, pusher_cluster);
+        if (g_pusher) {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "AsyncPusher initialized.\n");
+        } else {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to initialize AsyncPusher.\n");
+        }
     }
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "AWS Speech Transcription API successfully loaded\n");
@@ -401,6 +413,15 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aws_transcribe_shutdown)
 
 
 	aws_cleanup();
+
+    if (g_pusher) {
+        async_pusher_destroy(g_pusher);
+        g_pusher = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_session_start_mutex);
+            g_session_start_sent.clear();
+        }
+    }
 	switch_event_free_subclass(TRANSCRIBE_EVENT_RESULTS);
 	return SWITCH_STATUS_SUCCESS;
 }

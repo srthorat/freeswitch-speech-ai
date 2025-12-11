@@ -213,20 +213,25 @@ cd ${SCRIPT_DIR}/../modules/mod_aws_transcribe
 # Clean previous build
 rm -f *.o *.so
 
-echo "  Compiling mod_aws_transcribe.c..."
-log_command "mod_aws_transcribe.c" "${LOG_DIR}/update_mod_aws_transcribe_c.log" \
-    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch mod_aws_transcribe.c
-check_success "Failed to compile mod_aws_transcribe.c" "${LOG_DIR}/update_mod_aws_transcribe_c.log"
-
 echo "  Compiling mod_aws_transcribe C++ sources..."
 log_command "mod_aws_transcribe C++" "${LOG_DIR}/update_mod_aws_transcribe_cpp.log" \
-    g++ -fPIC -c -std=c++11 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include aws_transcribe_glue.cpp
+    g++ -fPIC -c -std=c++17 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include -I/usr/local/include/aws/core -I/usr/local/include/aws/transcribestreaming mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp
 check_success "Failed to compile mod_aws_transcribe C++ sources" "${LOG_DIR}/update_mod_aws_transcribe_cpp.log"
+
+echo "  Compiling async_http.c..."
+log_command "mod_aws_transcribe async_http" "${LOG_DIR}/update_mod_aws_transcribe_async_http.log" \
+    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_http.c
+check_success "Failed to compile mod_aws_transcribe async_http.c" "${LOG_DIR}/update_mod_aws_transcribe_async_http.log"
+
+echo "  Compiling async_pusher.c..."
+log_command "mod_aws_transcribe async_pusher" "${LOG_DIR}/update_mod_aws_transcribe_async_pusher.log" \
+    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_pusher.c
+check_success "Failed to compile mod_aws_transcribe async_pusher.c" "${LOG_DIR}/update_mod_aws_transcribe_async_pusher.log"
 
 echo "  Linking mod_aws_transcribe..."
 log_command "mod_aws_transcribe link" "${LOG_DIR}/update_mod_aws_transcribe_link.log" \
     g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
-    mod_aws_transcribe.o aws_transcribe_glue.o \
+    mod_aws_transcribe.o aws_transcribe_glue.o audio_pipe.o worker_thread.o aws_client_manager.o async_http.o async_pusher.o \
     -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
     -laws-c-event-stream -laws-checksums -laws-c-common \
     -lpthread -lcurl -lssl -lcrypto -lz

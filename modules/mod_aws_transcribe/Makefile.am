@@ -2,7 +2,7 @@ include $(top_srcdir)/build/modmake.rulesam
 MODNAME=mod_aws_transcribe
 
 mod_LTLIBRARIES = mod_aws_transcribe.la
-mod_aws_transcribe_la_SOURCES  = mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp async_http.cpp async_pusher.cpp
+mod_aws_transcribe_la_SOURCES  = mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp async_http.c async_pusher.c
 mod_aws_transcribe_la_CFLAGS   = $(AM_CFLAGS)
 mod_aws_transcribe_la_CXXFLAGS = $(AM_CXXFLAGS) -std=c++17 -I${switch_srcdir}/libs/aws-sdk-cpp/aws-cpp-sdk-core/include -I${switch_srcdir}/libs/aws-sdk-cpp/aws-cpp-sdk-transcribestreaming/include -I${switch_srcdir}/libs/aws-sdk-cpp/build/.deps/install/include
 

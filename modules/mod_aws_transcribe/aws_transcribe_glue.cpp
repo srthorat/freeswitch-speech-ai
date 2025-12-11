@@ -4,10 +4,14 @@
 #include <speex/speex_resampler.h>
 #include <thread>
 #include "worker_thread.h" // For job queue
-#include "async_pusher.hpp" // Make sure to include this
+#include <string>
+
+extern "C" {
+#include "async_pusher.h"
+}
 
 // Forward declaration of global pusher
-extern std::unique_ptr<AsyncPusher> g_pusher;
+extern async_pusher_t* g_pusher;
 
 // Forward declaration of response handler
 static void responseHandler(switch_core_session_t* session, const char * json, const char* bugname, bool final);
@@ -29,7 +33,7 @@ static void responseHandler(switch_core_session_t* session, const char * json, c
     if (g_pusher) {
         std::string channel_name = "private-call-" + std::string(switch_core_session_get_uuid(session));
         std::string event_name = final ? TRANSCRIBE_EVENT_RESULTS_FINAL : TRANSCRIBE_EVENT_RESULTS;
-        g_pusher->send(channel_name, event_name, json);
+        async_pusher_send(g_pusher, channel_name.c_str(), event_name.c_str(), json);
     }
 }
 

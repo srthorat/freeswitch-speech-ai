@@ -879,8 +879,18 @@ if should_install_module "mod_aws_transcribe"; then
 
     log_substep "Compiling C++ sources..."
     log_command "mod_aws_transcribe C++" "${LOG_DIR}/mod_aws_transcribe_cpp.log" \
-        g++ -fPIC -c -std=c++17 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include -I/usr/local/include/aws/core -I/usr/local/include/aws/transcribestreaming mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp async_http.cpp async_pusher.cpp
+        g++ -fPIC -c -std=c++17 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include -I/usr/local/include/aws/core -I/usr/local/include/aws/transcribestreaming mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp
     check_success "Failed to compile mod_aws_transcribe C++ sources" "${LOG_DIR}/mod_aws_transcribe_cpp.log"
+
+    log_substep "Compiling async_http.c..."
+    log_command "mod_aws_transcribe async_http" "${LOG_DIR}/mod_aws_transcribe_async_http.log" \
+        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_http.c
+    check_success "Failed to compile mod_aws_transcribe async_http.c" "${LOG_DIR}/mod_aws_transcribe_async_http.log"
+
+    log_substep "Compiling async_pusher.c..."
+    log_command "mod_aws_transcribe async_pusher" "${LOG_DIR}/mod_aws_transcribe_async_pusher.log" \
+        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_pusher.c
+    check_success "Failed to compile mod_aws_transcribe async_pusher.c" "${LOG_DIR}/mod_aws_transcribe_async_pusher.log"
 
     log_substep "Linking mod_aws_transcribe.so..."
     log_command "mod_aws_transcribe link" "${LOG_DIR}/mod_aws_transcribe_link.log" \
