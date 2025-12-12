@@ -281,6 +281,11 @@ namespace {
       speex_resampler_destroy(tech_pvt->resampler);
       tech_pvt->resampler = nullptr;
     }
+    if (tech_pvt->pAudioPipe) {
+      AudioPipe* ap = static_cast<AudioPipe*>(tech_pvt->pAudioPipe);
+      ap->release();
+      tech_pvt->pAudioPipe = nullptr;
+    }
     if (tech_pvt->mutex) {
       switch_mutex_destroy(tech_pvt->mutex);
       tech_pvt->mutex = nullptr;
@@ -489,18 +494,27 @@ extern "C" {
       return SWITCH_STATUS_FALSE;
     }
     private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
-    uint32_t id = tech_pvt->id;
+    uint32_t id = tech_pvt ? tech_pvt->id : 0;
 
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) fork_session_cleanup\n", id);
 
     if (!tech_pvt) return SWITCH_STATUS_FALSE;
-    AudioPipe *pAudioPipe = static_cast<AudioPipe *>(tech_pvt->pAudioPipe);
-      
+    
+    // Recursive check/set with lock
     switch_mutex_lock(tech_pvt->mutex);
+    if (tech_pvt->stop_requested) {
+      switch_mutex_unlock(tech_pvt->mutex);
+      return SWITCH_STATUS_SUCCESS;
+    }
+    tech_pvt->stop_requested = 1;
+    switch_mutex_unlock(tech_pvt->mutex);
 
-    // get the bug again, now that we are under lock
+    AudioPipe *pAudioPipe = static_cast<AudioPipe *>(tech_pvt->pAudioPipe);
+
+    // Remove the bug from the session (stops frames)
+    // This triggers SWITCH_ABC_TYPE_CLOSE which recursively calls this function
+    // The recursion guard above will handle it.
     {
-      switch_media_bug_t *bug = (switch_media_bug_t*) switch_channel_get_private(channel, bugname);
       if (bug) {
         switch_channel_set_private(channel, bugname, NULL);
         if (!channelIsClosing) {
@@ -528,8 +542,6 @@ extern "C" {
     if (g_private_pool.is_initialized()) {
       g_private_pool.release(tech_pvt);
     }
-    // Note: If tech_pvt was allocated from FreeSWITCH pool (not our pool),
-    // release() will safely ignore it since find_node() won't find it
     
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "(%u) fork_session_cleanup: connection closed\n", id);
     return SWITCH_STATUS_SUCCESS;
@@ -592,7 +604,7 @@ extern "C" {
     bool dirty = false;
     char *p = (char *) "{\"msg\": \"buffer overrun\"}";
 
-    if (!tech_pvt || tech_pvt->audio_paused || tech_pvt->graceful_shutdown) return SWITCH_TRUE;
+    if (!tech_pvt || tech_pvt->audio_paused || tech_pvt->graceful_shutdown || tech_pvt->stop_requested) return SWITCH_TRUE;
     
     if (switch_mutex_trylock(tech_pvt->mutex) == SWITCH_STATUS_SUCCESS) {
       if (!tech_pvt->pAudioPipe) {

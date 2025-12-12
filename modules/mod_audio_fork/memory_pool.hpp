@@ -130,6 +130,9 @@ public:
     /**
      * Acquire an object from the pool (lock-free fast path)
      * 
+     * INTRUSIVE NODE PATTERN: Stores back-pointer in object for O(1) release.
+     * Object type T must have a 'void* pool_node' member.
+     * 
      * @return Pointer to object, or nullptr if pool exhausted
      */
     T* acquire() {
@@ -162,7 +165,9 @@ public:
                     }
                 }
                 
-                return static_cast<T*>(node->object);
+                T* obj = static_cast<T*>(node->object);
+                obj->pool_node = node;  // Store back-pointer for O(1) release
+                return obj;
             }
             // CAS failed, node was updated, retry
         }
@@ -175,6 +180,9 @@ public:
     /**
      * Release an object back to the pool (lock-free)
      * 
+     * INTRUSIVE NODE PATTERN: Uses stored back-pointer for O(1) lookup.
+     * Object must have been acquired from this pool.
+     * 
      * @param obj The object to release
      */
     void release(T* obj) {
@@ -182,12 +190,14 @@ public:
             return;
         }
         
-        // Find the node for this object
-        PoolNode* node = find_node(obj);
-        if (!node) {
-            // Not from pool - shouldn't happen, but handle gracefully
+        // O(1) lookup via intrusive back-pointer
+        PoolNode* node = static_cast<PoolNode*>(obj->pool_node);
+        if (!node || node->object != obj) {
+            // Invalid back-pointer or not from this pool
             return;
         }
+        
+        obj->pool_node = nullptr;  // Clear back-pointer
         
         m_stats.releases.fetch_add(1, std::memory_order_relaxed);
         m_stats.current_in_use.fetch_sub(1, std::memory_order_relaxed);
@@ -228,20 +238,7 @@ public:
     }
 
 private:
-    /**
-     * Find the PoolNode for a given object
-     * Linear search, but only called at release (not hot path)
-     */
-    PoolNode* find_node(T* obj) {
-        if (!m_nodes) return nullptr;
-        
-        for (size_t i = 0; i < m_capacity; i++) {
-            if (m_nodes[i].object == obj) {
-                return &m_nodes[i];
-            }
-        }
-        return nullptr;
-    }
+    // Note: find_node() removed - using intrusive back-pointer pattern for O(1) lookup
     
     std::atomic<PoolNode*> m_head;      // Head of free list
     PoolNode* m_nodes;                   // Array of pool nodes

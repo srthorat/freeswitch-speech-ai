@@ -336,6 +336,10 @@ SWITCH_STANDARD_API(fork_function)
 			switch_core_session_rwunlock(lsession);
 		}
 		else {
+      if (!strcasecmp(argv[1], "stop")) {
+        stream->write_function(stream, "+OK Success\n");
+        goto done;
+      }
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error locating session %s\n", argv[0]);
 		}
 	}

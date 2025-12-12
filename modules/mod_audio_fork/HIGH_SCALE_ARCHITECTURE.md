@@ -357,6 +357,78 @@ Lock-free MPSC queues implemented using `lockfree_mpsc_queue.hpp` for WebSocket 
 
 ---
 
+## Stability Fixes (December 2025)
+
+**Status**: ✅ **COMPLETE**
+
+Critical stability fixes applied to prevent crashes and improve reliability.
+
+### 1. Reference Counting
+
+`AudioPipe` uses intrusive reference counting to prevent use-after-free:
+
+```cpp
+class AudioPipe {
+    std::atomic<int> m_refCount;
+    void retain();   // Increment count
+    void release();  // Decrement, delete when 0
+};
+```
+
+**Lifecycle:**
+- Constructor initializes to 1
+- `retain()` on queue push, successful connection
+- `release()` on queue pop, connection close, session cleanup
+
+### 2. Deepgram-Style WSI Lookup
+
+During LWS handshake, `user` data may not be initialized. Instead of dereferencing:
+
+```cpp
+// Safe lookup by WSI (not *ppAp which may be NULL)
+AudioPipe* ap = findPendingConnect(wsi);
+if (ap) { /* process */ }
+```
+
+- `findPendingConnect(wsi)`: Lookup by WSI pointer
+- `findAndRemovePendingConnect(wsi)`: Lookup and remove
+- `*ppAp = ap` only set after `CLIENT_ESTABLISHED`
+
+### 3. Copy-Then-Operate Pattern
+
+`signalAllContexts()` copies the context vector before calling LWS:
+
+```cpp
+void signalAllContexts() {
+    std::vector<lws_context*> contexts;
+    { lock_guard; contexts = g_all_contexts; }  // Copy
+    for (auto* ctx : contexts) lws_cancel_service(ctx);  // Operate
+}
+```
+
+Prevents AB-BA deadlock with LWS internal mutex.
+
+### 4. O(1) Memory Pool Release
+
+Intrusive node pattern for O(1) release (vs O(n) linear search):
+
+```cpp
+// On acquire: obj->pool_node = node;
+// On release: PoolNode* node = obj->pool_node;  // O(1)!
+```
+
+### 5. Collect-Then-Add Mutex Pattern
+
+Avoid nested mutex locks in `processPendingConnects`:
+
+```cpp
+vector<AudioPipe*> connected;
+{ lock(mutex1); /* collect */ }  // Release mutex1
+{ lock(mutex2); /* add */ }      // Separate scope
+```
+
+---
+
 ## Thread-Local LWS Context Manager
 
 ### Problem: Context Mutex Bottleneck

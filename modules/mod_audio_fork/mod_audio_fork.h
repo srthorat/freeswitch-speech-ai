@@ -51,7 +51,9 @@ struct private_data {
   int buffer_overrun_notified:1;
   int audio_paused:1;
   int graceful_shutdown:1;
+  int stop_requested:1;
   char initialMetadata[8192];
+  void* pool_node;  // Back-pointer to memory pool node for O(1) release
 };
 
 typedef struct private_data private_t;

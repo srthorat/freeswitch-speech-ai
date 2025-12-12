@@ -9,6 +9,43 @@
 thread_local struct lws_context* LwsContextManager::t_context = nullptr;
 std::atomic<uint32_t> LwsContextManager::g_context_count{0};
 
+// Initialize static members
+std::vector<struct lws_context*> LwsContextManager::g_all_contexts;
+std::mutex LwsContextManager::g_all_contexts_mutex;
+
+void LwsContextManager::registerContext(struct lws_context* context) {
+    if (!context) return;
+    std::lock_guard<std::mutex> lock(g_all_contexts_mutex);
+    g_all_contexts.push_back(context);
+}
+
+void LwsContextManager::unregisterContext(struct lws_context* context) {
+    if (!context) return;
+    std::lock_guard<std::mutex> lock(g_all_contexts_mutex);
+    // Remove (swap and pop for efficiency)
+    for (size_t i = 0; i < g_all_contexts.size(); ++i) {
+        if (g_all_contexts[i] == context) {
+            g_all_contexts[i] = g_all_contexts.back();
+            g_all_contexts.pop_back();
+            break;
+        }
+    }
+}
+
+void LwsContextManager::signalAllContexts() {
+    std::vector<struct lws_context*> contexts;
+    {
+        std::lock_guard<std::mutex> lock(g_all_contexts_mutex);
+        contexts = g_all_contexts;
+    } // Mutex released here
+    
+    for (auto* context : contexts) {
+        if (context) {
+            lws_cancel_service(context);
+        }
+    }
+}
+
 struct lws_context* LwsContextManager::getContext() {
     if (!t_context) {
         t_context = createContext();
@@ -20,6 +57,9 @@ struct lws_context* LwsContextManager::getContext() {
 }
 
 struct lws_context* LwsContextManager::createContext() {
+    static std::mutex s_creation_mutex;
+    std::lock_guard<std::mutex> lock(s_creation_mutex);
+
     struct lws_context_creation_info info;
     memset(&info, 0, sizeof(info));
     
@@ -36,11 +76,16 @@ struct lws_context* LwsContextManager::createContext() {
     info.ssl_cert_filepath = NULL;
     info.ssl_private_key_filepath = NULL;
     
-    return lws_create_context(&info);
+    struct lws_context* context = lws_create_context(&info);
+    if (context) {
+        registerContext(context);
+    }
+    return context;
 }
 
 void LwsContextManager::shutdown() {
     if (t_context) {
+        unregisterContext(t_context);
         lws_context_destroy(t_context);
         t_context = nullptr;
         g_context_count.fetch_sub(1, std::memory_order_relaxed);
@@ -58,11 +103,38 @@ BoundedMPSCQueue<AudioPipe, 16384> AudioPipe::pendingDisconnectsQueue;
 BoundedMPSCQueue<AudioPipe, 16384> AudioPipe::pendingWritesQueue;
 std::atomic<uint64_t> AudioPipe::g_active_sessions{0};
 std::atomic<uint64_t> AudioPipe::g_operations_processed{0};
+std::mutex AudioPipe::g_pending_mutex;
 std::atomic<bool> AudioPipe::stopFlags{false};
 AudioPipe::log_emit_function AudioPipe::logger = nullptr;
 std::string AudioPipe::protocolName;
 unsigned int AudioPipe::numContexts = 0;
 unsigned int AudioPipe::nchild = 0;
+
+// Pending connections vector for WSI lookup (Deepgram-style pattern)
+std::list<AudioPipe*> AudioPipe::pendingConnects;
+std::mutex AudioPipe::mutex_connects;
+
+AudioPipe* AudioPipe::findPendingConnect(struct lws *wsi) {
+  std::lock_guard<std::mutex> guard(mutex_connects);
+  for (auto* p : pendingConnects) {
+    if (p->m_state == LWS_CLIENT_CONNECTING && p->m_wsi == wsi) {
+      return p;
+    }
+  }
+  return nullptr;
+}
+
+AudioPipe* AudioPipe::findAndRemovePendingConnect(struct lws *wsi) {
+  std::lock_guard<std::mutex> guard(mutex_connects);
+  for (auto it = pendingConnects.begin(); it != pendingConnects.end(); ++it) {
+    AudioPipe* p = *it;
+    if (p->m_state == LWS_CLIENT_CONNECTING && p->m_wsi == wsi) {
+      pendingConnects.erase(it);
+      return p;
+    }
+  }
+  return nullptr;
+}
 
 namespace {
   static const char* basicAuthUser = std::getenv("MOD_AUDIO_FORK_HTTP_AUTH_USER");
@@ -92,14 +164,21 @@ static int dch_lws_http_basic_auth_gen(const char *user, const char *pw, char *b
 	return 0;
 }
 
+// Thread-local VHD cache
+thread_local struct AudioPipe::lws_per_vhost_data* AudioPipe::t_vhd = nullptr;
+
 int AudioPipe::lws_callback(struct lws *wsi, 
   enum lws_callback_reasons reason,
   void *user, void *in, size_t len) {
 
-  struct AudioPipe::lws_per_vhost_data *vhd = 
-    (struct AudioPipe::lws_per_vhost_data *) lws_protocol_vh_priv_get(lws_get_vhost(wsi), lws_get_protocol(wsi));
+  struct AudioPipe::lws_per_vhost_data *vhd = nullptr;
+  if (wsi) {
+     vhd = (struct AudioPipe::lws_per_vhost_data *) lws_protocol_vh_priv_get(lws_get_vhost(wsi), lws_get_protocol(wsi));
+  } else if (t_vhd) {
+     vhd = t_vhd;
+  }
 
-  struct lws_vhost* vhost = lws_get_vhost(wsi);
+  struct lws_vhost* vhost = wsi ? lws_get_vhost(wsi) : nullptr;
   AudioPipe ** ppAp = (AudioPipe **) user;
 
   switch (reason) {
@@ -108,12 +187,13 @@ int AudioPipe::lws_callback(struct lws *wsi,
       vhd->context = lws_get_context(wsi);
       vhd->protocol = lws_get_protocol(wsi);
       vhd->vhost = lws_get_vhost(wsi);
+      t_vhd = vhd; // Cache for this thread
       break;
 
     case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER:
       {
-        // Phase 1: Direct lookup through user data (no mutex needed)
-        AudioPipe* ap = *ppAp;
+        // Use findPendingConnect to get AudioPipe by WSI (Deepgram-style)
+        AudioPipe* ap = findPendingConnect(wsi);
         if (ap && ap->hasBasicAuth()) {
           unsigned char **p = (unsigned char **)in, *end = (*p) + len;
           char b[128];
@@ -128,30 +208,34 @@ int AudioPipe::lws_callback(struct lws *wsi,
       break;
 
     case LWS_CALLBACK_EVENT_WAIT_CANCELLED:
-      processPendingConnects(vhd);
-      processPendingDisconnects(vhd);
+      if (vhd) {
+        processPendingConnects(vhd);
+        processPendingDisconnects(vhd);
+      }
       processPendingWrites();
       break;
     case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
       {
-        AudioPipe* ap = *ppAp;
+        // Use findAndRemovePendingConnect to get and remove AudioPipe (Deepgram-style)
+        AudioPipe* ap = findAndRemovePendingConnect(wsi);
         int rc = lws_http_client_http_response(wsi);
         lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_CONNECTION_ERROR: %s, response status %d\n", in ? (char *)in : "(null)", rc); 
         if (ap) {
           ap->m_state = LWS_CLIENT_FAILED;
           ap->m_callback(ap->m_uuid.c_str(), ap->m_bugname.c_str(), AudioPipe::CONNECT_FAIL, (char *) in);
           g_active_sessions.fetch_sub(1, std::memory_order_relaxed);
-        }
-        else {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_CONNECTION_ERROR unable to find wsi %p..\n", wsi); 
+          ap->release(); // Release LWS reference on failure
         }
       }      
       break;
 
     case LWS_CALLBACK_CLIENT_ESTABLISHED:
       {
-        AudioPipe* ap = *ppAp;
+        // Use findAndRemovePendingConnect to get and remove AudioPipe (Deepgram-style)
+        AudioPipe* ap = findAndRemovePendingConnect(wsi);
         if (ap) {
+          // NOW set *ppAp so subsequent callbacks can use it
+          if (ppAp) *ppAp = ap;
           ap->m_vhd = vhd;
           ap->m_state = LWS_CLIENT_CONNECTED;
           ap->m_callback(ap->m_uuid.c_str(), ap->m_bugname.c_str(), AudioPipe::CONNECT_SUCCESS, NULL);
@@ -160,20 +244,13 @@ int AudioPipe::lws_callback(struct lws *wsi,
           // Trigger initial write callback to start draining audio buffer
           lws_callback_on_writable(wsi);
           // Wake up the service thread to process the writable callback immediately
-          lws_cancel_service(vhd->context);
-        }
-        else {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_ESTABLISHED %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
+          if (vhd && vhd->context) lws_cancel_service(vhd->context);
         }
       }      
       break;
     case LWS_CALLBACK_CLIENT_CLOSED:
-      {
+      if (ppAp && *ppAp) {
         AudioPipe* ap = *ppAp;
-        if (!ap) {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_CLOSED %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
-          return 0;
-        }
         if (ap->m_state == LWS_CLIENT_DISCONNECTING) {
           // closed by us
           ap->m_callback(ap->m_uuid.c_str(), ap->m_bugname.c_str(), AudioPipe::CONNECTION_CLOSED_GRACEFULLY, NULL);
@@ -183,21 +260,18 @@ int AudioPipe::lws_callback(struct lws *wsi,
           lwsl_notice("%s socket closed by far end\n", ap->m_uuid.c_str());
           ap->m_callback(ap->m_uuid.c_str(), ap->m_bugname.c_str(), AudioPipe::CONNECTION_DROPPED, NULL);
         }
+        //NB: AudioPipe lifecycle is now managed by refcounting
         ap->m_state = LWS_CLIENT_DISCONNECTED;
-
-        //NB: after receiving any of the events above, any holder of a 
-        //pointer or reference to this object must treat is as no longer valid
-
-        *ppAp = NULL;
-        delete ap;
+        *ppAp = NULL; 
+        ap->release(); // Release LWS reference
       }
       break;
 
     case LWS_CALLBACK_CLIENT_RECEIVE:
       {
+        if (!ppAp) break; // Safety: ppAp can be NULL
         AudioPipe* ap = *ppAp;
         if (!ap) {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_RECEIVE %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
           return 0;
         }
 
@@ -254,9 +328,9 @@ int AudioPipe::lws_callback(struct lws *wsi,
 
     case LWS_CALLBACK_CLIENT_WRITEABLE:
       {
+        if (!ppAp) break; // Safety: ppAp can be NULL
         AudioPipe* ap = *ppAp;
         if (!ap) {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_WRITEABLE %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
           return 0;
         }
 
@@ -346,60 +420,80 @@ static const lws_retry_bo_t retry = {
 // Phase 1: Old static members removed - using lock-free alternatives declared earlier
 
 void AudioPipe::processPendingConnects(lws_per_vhost_data *vhd) {
-  AudioPipe* ap;
-  while ((ap = pendingConnectsQueue.pop()) != nullptr) {
-    if (ap->m_state == LWS_CLIENT_IDLE) {
-      ap->m_state = LWS_CLIENT_CONNECTING;
-      ap->connect_client(vhd);
+  // Collect-then-add pattern: collect during first lock, add during second
+  // This avoids nested mutex locks which can cause contention issues
+  std::vector<AudioPipe*> connected;
+  
+  {   // Scope 1: Only g_pending_mutex held
+    std::lock_guard<std::mutex> x(g_pending_mutex);
+    AudioPipe* ap;
+    while ((ap = pendingConnectsQueue.pop()) != nullptr) {
+      if (ap->m_state == LWS_CLIENT_IDLE) {
+        ap->m_state = LWS_CLIENT_CONNECTING;
+        if (ap->connect_client(vhd)) {
+          // Retain reference to keep alive until ESTABLISHED or CONNECTION_ERROR
+          ap->retain();
+          connected.push_back(ap);  // Defer vector add
+        }
+      }
+      ap->release(); // Release queue reference
+    }
+  }   // g_pending_mutex released here
+  
+  // Scope 2: Only mutex_connects held (no nesting)
+  if (!connected.empty()) {
+    std::lock_guard<std::mutex> guard(mutex_connects);
+    for (auto* ap : connected) {
+      pendingConnects.push_back(ap);
     }
   }
 }
 
 void AudioPipe::processPendingDisconnects(lws_per_vhost_data *vhd) {
+  std::lock_guard<std::mutex> x(g_pending_mutex);
   AudioPipe* ap;
   while ((ap = pendingDisconnectsQueue.pop()) != nullptr) {
     if (ap->m_state == LWS_CLIENT_DISCONNECTING) {
       lws_callback_on_writable(ap->m_wsi); 
     }
+    ap->release(); // Release queue reference
   }
 }
 
 void AudioPipe::processPendingWrites() {
+  std::lock_guard<std::mutex> x(g_pending_mutex);
   AudioPipe* ap;
   while ((ap = pendingWritesQueue.pop()) != nullptr) {
     if (ap->m_state == LWS_CLIENT_CONNECTED) {
       lws_callback_on_writable(ap->m_wsi);
     }
+    ap->release(); // Release queue reference
   }
 }
 
-// Note: findAndRemovePendingConnect and findPendingConnect functions 
-// are no longer needed with lock-free MPSC queue approach
-// Session management is now handled through direct state checking
 
 void AudioPipe::addPendingConnect(AudioPipe* ap) {
+  ap->retain(); // Retain for queue
   if (pendingConnectsQueue.push(ap)) {
     lwsl_notice("%s added to pending connects queue\n", ap->m_uuid.c_str());
   } else {
     lwsl_err("%s failed to add to pending connects queue (full)\n", ap->m_uuid.c_str());
+    ap->release(); // Rollback if failed
   }
   
-  struct lws_context* context = LwsContextManager::getContext();
-  if (context) {
-    lws_cancel_service(context);
-  }
+  LwsContextManager::signalAllContexts();
 }
 void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
   ap->m_state = LWS_CLIENT_DISCONNECTING;
+  ap->retain(); // Retain for queue
   if (pendingDisconnectsQueue.push(ap)) {
     lwsl_notice("%s added to pending disconnects queue\n", ap->m_uuid.c_str());
   } else {
     lwsl_err("%s failed to add to pending disconnects queue (full)\n", ap->m_uuid.c_str());
+    ap->release(); // Rollback
   }
   
-  if (ap->m_vhd && ap->m_vhd->context) {
-    lws_cancel_service(ap->m_vhd->context);
-  }
+  LwsContextManager::signalAllContexts();
 }
 void AudioPipe::addPendingWrite(AudioPipe* ap) {
   // Fast path: if already connected, request write callback immediately
@@ -412,11 +506,15 @@ void AudioPipe::addPendingWrite(AudioPipe* ap) {
   }
   else {
     // Slow path: queue for later processing
+    ap->retain(); // Retain for queue
     if (!pendingWritesQueue.push(ap)) {
       lwsl_err("%s failed to add to pending writes queue (full)\n", ap->m_uuid.c_str());
+      ap->release(); // Rollback
     }
     if (ap->m_vhd && ap->m_vhd->context) {
       lws_cancel_service(ap->m_vhd->context);
+    } else {
+      LwsContextManager::signalAllContexts();
     }
   }
 }
@@ -492,7 +590,7 @@ AudioPipe::AudioPipe(const char* uuid, const char* host, unsigned int port, cons
   m_uuid(uuid), m_host(host), m_port(port), m_path(path), m_sslFlags(sslFlags),
   m_audio_buffer_min_freespace(minFreespace), m_gracefulShutdown(false),
   m_recv_buf(nullptr), m_recv_buf_ptr(nullptr), m_bugname(bugname),
-  m_state(LWS_CLIENT_IDLE), m_wsi(nullptr), m_vhd(nullptr), m_callback(callback) {
+  m_state(LWS_CLIENT_IDLE), m_wsi(nullptr), m_vhd(nullptr), m_callback(callback), m_refCount(1) {
 
   if (username && password) {
     m_username.assign(username);
@@ -527,12 +625,14 @@ bool AudioPipe::connect_client(struct lws_per_vhost_data *vhd) {
   i.ssl_connection = m_sslFlags;
   i.protocol = protocolName.c_str();
   i.pwsi = &(m_wsi);
+  // Note: We do NOT set i.userdata. We use findPendingConnect(wsi) lookup instead.
 
   m_state = LWS_CLIENT_CONNECTING;
   m_vhd = vhd;
 
   m_wsi = lws_client_connect_via_info(&i);
   lwsl_notice("%s attempting connection, wsi is %p\n", m_uuid.c_str(), m_wsi);
+  // Note: retain() is now done when adding to pendingConnects vector
 
   return nullptr != m_wsi;
 }

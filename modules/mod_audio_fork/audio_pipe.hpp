@@ -13,6 +13,7 @@
 #include "lockfree_mpsc_queue.hpp"
 #include <atomic>
 #include <chrono>
+#include <vector>
 
 // Forward declaration
 class AudioPipe;
@@ -24,10 +25,16 @@ public:
   static uint32_t getContextCount() { return g_context_count.load(std::memory_order_relaxed); }
   static void shutdown();
   
+  static void registerContext(struct lws_context* context);
+  static void unregisterContext(struct lws_context* context);
+  static void signalAllContexts();
+
 private:
   static struct lws_context* createContext();
   thread_local static struct lws_context* t_context;
   static std::atomic<uint32_t> g_context_count;
+  static std::vector<struct lws_context*> g_all_contexts;
+  static std::mutex g_all_contexts_mutex;
   
   friend class AudioPipe; // Allow access to AudioPipe's private members
 };
@@ -58,14 +65,25 @@ public:
     const struct lws_protocols *protocol;
   };
 
-  static void initialize(const char* protocolName, unsigned int nThreads, int loglevel, log_emit_function logger);
+  static void initialize(const char* protocolName, unsigned int nServiceThreads, int logLevel, log_emit_function logger);
   static bool deinitialize();
   static void adaptive_lws_service_thread(unsigned int nServiceThread); // Phase 1: Adaptive algorithm
 
   // constructor
   AudioPipe(const char* uuid, const char* host, unsigned int port, const char* path, int sslFlags, 
     size_t bufLen, size_t minFreespace, const char* username, const char* password, char* bugname, notifyHandler_t callback);
-  ~AudioPipe();  
+  ~AudioPipe();
+
+  // Reference Counting
+  void retain() {
+      m_refCount.fetch_add(1, std::memory_order_relaxed);
+  }
+  void release() {
+      if (m_refCount.fetch_sub(1, std::memory_order_release) == 1) {
+          std::atomic_thread_fence(std::memory_order_acquire);
+          delete this;
+      }
+  }
 
   LwsState_t getLwsState(void) { return m_state; }
   void connect(void);
@@ -142,11 +160,18 @@ public:
 private:
   
   // Phase 1: Lock-free pending operations with atomic counters
+  static std::mutex g_pending_mutex;
   static BoundedMPSCQueue<AudioPipe, 16384> pendingConnectsQueue;
   static BoundedMPSCQueue<AudioPipe, 16384> pendingDisconnectsQueue;
   static BoundedMPSCQueue<AudioPipe, 16384> pendingWritesQueue;
   static std::atomic<uint64_t> g_active_sessions;
   static std::atomic<uint64_t> g_operations_processed;
+  
+  // Pending connections lookup (Deepgram-style pattern)
+  static std::list<AudioPipe*> pendingConnects;
+  static std::mutex mutex_connects;
+  static AudioPipe* findPendingConnect(struct lws* wsi);
+  static AudioPipe* findAndRemovePendingConnect(struct lws* wsi);
   
   static log_emit_function logger;
   static std::atomic<bool> stopFlags;
@@ -183,11 +208,15 @@ private:
   uint8_t* m_recv_buf_ptr;
   size_t m_recv_buf_len;
   struct lws_per_vhost_data* m_vhd;
+  static thread_local struct lws_per_vhost_data* t_vhd;
   notifyHandler_t m_callback;
   log_emit_function m_logger;
+
   std::string m_username;
   std::string m_password;
   bool m_gracefulShutdown;
+  std::atomic<int> m_refCount;
 };
+
 
 #endif
