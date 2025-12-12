@@ -33,7 +33,7 @@ namespace {
     std::atomic<bool> g_running(false);
 }
 
-deepgram::ObjectPool<AwsPipe> g_pipe_pool; // Definition of the global object pool
+aws::ObjectPool<AwsPipe> g_pipe_pool; // Definition of the global object pool
 
 // Global pusher client
 async_pusher_t* g_pusher = nullptr;
@@ -67,43 +67,11 @@ static void send_session_start_to_pusher(switch_core_session_t* session, const c
     const char* callee_number = switch_channel_get_variable(channel, "destination_number");
     if (!callee_number) callee_number = switch_channel_get_variable(channel, "callee_id_number");
     
-    // Build caller/callee ID strings
-    char caller_id[256], callee_id[256];
-    snprintf(caller_id, sizeof(caller_id), "%s(%s)",
-        caller_name ? caller_name : "Unknown",
-        caller_number ? caller_number : "Unknown");
-    snprintf(callee_id, sizeof(callee_id), "%s(%s)",
-        callee_name ? callee_name : "Unknown",
-        callee_number ? callee_number : "Unknown");
-    
-    // Build timestamp
-    time_t now = time(NULL);
-    struct tm tm_info;
-    gmtime_r(&now, &tm_info);
-    char timestamp[32];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
-    
-    // Build session start JSON
-    cJSON* data = cJSON_CreateObject();
-    cJSON_AddStringToObject(data, "type", "session_start");
-    cJSON_AddStringToObject(data, "caller_id", caller_id);
-    cJSON_AddStringToObject(data, "callee_id", callee_id);
-    cJSON_AddStringToObject(data, "timestamp", timestamp);
-    
-    char* data_json = cJSON_PrintUnformatted(data);
-    cJSON_Delete(data);
-    
-    if (data_json) {
-        std::string channel_name = "call-" + std::string(call_id);
-        const char* prefix = std::getenv("PUSHER_CHANNEL_PREFIX");
-        if (prefix) channel_name = std::string(prefix) + std::string(call_id);
-        
-        std::string event_name = "session-start";
-        const char* evt_session_start = std::getenv("PUSHER_EVENT_SESSION_START");
-        if (evt_session_start) event_name = evt_session_start;
-        
-        async_pusher_send(g_pusher, channel_name.c_str(), event_name.c_str(), data_json);
-        free(data_json);
+    if (async_pusher_send_session_start(g_pusher, call_id,
+            caller_name, caller_number,
+            callee_name, callee_number) != 0) {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+            "Failed to queue session_start event to Pusher for call_id=%s\n", call_id);
     }
 }
 
@@ -197,48 +165,11 @@ static void responseHandler(switch_core_session_t* session, const transcript_dat
         const char* callee_number = switch_channel_get_variable(channel, "destination_number");
         if (!callee_number) callee_number = switch_channel_get_variable(channel, "callee_id_number");
 
-        // Build speaker ID
-        char speaker_id[256];
-        if (td->channel_index == 0) {
-            snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
-                caller_name ? caller_name : "Unknown",
-                caller_number ? caller_number : "Unknown");
-        } else {
-            snprintf(speaker_id, sizeof(speaker_id), "%s(%s)",
-                callee_name ? callee_name : "Unknown",
-                callee_number ? callee_number : "Unknown");
-        }
-
-        // Build timestamp
-        time_t now = time(NULL);
-        struct tm tm_info;
-        gmtime_r(&now, &tm_info);
-        char timestamp[32];
-        strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
-
-        // Build Pusher data JSON
-        cJSON* pusher_data = cJSON_CreateObject();
-        cJSON_AddStringToObject(pusher_data, "type", td->is_final ? "final" : "interim");
-        cJSON_AddStringToObject(pusher_data, "speaker_id", speaker_id);
-        cJSON_AddStringToObject(pusher_data, "text", td->transcript);
-        cJSON_AddStringToObject(pusher_data, "timestamp", timestamp);
-
-        char* data_json = cJSON_PrintUnformatted(pusher_data);
-        cJSON_Delete(pusher_data);
-
-        if (data_json) {
-            std::string channel_name = "call-" + std::string(call_id);
-            const char* prefix = std::getenv("PUSHER_CHANNEL_PREFIX");
-            if (prefix) channel_name = std::string(prefix) + std::string(call_id);
-
-            std::string event_name = td->is_final ? "transcription-final" : "transcription-interim";
-            const char* evt_final = std::getenv("PUSHER_EVENT_FINAL");
-            const char* evt_interim = std::getenv("PUSHER_EVENT_INTERIM");
-            if (td->is_final && evt_final) event_name = evt_final;
-            if (!td->is_final && evt_interim) event_name = evt_interim;
-
-            async_pusher_send(g_pusher, channel_name.c_str(), event_name.c_str(), data_json);
-            free(data_json);
+        if (async_pusher_send_transcript_parsed(g_pusher, call_id, td,
+                caller_name, caller_number,
+                callee_name, callee_number) != 0) {
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+                "Failed to queue transcription to Pusher for call_id=%s\n", call_id);
         }
     }
 

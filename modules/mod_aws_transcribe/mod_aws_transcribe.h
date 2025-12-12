@@ -7,7 +7,7 @@
 // Forward declaration
 class AwsPipe;
 
-extern deepgram::ObjectPool<AwsPipe> g_pipe_pool;
+extern aws::ObjectPool<AwsPipe> g_pipe_pool;
 
 #ifdef __cplusplus
 extern "C" {

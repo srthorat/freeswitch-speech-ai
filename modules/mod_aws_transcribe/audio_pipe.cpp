@@ -90,7 +90,7 @@ private:
     // CRITICAL: Keep request alive for the duration of the stream
     std::shared_ptr<StartStreamTranscriptionRequest> m_request;
 
-    deepgram::LockFreeRingBuffer<16384> m_buffer;
+    aws::LockFreeRingBuffer<16384> m_buffer;
     std::mutex m_mutex;
 };
 

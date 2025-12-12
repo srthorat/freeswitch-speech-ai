@@ -22,7 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace deepgram {
+namespace aws {
 
 /**
  * Intrusive node for MPSC queue

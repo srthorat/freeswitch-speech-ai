@@ -16,7 +16,7 @@ struct WorkerJob {
     std::shared_ptr<AwsPipe> pPipe;
 };
 
-extern deepgram::BoundedMPSCQueue<WorkerJob, 16384> g_job_queue;
+extern aws::BoundedMPSCQueue<WorkerJob, 16384> g_job_queue;
 
 // Condition variable for immediate worker thread wakeup
 extern std::condition_variable g_job_cv;

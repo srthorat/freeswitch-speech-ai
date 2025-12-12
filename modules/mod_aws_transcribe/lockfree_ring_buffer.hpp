@@ -22,7 +22,7 @@
 #include <algorithm>
 #include <utility>
 
-namespace deepgram {
+namespace aws {
 
 /**
  * Lock-free Single Producer Single Consumer Ring Buffer

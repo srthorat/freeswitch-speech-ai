@@ -8,7 +8,7 @@
 #include <condition_variable>
 
 // Global job queue (lock-free MPSC)
-deepgram::BoundedMPSCQueue<WorkerJob, 16384> g_job_queue;
+aws::BoundedMPSCQueue<WorkerJob, 16384> g_job_queue;
 
 // Condition variable for immediate worker thread wakeup
 // CRITICAL FIX: Prevents thread starvation - same issue as Deepgram module

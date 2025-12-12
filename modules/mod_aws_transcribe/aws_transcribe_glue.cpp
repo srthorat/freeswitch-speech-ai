@@ -43,6 +43,12 @@ struct BugData {
     std::shared_ptr<AwsPipe> pPipe;
     SpeexResamplerState *resampler;
     uint32_t source_rate;
+    // Resampler stats
+    uint64_t resampler_frames_processed = 0;
+    uint64_t resampler_samples_in = 0;
+    uint64_t resampler_samples_out = 0;
+    uint64_t resampler_bytes_written = 0;
+    switch_time_t resampler_start_time = 0;
 };
 
 switch_status_t aws_transcribe_session_init(switch_core_session_t *session, ResponseHandler_t responseHandler, uint32_t samples_per_second, uint32_t channels, const char* lang, int interim, const char* bugname, const char* metadata, void **ppUserData, switch_media_bug_flag_t flags) {
@@ -114,6 +120,7 @@ switch_status_t aws_transcribe_session_init(switch_core_session_t *session, Resp
     pBugData->pPipe = pPipe;
     pBugData->resampler = nullptr;
     pBugData->source_rate = source_rate;
+    pBugData->resampler_start_time = switch_time_now();
 
     if (source_rate != samples_per_second) {
         pBugData->resampler = speex_resampler_init(channels, source_rate, samples_per_second, 2, &err);
@@ -177,6 +184,23 @@ switch_bool_t aws_transcribe_frame(switch_media_bug_t *bug, void* user_data, swi
         {
             switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Got SWITCH_ABC_TYPE_CLOSE.\n");
             if (pBugData) {
+                // Log final resampler statistics before cleanup
+                if (pBugData->resampler_frames_processed > 0) {
+                    switch_time_t now = switch_time_now();
+                    double elapsed_secs = (now - pBugData->resampler_start_time) / 1000000.0;
+                    double fps = pBugData->resampler_frames_processed / elapsed_secs;
+                    double mb_written = pBugData->resampler_bytes_written / (1024.0 * 1024.0);
+                    double kbps = (pBugData->resampler_bytes_written * 8.0) / (elapsed_secs * 1000.0);
+
+                    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+                        "[RESAMPLER-FINAL] Session complete - frames=%lu, samples_in=%lu, samples_out=%lu, "
+                        "bytes=%.2fMB, avg_fps=%.1f, duration=%.1fs, bitrate=%.1fkbps\n",
+                        (unsigned long)pBugData->resampler_frames_processed,
+                        (unsigned long)pBugData->resampler_samples_in,
+                        (unsigned long)pBugData->resampler_samples_out,
+                        mb_written, fps, elapsed_secs, kbps);
+                }
+
                 if (pBugData->resampler) speex_resampler_destroy(pBugData->resampler);
                 // Deleting BugData will decrement the ref count of the shared_ptr.
                 // The AwsPipe object will be destroyed now IF the processing thread is also done.
@@ -198,6 +222,9 @@ switch_bool_t aws_transcribe_frame(switch_media_bug_t *bug, void* user_data, swi
 
             while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
                 if (frame.datalen) {
+                    pBugData->resampler_frames_processed++;
+                    pBugData->resampler_samples_in += frame.samples;
+
                     if (pBugData->resampler) {
                         spx_int16_t out[SWITCH_RECOMMENDED_BUFFER_SIZE];
                         spx_uint32_t out_len = SWITCH_RECOMMENDED_BUFFER_SIZE;
@@ -210,10 +237,13 @@ switch_bool_t aws_transcribe_frame(switch_media_bug_t *bug, void* user_data, swi
                             &out_len);
                         
                         if (out_len > 0) {
+                            pBugData->resampler_samples_out += out_len;
+                            size_t bytes_to_write = out_len * frame.channels * sizeof(spx_int16_t);
+                            pBugData->resampler_bytes_written += bytes_to_write;
+
                             void* p1;
                             void* p2;
                             size_t len1, len2;
-                            size_t bytes_to_write = out_len * frame.channels * sizeof(spx_int16_t);
                             if (pBugData->pPipe->reserveAudioSpace(bytes_to_write, &p1, &len1, &p2, &len2)) {
                                 memcpy(p1, &out[0], len1);
                                 if (len2 > 0) {
@@ -223,6 +253,9 @@ switch_bool_t aws_transcribe_frame(switch_media_bug_t *bug, void* user_data, swi
                             }
                         }
                     } else {
+                        pBugData->resampler_samples_out += frame.samples;
+                        pBugData->resampler_bytes_written += frame.datalen;
+
                         void* p1;
                         void* p2;
                         size_t len1, len2;

@@ -17,7 +17,7 @@
 #include <memory>
 #include <vector>
 
-namespace deepgram {
+namespace aws {
 
 // Forward declarations
 class AwsPipe;
