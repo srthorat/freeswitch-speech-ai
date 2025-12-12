@@ -34,6 +34,7 @@ The refactoring was completed in phases with additional AWS-specific optimizatio
 | **5** | **Async Pusher** | ✅ Complete (enhanced) | ✅ Complete (full crypto) | **Production Ready** | **Enhanced: HMAC-SHA256** |
 | **6** | **Client Manager** | ✅ Thread-local contexts | ✅ **AWS-Only Innovation** | **Production Ready** | **New: Thread-local clients** |
 | **7** | **Performance Monitoring** | ✅ CLI monitoring API | ✅ **AWS-Only Feature** | **Production Ready** | **New: Real-time API** |
+| **8** | **Advanced Tuning** | ✅ Zero-Malloc & Pinning | ✅ **Thread Pinning** | **Production Ready** | **Enhanced: CPU Affinity** |
 
 **Overall Status**: ✅ **All implementations complete and production-ready across all modules**
 
@@ -64,7 +65,8 @@ For immediate 10,000 call deployment, apply this single configuration block:
 cat > /etc/systemd/system/freeswitch.service.d/aws-10k-tuning.conf <<EOF
 [Service]
 # AWS Transcribe 10K Call Optimization
-Environment="MOD_AWS_WORKER_THREADS=5"              # Optimal thread count
+Environment="MOD_AWS_WORKER_THREADS=5"              # Optimal thread count (start with N-1 cores)
+Environment="MOD_AWS_WORKER_AFFINITY=0,2,4,6,8"     # Pin worker threads to specific cores
 Environment="MOD_AWS_POOL_SIZE=15000"               # 1.5x headroom (10k target)
 Environment="MOD_AWS_RING_BUFFER_SIZE=65536"        # 64KB per session
 Environment="AWS_MAX_CONNECTIONS=50"                 # Per thread-local client

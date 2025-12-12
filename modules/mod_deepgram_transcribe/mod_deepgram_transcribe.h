@@ -49,6 +49,7 @@ struct private_data {
   unsigned int id;
   int buffer_overrun_notified:1;
   int is_finished:1;
+  int stop_requested:1;
 
   /* Resampler performance statistics for high-scale monitoring */
   uint64_t resampler_frames_processed;     /* Total frames processed */

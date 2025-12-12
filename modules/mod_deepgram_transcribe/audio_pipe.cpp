@@ -154,47 +154,27 @@ int AudioPipe::lws_callback(struct lws *wsi,
         }
 
         if (lws_is_first_fragment(wsi)) {
-          // allocate a buffer for the entire chunk of memory needed
-          assert(nullptr == ap->m_recv_buf);
-          ap->m_recv_buf_len = len + lws_remaining_packet_payload(wsi);
-          ap->m_recv_buf = (uint8_t*) malloc(ap->m_recv_buf_len);
-          ap->m_recv_buf_ptr = ap->m_recv_buf;
-        }
-
-        size_t write_offset = ap->m_recv_buf_ptr - ap->m_recv_buf;
-        size_t remaining_space = ap->m_recv_buf_len - write_offset;
-        if (remaining_space < len) {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_RECEIVE buffer realloc needed.\n");
-          size_t newlen = ap->m_recv_buf_len + RECV_BUF_REALLOC_SIZE;
-          if (newlen > MAX_RECV_BUF_SIZE) {
-            free(ap->m_recv_buf);
-            ap->m_recv_buf = ap->m_recv_buf_ptr = nullptr;
-            ap->m_recv_buf_len = 0;
-            lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_RECEIVE max buffer exceeded, truncating message.\n");
-          }
-          else {
-            ap->m_recv_buf = (uint8_t*) realloc(ap->m_recv_buf, newlen);
-            if (nullptr != ap->m_recv_buf) {
-              ap->m_recv_buf_len = newlen;
-              ap->m_recv_buf_ptr = ap->m_recv_buf + write_offset;
-            }
+          // Zero-Malloc Optimization: clear but keep capacity
+          ap->m_recv_buf.clear();
+          size_t estimated_total = len + lws_remaining_packet_payload(wsi);
+          if (ap->m_recv_buf.capacity() < estimated_total) {
+            ap->m_recv_buf.reserve(estimated_total);
           }
         }
 
-        if (nullptr != ap->m_recv_buf) {
-          if (len > 0) {
-            memcpy(ap->m_recv_buf_ptr, in, len);
-            ap->m_recv_buf_ptr += len;
-          }
-          if (lws_is_final_fragment(wsi)) {
-            if (nullptr != ap->m_recv_buf) {
-              std::string msg((char *)ap->m_recv_buf, ap->m_recv_buf_ptr - ap->m_recv_buf);
-              ap->m_callback(ap->m_uuid.c_str(), AudioPipe::MESSAGE, msg.c_str(),  ap->isFinished());
-              if (nullptr != ap->m_recv_buf) free(ap->m_recv_buf);
-            }
-            ap->m_recv_buf = ap->m_recv_buf_ptr = nullptr;
-            ap->m_recv_buf_len = 0;
-          }
+        // Direct append to vector (amortized O(1))
+        const uint8_t* ptr = (const uint8_t*)in;
+        ap->m_recv_buf.insert(ap->m_recv_buf.end(), ptr, ptr + len);
+
+        if (lws_is_final_fragment(wsi)) {
+           // Construct string from vector (copy required for std::string compatibility with existing API)
+           // Warning: string constructor copies data. For absolute zero-copy, callback API needs change.
+           // However, avoiding malloc/free per message is the big win here.
+           std::string msg(ap->m_recv_buf.begin(), ap->m_recv_buf.end());
+           ap->m_callback(ap->m_uuid.c_str(), AudioPipe::MESSAGE, msg.c_str(), ap->isFinished());
+           
+           // Reset content but keep capacity for next message
+           ap->m_recv_buf.clear();
         }
       }
       break;
@@ -601,7 +581,6 @@ AudioPipe::AudioPipe(const char* uuid, const char* host, unsigned int port, cons
   size_t bufLen, size_t minFreespace, const char* apiKey, notifyHandler_t callback) :
   m_uuid(uuid), m_host(host), m_port(port), m_path(path), m_finished(false),
   m_audio_buffer_min_freespace(minFreespace), m_gracefulShutdown(false),
-  m_recv_buf(nullptr), m_recv_buf_ptr(nullptr), 
   m_state(LWS_CLIENT_IDLE), m_wsi(nullptr), m_vhd(nullptr), m_apiKey(apiKey), m_callback(callback),
   m_audio_bytes_pending(0) {
   // Lock-free ring buffer is initialized by its constructor
@@ -611,7 +590,7 @@ AudioPipe::AudioPipe(const char* uuid, const char* host, unsigned int port, cons
 }
 AudioPipe::~AudioPipe() {
   // Ring buffer cleanup is automatic
-  if (m_recv_buf) delete [] m_recv_buf;
+  // m_recv_buf vector cleanup is automatic
 }
 
 void AudioPipe::connect(void) {
@@ -711,12 +690,8 @@ void AudioPipe::reset(const char* uuid, const char* host, unsigned int port, con
   m_audio_bytes_pending.store(0, std::memory_order_relaxed);
   
   // Reset receive buffer
-  if (m_recv_buf) {
-    delete[] m_recv_buf;
-    m_recv_buf = nullptr;
-  }
-  m_recv_buf_ptr = nullptr;
-  m_recv_buf_len = 0;
+  // Reset receive buffer (keep capacity, reset content)
+  m_recv_buf.clear();
   
   // Reset promise for new session
   m_promise = std::promise<void>();

@@ -500,7 +500,8 @@ namespace {
     tech_pvt->responseHandler = responseHandler;
     tech_pvt->channels = channels;
     tech_pvt->id = ++idxCallCount;
-    tech_pvt->buffer_overrun_notified = 0;
+    // Initialize stop_requested
+    tech_pvt->stop_requested = 0;
     
     size_t buflen = LWS_PRE + (FRAME_SIZE_8000 * desiredSampling / 8000 * channels * 1000 / RTP_PACKETIZATION_PERIOD * nAudioBufferSecs);
 
@@ -704,27 +705,59 @@ extern "C" {
       return SWITCH_STATUS_FALSE;
     }
     private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
-    uint32_t id = tech_pvt->id;
-
-    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) dg_transcribe_session_stop\n", id);
-
     if (!tech_pvt) return SWITCH_STATUS_FALSE;
+
+    // PREVENT RECURSION / DOUBLE FREE
+    // If we are already stopping (e.g. stop(0) calls remove -> callback -> stop(1)), 
+    // simply return success so the caller (remove) proceeds efficiently.
+    if (tech_pvt->stop_requested) {
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) dg_transcribe_session_stop: already stopping, skipping recursion\n", tech_pvt->id);
+      return SWITCH_STATUS_SUCCESS;
+    }
+    
+    // Mark as stopping BEFORE any actions that might trigger callbacks
+    tech_pvt->stop_requested = 1;
+
+    uint32_t id = tech_pvt->id;
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) dg_transcribe_session_stop\n", id);
 
     // Emit session stop event with metadata
     emit_metadata_event(session, tech_pvt->metadata, TRANSCRIBE_EVENT_SESSION_STOP, bugname);
 
-    // close connection and get final responses
-    switch_mutex_lock(tech_pvt->mutex);
+    // Prevent recursive stop calls (e.g. from do_stop -> remove_bug -> capture_callback -> do_stop)
     switch_channel_set_private(channel, bugname, NULL);
-    if (!channelIsClosing) switch_core_media_bug_remove(session, &bug);
+    
+    // Unlock and destroy mutex carefully
+    switch_mutex_t* mutex = tech_pvt->mutex;
+    if (mutex) switch_mutex_lock(mutex);
 
+    // Clean up AudioPipe synchronously to avoid race conditions
+    // The previous async "reaper" thread caused race conditions with pool release
     deepgram::AudioPipe *pAudioPipe = static_cast<deepgram::AudioPipe *>(tech_pvt->pAudioPipe);
-    if (pAudioPipe) reaper(tech_pvt);
+    if (pAudioPipe) {
+        pAudioPipe->finish();
+        pAudioPipe->waitForClose(); // Wait for final transcripts and clean closure
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) AudioPipe closed\n", id);
+    }
+
+    if (!channelIsClosing) {
+        // This triggers capture_callback(CLOSE) which might try to call stop again
+        // but we already set private to NULL so it should find nothing and return,
+        // OR if it finds bug (race), stop_requested flag above will catch it.
+        switch_core_media_bug_remove(session, &bug);
+    }
+
+    // Now safe to destroy tech_pvt (releases AudioPipe to pool)
     destroy_tech_pvt(tech_pvt);
-    switch_mutex_unlock(tech_pvt->mutex);
-    switch_mutex_destroy(tech_pvt->mutex);
-    tech_pvt->mutex = nullptr;
-    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) dg_transcribe_session_stop\n", id);
+    
+    // safe unlock (mutex is allocated from session pool, so it's valid until session destroy)
+    if (mutex) {
+        switch_mutex_unlock(mutex);
+        // Do not destroy mutex here as it belongs to session pool
+        // and we might be in a nested lock context or session might be shutting down
+    }
+
+    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) dg_transcribe_session_stop completed\n", id);
     return SWITCH_STATUS_SUCCESS;
   }
 	

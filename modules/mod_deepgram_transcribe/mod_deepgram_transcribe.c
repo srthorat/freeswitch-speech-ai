@@ -523,7 +523,7 @@ SWITCH_STANDARD_API(dg_transcribe_function)
 	} else {
 		switch_core_session_t *lsession = NULL;
 
-		if ((lsession = switch_core_session_locate(argv[0]))) {
+			if ((lsession = switch_core_session_locate(argv[0]))) {
 			if (!strcasecmp(argv[1], "stop")) {
 				char *bugname = argc > 2 ? argv[2] : MY_BUG_NAME;
     		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "stop transcribing\n");
@@ -622,7 +622,19 @@ SWITCH_STANDARD_API(dg_transcribe_function)
 				status = dg_get_performance_stats(lsession, stats_type, stream);
 			}
 			switch_core_session_rwunlock(lsession);
-		}
+		} else {
+      // Session not found handling
+      if (!strcasecmp(argv[1], "stop")) {
+        // Idempotent STOP: If session is gone, transcription is definitely stopped.
+        // Return Success to avoid alarming error logs in scripts/handlers running during hangup.
+        status = SWITCH_STATUS_SUCCESS;
+      } else {
+        // For START or other commands, missing session is a real error
+        status = SWITCH_STATUS_FALSE;
+        stream->write_function(stream, "-ERR Session not found\n");
+        goto done;
+      }
+    }
 	}
 
 	if (status == SWITCH_STATUS_SUCCESS) {

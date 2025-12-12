@@ -320,9 +320,8 @@ private:
   uint8_t m_legacy_write_buffer[8192];  // Max frame size
   
   // Receive buffer (not changed - only used by consumer)
-  uint8_t* m_recv_buf;
-  uint8_t* m_recv_buf_ptr;
-  size_t m_recv_buf_len;
+  // Zero-Malloc Receive Buffer (std::vector keeps capacity across messages)
+  std::vector<uint8_t> m_recv_buf;
   struct lws_per_vhost_data* m_vhd;
   notifyHandler_t m_callback;
   log_emit_function m_logger;

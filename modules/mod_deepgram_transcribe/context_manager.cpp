@@ -9,6 +9,7 @@
 #include "context_manager.hpp"
 #include <cstring>
 #include <vector>
+#include <cstdlib>
 
 namespace deepgram {
 
@@ -85,13 +86,26 @@ struct lws_context* ContextManager::createThreadContext() {
     info.uid = -1;
     info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
     
-    // Performance tuning for high-scale deployment
-    info.ka_time = 55;                    // TCP keep-alive timer (55 seconds)
-    info.ka_probes = 4;                   // Keep-alive probes before close
-    info.ka_interval = 5;                 // Interval between probes
-    info.timeout_secs = 10;               // Network operation timeout
+// Performance tuning for high-scale deployment
+    /* Environment-based tuning */
+    const char* env_ka_time = std::getenv("MOD_DEEPGRAM_KA_TIME");
+    int ka_time = env_ka_time ? std::atoi(env_ka_time) : 55;
+    info.ka_time = ka_time > 0 ? ka_time : 55;
+    if (info.ka_time > 0) {
+        info.ka_interval = 10;
+        info.ka_probes = 3;
+    }
+
+    const char* env_timeout = std::getenv("MOD_DEEPGRAM_TIMEOUT");
+    int timeout = env_timeout ? std::atoi(env_timeout) : 10;
+    info.timeout_secs = timeout > 0 ? timeout : 10;               // Network operation timeout
     info.keepalive_timeout = 5;           // HTTP/1.1 idle connection timeout
     info.timeout_secs_ah_idle = 10;       // Idle connection timeout
+    
+    // Serialize context creation to prevent OpenSSL race conditions
+    // LWS/OpenSSL global init is not thread-safe by default
+    static std::mutex s_creation_mutex;
+    std::lock_guard<std::mutex> lock(s_creation_mutex);
     
     return lws_create_context(&info);
 }

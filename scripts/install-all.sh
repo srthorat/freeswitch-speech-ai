@@ -766,10 +766,15 @@ Environment="LD_LIBRARY_PATH=/usr/local/lib"
 #Environment="AWS_ACCESS_KEY_ID=your-access-key"
 #Environment="AWS_SECRET_ACCESS_KEY=your-secret-key"
 #Environment="AWS_DEFAULT_REGION=us-east-1"
+#Environment="AWS_MAX_CONNECTIONS=25"
+#Environment="AWS_CONNECT_TIMEOUT_MS=5000"
+#Environment="AWS_REQUEST_TIMEOUT_MS=30000"
 
 # Deepgram Configuration (for mod_deepgram_transcribe)
 # Uncomment and set your values:
 #Environment="DEEPGRAM_API_KEY=your-deepgram-api-key"
+#Environment="MOD_DEEPGRAM_TIMEOUT=10"
+#Environment="MOD_DEEPGRAM_KA_TIME=55"
 
 # Pusher Configuration (for real-time transcript delivery)
 # Uncomment and set your values:
@@ -806,6 +811,17 @@ EOF
         ln -sf ${FS_PREFIX}/bin/freeswitch /usr/local/bin/freeswitch 2>/dev/null || true
         
         log_success "FreeSWITCH binaries configured for system-wide access"
+
+        # Apply high-performance logging defaults (NOTICE instead of DEBUG/INFO)
+        log_substep "Configuring production logging levels (NOTICE)..."
+        if [ -f "${FS_PREFIX}/conf/autoload_configs/logfile.conf.xml" ]; then
+            sed -i 's/loglevel value="debug"/loglevel value="notice"/g' ${FS_PREFIX}/conf/autoload_configs/logfile.conf.xml
+            sed -i 's/loglevel value="info"/loglevel value="notice"/g' ${FS_PREFIX}/conf/autoload_configs/logfile.conf.xml
+        fi
+        if [ -f "${FS_PREFIX}/conf/autoload_configs/console.conf.xml" ]; then
+            sed -i 's/loglevel value="debug"/loglevel value="notice"/g' ${FS_PREFIX}/conf/autoload_configs/console.conf.xml
+            sed -i 's/loglevel value="info"/loglevel value="notice"/g' ${FS_PREFIX}/conf/autoload_configs/console.conf.xml
+        fi
     fi
 else
     log_step "[Step 3/7] Skipping FreeSWITCH Installation"
@@ -853,14 +869,14 @@ if should_install_module "mod_audio_fork"; then
 
     log_substep "Compiling C++ sources (C++17 for lock-free ring buffer & memory pools)..."
     log_command "mod_audio_fork C++" "${LOG_DIR}/mod_audio_fork_cpp.log" \
-        g++ -fPIC -c -std=c++17 -O2 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
+        g++ -fPIC -c -std=c++17 -flto -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
     check_success "Failed to compile mod_audio_fork C++ sources" "${LOG_DIR}/mod_audio_fork_cpp.log"
 
     mkdir -p ${FS_PREFIX}/lib/freeswitch/mod
 
     log_substep "Linking mod_audio_fork.so..."
     log_command "mod_audio_fork link" "${LOG_DIR}/mod_audio_fork_link.log" \
-        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto
+        g++ -shared -flto -O3 -march=native -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto
     check_success "Failed to link mod_audio_fork" "${LOG_DIR}/mod_audio_fork_link.log"
 
     log_success "mod_audio_fork built and installed"
@@ -879,22 +895,22 @@ if should_install_module "mod_aws_transcribe"; then
 
     log_substep "Compiling C++ sources..."
     log_command "mod_aws_transcribe C++" "${LOG_DIR}/mod_aws_transcribe_cpp.log" \
-        g++ -fPIC -c -std=c++17 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include -I/usr/local/include/aws/core -I/usr/local/include/aws/transcribestreaming mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp
+        g++ -fPIC -c -std=c++17 -flto -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include -I/usr/local/include/aws/core -I/usr/local/include/aws/transcribestreaming mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp
     check_success "Failed to compile mod_aws_transcribe C++ sources" "${LOG_DIR}/mod_aws_transcribe_cpp.log"
 
     log_substep "Compiling async_http.c..."
     log_command "mod_aws_transcribe async_http" "${LOG_DIR}/mod_aws_transcribe_async_http.log" \
-        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_http.c
+        gcc -fPIC -c -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_http.c
     check_success "Failed to compile mod_aws_transcribe async_http.c" "${LOG_DIR}/mod_aws_transcribe_async_http.log"
 
     log_substep "Compiling async_pusher.c..."
     log_command "mod_aws_transcribe async_pusher" "${LOG_DIR}/mod_aws_transcribe_async_pusher.log" \
-        gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_pusher.c
+        gcc -fPIC -c -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_pusher.c
     check_success "Failed to compile mod_aws_transcribe async_pusher.c" "${LOG_DIR}/mod_aws_transcribe_async_pusher.log"
 
     log_substep "Linking mod_aws_transcribe.so..."
     log_command "mod_aws_transcribe link" "${LOG_DIR}/mod_aws_transcribe_link.log" \
-        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
+        g++ -shared -flto -O3 -march=native -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
             mod_aws_transcribe.o aws_transcribe_glue.o audio_pipe.o worker_thread.o aws_client_manager.o async_http.o async_pusher.o \
             -L${FS_PREFIX}/libs/aws-sdk-cpp/build/.deps/install/lib -L${FS_PREFIX}/libs/aws-sdk-cpp/build/aws-cpp-sdk-core -L${FS_PREFIX}/libs/aws-sdk-cpp/build/aws-cpp-sdk-transcribestreaming -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core -laws-c-event-stream -laws-checksums -laws-c-common -lpthread -lcurl -lcrypto -lssl -lz
     check_success "Failed to link mod_aws_transcribe" "${LOG_DIR}/mod_aws_transcribe_link.log"
@@ -930,12 +946,12 @@ if should_install_module "mod_deepgram_transcribe"; then
 
     log_substep "Compiling C++ sources (with thread-local contexts, lock-free queues, zero-copy & memory pools)..."
     log_command "mod_deepgram_transcribe C++" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log" \
-        g++ -fPIC -c -std=c++17 -O2 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp dg_session.cpp context_manager.cpp
+        g++ -fPIC -c -std=c++17 -flto -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp dg_session.cpp context_manager.cpp
     check_success "Failed to compile mod_deepgram_transcribe C++ sources" "${LOG_DIR}/mod_deepgram_transcribe_cpp.log"
 
     log_substep "Linking mod_deepgram_transcribe.so..."
     log_command "mod_deepgram_transcribe link" "${LOG_DIR}/mod_deepgram_transcribe_link.log" \
-        g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
+        g++ -shared -flto -O3 -march=native -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
             mod_deepgram_transcribe.o async_http.o async_pusher.o dg_transcribe_glue.o audio_pipe.o memory_pool.o dg_session.o context_manager.o \
             -lwebsockets -lcurl -lpthread -lssl -lcrypto
     check_success "Failed to link mod_deepgram_transcribe" "${LOG_DIR}/mod_deepgram_transcribe_link.log"

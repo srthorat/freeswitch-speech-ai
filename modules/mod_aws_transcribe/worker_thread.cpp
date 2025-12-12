@@ -6,6 +6,45 @@
 #include "audio_pipe.h"
 #include <chrono>
 #include <condition_variable>
+#include <vector>
+#include <string>
+#include <iostream>
+#include <sstream>
+
+// Thread Affinity Helper
+static void set_thread_affinity(int thread_idx) {
+    const char* affinity_str = std::getenv("MOD_AWS_WORKER_AFFINITY");
+    if (!affinity_str) return;
+
+    // Parse comma-separated list of cores: "0,2,4,6"
+    std::vector<int> cores;
+    std::string s(affinity_str);
+    std::string delimiter = ",";
+    size_t pos = 0;
+    std::string token;
+    while ((pos = s.find(delimiter)) != std::string::npos) {
+        token = s.substr(0, pos);
+        cores.push_back(std::stoi(token));
+        s.erase(0, pos + delimiter.length());
+    }
+    cores.push_back(std::stoi(s));
+
+    if (cores.empty()) return;
+
+    // Assign round-robin
+    int core_id = cores[thread_idx % cores.size()];
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(core_id, &cpuset);
+
+    pthread_t current_thread = pthread_self();
+    if (pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset) != 0) {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Failed to set affinity for worker thread %d to core %d\n", thread_idx, core_id);
+    } else {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Worker thread %d pinned to core %d\n", thread_idx, core_id);
+    }
+}
 
 // Global job queue (lock-free MPSC)
 aws::BoundedMPSCQueue<WorkerJob, 16384> g_job_queue;
@@ -27,11 +66,15 @@ void push_job(WorkerJob* job) {
 }
 
 // High-performance worker thread with condition variable wakeup
-void worker_thread_run(std::atomic<bool>& running) {
+// High-performance worker thread with condition variable wakeup
+void worker_thread_run(std::atomic<bool>& running, int thread_idx) {
     std::vector<std::shared_ptr<AwsPipe>> sessions;
     static switch_time_t last_cleanup = 0;
     
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "High-performance worker thread started\n");
+    // Set thread affinity based on index and Env Var
+    set_thread_affinity(thread_idx);
+    
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "High-performance worker thread %d started\n", thread_idx);
 
     while (running.load(std::memory_order_relaxed)) {
         bool work_done = false;

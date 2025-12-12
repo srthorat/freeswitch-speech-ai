@@ -9,6 +9,7 @@ This document provides a technical reference for the **completed** high-scale ar
 | **Audio Buffer** | Lock-Free SPSC Ring Buffer | ✅ Complete | Zero-copy audio frame storage between media thread and worker thread. |
 | **Session Pool** | Lock-Free Object Pool | ✅ Complete | Pre-allocated `AwsPipe` session objects to avoid `malloc`. |
 | **Threading** | Adaptive Worker Pool (MPSC) | ✅ Complete | Small, fixed pool with adaptive backoff (10μs-1ms scaling). |
+| **Thread Pinning** | CPU Affinity (pthread) | ✅ Complete | Binds worker threads to specific cores (`MOD_AWS_WORKER_AFFINITY`). |
 | **AWS Client** | Thread-Local Client Manager | ✅ Complete | Zero-contention AWS SDK client access via thread_local storage. |
 | **Media Bug** | FreeSWITCH Core | ✅ Complete | Audio frame capture (Producer). |
 | **HTTP Client** | Async HTTP/2 with Connection Pooling | ✅ Complete | Non-blocking HTTP client for Pusher/webhook delivery. |
@@ -415,5 +416,16 @@ private:
     void* m_node; // PoolNode pointer for object pool management
 };
 ```
+
+---
+
+## 5. Clean Shutdown & Idempotency (Stability)
+
+**Problem**: The `stop` command can race with channel hangup (`SWITCH_ABC_TYPE_CLOSE`). If resources are freed while the API tries to stop them, crashes occur.
+
+**Solution**:
+1. **Idempotent API**: `uuid_aws_transcribe <uuid> stop` returns `+OK Success` even if the session has already hung up. This prevents spurious "-ERR Operation Failed" logs in automation scripts and aligns with `mod_deepgram_transcribe`.
+2. **RAII Lifecycle**: `AwsPipe` uses `std::shared_ptr` (see Section 3.6), ensuring that even if the session stops and the media bug is removed, the `AwsPipe` remains alive until all worker threads and callbacks release their references.
+3. **Graceful Disconnect**: `aws_transcribe_session_stop` signals the worker thread to close the stream (`JobType::Disconnect`) but relies on the worker thread to verify `AwsPipe` validity via weak/shared pointers, preventing Use-After-Free.
 
 ---

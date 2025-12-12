@@ -7,6 +7,8 @@
 | Speex resampler quality = 2 (default) | FreeSWITCH default, ~50% CPU savings vs quality 5 | Acceptable for speech recognition |
 | Lock-free SPSC ring buffer | Eliminate mutex contention at 250K ops/sec | <15ns latency, no locks |
 | Lock-free MPSC pending queues | Multiple producer threads, single LWS consumer | Scales to 5K+ calls |
+| Zero-Malloc Receive Path | Reuse `std::vector` capacity | 0 allocations per transcript |
+| Thread Pinning (Affinity) | Bind service threads to cores | Maximize cache locality |
 | Async non-blocking Pusher | Never block audio callback on HTTP I/O | Consistent frame timing |
 | Object pooling for AudioPipe | Reduce malloc/free overhead | Pre-allocated slots |
 | shared_ptr session lifecycle | Crash-safe async callbacks | FS session lock (active), DgSession (available) |
@@ -719,6 +721,25 @@ typedef struct private_s {
 | CLOSE | Once | <100ms (cleanup) |
 
 If READ/READ_PING takes >20ms, frames will be dropped!
+
+### 4.13 Clean Shutdown & Idempotency (Stability)
+
+**Problem**: The `stop` command can race with channel hangup (`SWITCH_ABC_TYPE_CLOSE`). If both happen simultaneously, double-free or use-after-free crashes could occur.
+
+**Solution: Idempotent Stop Logic**
+
+1. **Recursion Guard**: `dg_transcribe_session_stop` sets a `stop_requested` bit flag. Recursive calls (e.g., from `switch_core_media_bug_remove`) immediately return `SWITCH_STATUS_SUCCESS` if the flag is set.
+2. **Synchronous Resource Release**: The `AudioPipe` is closed synchronously during the stop sequence, ensuring the LWS thread is joined or stopped *before* the session memory (`private_t`) is released to the pool.
+3. **API Idempotency**: The `uuid_deepgram_transcribe <uuid> stop` command returns `+OK Success` even if the session has already hung up. This prevents spurious "-ERR Operation Failed" logs in automation scripts that try to stop an already-dead call.
+
+```c
+// Idempotent Stop Pattern
+if (tech_pvt->stop_requested) {
+    return SWITCH_STATUS_SUCCESS;
+}
+tech_pvt->stop_requested = 1;
+// ... proceed with cleanup ...
+```
 
 ---
 

@@ -23,7 +23,7 @@ extern std::condition_variable g_job_cv;
 extern std::mutex g_job_cv_mutex;
 
 void push_job(WorkerJob* job);
-void worker_thread_run(std::atomic<bool>& running);
+void worker_thread_run(std::atomic<bool>& running, int thread_idx);
 
 // Performance monitoring
 uint64_t get_worker_stats_jobs_processed();

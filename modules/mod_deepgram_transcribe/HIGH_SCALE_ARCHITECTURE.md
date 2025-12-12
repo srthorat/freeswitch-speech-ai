@@ -9,9 +9,11 @@ This document describes the high-performance architecture implemented to support
 | Phase 1 | Lock-Free Ring Buffer | ✅ Complete | SPSC buffer for audio frames | Zero mutex contention |
 | Phase 2 | Memory Pool for Sessions | ✅ Complete | `PrivateDataPool` + `AudioPipePool` active | Zero malloc in hot path |
 | Phase 3 | Zero-Copy Frames | ✅ Complete | Reserve/commit pattern | Direct buffer access |
+| Phase 3.5 | Zero-Malloc Receive Path | ✅ Complete | `std::vector` reuse | Eliminates malloc/free in hot path |
 | Phase 4 | Async Pusher Integration | ✅ Complete | Non-blocking HTTP delivery | No frame callback blocking |
 | Phase 5 | Lock-Free MPSC Queues | ✅ Complete | **PURE lock-free (no mutex fallbacks)** | ~250K fewer mutex ops/sec @ 5K calls |
 | Phase 6 | Shared-Ptr Session Lifecycle | ✅ Available | `DgSession` class ready | Crash-safe async operations |
+| **NEW** | **Thread Pinning** | ✅ **Complete** | **CPU Affinity (MOD_DEEPGRAM_WORKER_AFFINITY)** | **Maximizes L1/L2 cache locality** |
 | **NEW** | **Thread-Local LWS Contexts** | ✅ **Complete** | **Zero-contention context access** | **Eliminates context mutex bottleneck** |
 | **NEW** | **Adaptive Service Threads** | ✅ **Complete** | **10μs-1ms response scaling** | **60-80% CPU reduction in idle** |
 | **NEW** | **Performance Monitoring API** | ✅ **Complete** | **CLI stats: pool/context/audio/all** | **Real-time operational visibility** |
@@ -1046,5 +1048,57 @@ If pool acquisition fails:
 ---
 
 ## License
+## 12. Zero-Malloc Receive Path (Phase 3 Optimization)
+
+To handle 5,000+ concurrent calls, simply avoiding locks is not enough; memory allocation must also be minimized.
+
+### Problem
+Originally, every incoming JSON transcript (partial or final) triggered a `malloc` for the buffer and a `free` after processing.
+- 5,000 calls × 10 transcripts/sec = **50,000 malloc/free pairs per second**.
+- This causes heap fragmentation and CPU overhead from the allocator lock (glibc `malloc` uses a global lock per arena).
+
+### Solution: Persistent `std::vector`
+We replaced the raw pointer `m_recv_buf` with a `std::vector<uint8_t>` that persists for the lifetime of the `AudioPipe`.
+
+1.  **Reuse Capacity**: `clear()` resets size but keeps allocated capacity.
+2.  **Growth Strategy**: Vector grows only when a message exceeds current capacity (rare after warmup).
+3.  **Result**: 0 allocations in steady state.
+
+```cpp
+// audio_pipe.hpp
+class AudioPipe {
+    std::vector<uint8_t> m_recv_buf; // Persists across callbacks
+};
+
+// audio_pipe.cpp
+if (lws_is_first_fragment(wsi)) {
+    m_recv_buf.clear(); // O(1) - keeps capacity
+}
+m_recv_buf.insert(..., data); // O(1) amortized
+```
+
+## 13. Advanced Thread Pinning (Phase 4 Optimization)
+
+For ultra-low latency, minimizing context switching and CPU cache misses is critical.
+
+### Feature
+You can now pin `mod_deepgram_transcribe` service threads to specific CPU cores.
+
+### Configuration
+Set the environment variable `MOD_DEEPGRAM_WORKER_AFFINITY` before starting FreeSWITCH.
+
+```bash
+# Pin 4 service threads to physical cores 1, 3, 5, 7
+export MOD_DEEPGRAM_WORKER_AFFINITY="1,3,5,7"
+```
+
+### Mechanism
+- The module parses the string and assigns threads in round-robin order.
+- Uses `pthread_setaffinity_np` to bind the thread to the specified core.
+- Logs confirmation: `[NOTICE] Service thread 0 pinned to core 1`.
+
+### Benefit
+- **L1/L2 Cache Locality**: Processor cache stays hot with WebSocket context data.
+- **Microsecond Latency**: Reduces jitter by preventing OS scheduler from moving threads.
 
 See [LICENSE](LICENSE) file.

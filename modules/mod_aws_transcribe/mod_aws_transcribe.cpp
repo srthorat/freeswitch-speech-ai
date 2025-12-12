@@ -24,9 +24,14 @@ extern "C" {
 void aws_init();
 void aws_cleanup();
 
+void aws_cleanup();
+
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_aws_transcribe_shutdown);
 SWITCH_MODULE_LOAD_FUNCTION(mod_aws_transcribe_load);
 SWITCH_MODULE_DEFINITION(mod_aws_transcribe, mod_aws_transcribe_load, mod_aws_transcribe_shutdown, NULL);
+
+// Forward declaration
+void worker_thread_run(std::atomic<bool>& running, int thread_idx);
 
 namespace {
     std::vector<std::thread> g_worker_threads;
@@ -205,20 +210,20 @@ SWITCH_STANDARD_API(aws_transcribe_function)
 	} else {
 		switch_core_session_t *lsession = NULL;
 
-		if (!strcasecmp(argv[1], "stats")) {
-			// Performance monitoring command
-			uint64_t jobs_processed = get_worker_stats_jobs_processed();
-			uint64_t active_sessions = get_worker_stats_active_sessions();
-			uint64_t client_count = g_client_manager.getClientCount();
+			if (!strcasecmp(argv[1], "stats")) {
+				// Performance monitoring command
+				uint64_t jobs_processed = get_worker_stats_jobs_processed();
+				uint64_t active_sessions = get_worker_stats_active_sessions();
+				uint64_t client_count = g_client_manager.getClientCount();
 			
-			stream->write_function(stream, "+OK AWS Transcribe Performance Stats:\n");
-			stream->write_function(stream, "  Jobs Processed: %lu\n", jobs_processed);
-			stream->write_function(stream, "  Active Sessions: %lu\n", active_sessions);
-			stream->write_function(stream, "  AWS Clients: %lu\n", client_count);
-			stream->write_function(stream, "  Memory Pool Usage: [Available in next version]\n");
-			status = SWITCH_STATUS_SUCCESS;
-		} else if ((lsession = switch_core_session_locate(argv[0]))) {
-			if (!strcasecmp(argv[1], "stop")) {
+				stream->write_function(stream, "+OK AWS Transcribe Performance Stats:\n");
+				stream->write_function(stream, "  Jobs Processed: %lu\n", jobs_processed);
+				stream->write_function(stream, "  Active Sessions: %lu\n", active_sessions);
+				stream->write_function(stream, "  AWS Clients: %lu\n", client_count);
+				stream->write_function(stream, "  Memory Pool Usage: [Available in next version]\n");
+				status = SWITCH_STATUS_SUCCESS;
+			} else if ((lsession = switch_core_session_locate(argv[0]))) {
+				if (!strcasecmp(argv[1], "stop")) {
 				const char *bugname = argc > 2 ? argv[2] : "aws_transcribe";
     		    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "stop transcribing\n");
 				status = aws_transcribe_session_stop(lsession, 0, (char*)bugname);
@@ -258,7 +263,17 @@ SWITCH_STANDARD_API(aws_transcribe_function)
                 status = start_capture(lsession, lang, interim, flags, sampling, bugname, metadata);
 			}
 			switch_core_session_rwunlock(lsession);
-		}
+		} else {
+            // Session not found handling
+            if (!strcasecmp(argv[1], "stop")) {
+                // Return Success if session is gone (idempotent stop)
+                status = SWITCH_STATUS_SUCCESS;
+            } else {
+                status = SWITCH_STATUS_FALSE;
+                stream->write_function(stream, "-ERR Session not found\n");
+                goto done;
+            }
+        }
 	}
 
 	if (status == SWITCH_STATUS_SUCCESS) {
@@ -297,7 +312,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aws_transcribe_load)
     if (num_threads == 0) num_threads = 1;
     g_running = true;
     for (unsigned int i = 0; i < num_threads; ++i) {
-        g_worker_threads.emplace_back(worker_thread_run, std::ref(g_running));
+        g_worker_threads.emplace_back(worker_thread_run, std::ref(g_running), i);
     }
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Started %u worker threads\n", num_threads);
 

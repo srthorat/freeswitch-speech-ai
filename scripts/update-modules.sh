@@ -196,12 +196,12 @@ check_success "Failed to compile mod_audio_fork.c" "${LOG_DIR}/update_mod_audio_
 
 echo "  Compiling mod_audio_fork C++ sources (C++17 for lock-free ring buffer & memory pools)..."
 log_command "mod_audio_fork C++" "${LOG_DIR}/update_mod_audio_fork_cpp.log" \
-    g++ -fPIC -c -std=c++17 -O2 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
+    g++ -fPIC -c -std=c++17 -flto -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include lws_glue.cpp audio_pipe.cpp parser.cpp
 check_success "Failed to compile mod_audio_fork C++ sources" "${LOG_DIR}/update_mod_audio_fork_cpp.log"
 
 echo "  Linking mod_audio_fork..."
 log_command "mod_audio_fork link" "${LOG_DIR}/update_mod_audio_fork_link.log" \
-    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto
+    g++ -shared -flto -O3 -march=native -o ${FS_PREFIX}/lib/freeswitch/mod/mod_audio_fork.so *.o -lwebsockets -lpthread -lssl -lcrypto
 check_success "Failed to link mod_audio_fork" "${LOG_DIR}/update_mod_audio_fork_link.log"
 
 echo -e "${GREEN}✓ mod_audio_fork${NC}"
@@ -215,22 +215,22 @@ rm -f *.o *.so
 
 echo "  Compiling mod_aws_transcribe C++ sources..."
 log_command "mod_aws_transcribe C++" "${LOG_DIR}/update_mod_aws_transcribe_cpp.log" \
-    g++ -fPIC -c -std=c++17 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include -I/usr/local/include/aws/core -I/usr/local/include/aws/transcribestreaming mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp
+    g++ -fPIC -c -std=c++17 -flto -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include -I/usr/local/include/aws/core -I/usr/local/include/aws/transcribestreaming mod_aws_transcribe.cpp aws_transcribe_glue.cpp audio_pipe.cpp worker_thread.cpp aws_client_manager.cpp
 check_success "Failed to compile mod_aws_transcribe C++ sources" "${LOG_DIR}/update_mod_aws_transcribe_cpp.log"
 
 echo "  Compiling async_http.c..."
 log_command "mod_aws_transcribe async_http" "${LOG_DIR}/update_mod_aws_transcribe_async_http.log" \
-    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_http.c
+    gcc -fPIC -c -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_http.c
 check_success "Failed to compile mod_aws_transcribe async_http.c" "${LOG_DIR}/update_mod_aws_transcribe_async_http.log"
 
 echo "  Compiling async_pusher.c..."
 log_command "mod_aws_transcribe async_pusher" "${LOG_DIR}/update_mod_aws_transcribe_async_pusher.log" \
-    gcc -fPIC -c -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_pusher.c
+    gcc -fPIC -c -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include async_pusher.c
 check_success "Failed to compile mod_aws_transcribe async_pusher.c" "${LOG_DIR}/update_mod_aws_transcribe_async_pusher.log"
 
 echo "  Linking mod_aws_transcribe..."
 log_command "mod_aws_transcribe link" "${LOG_DIR}/update_mod_aws_transcribe_link.log" \
-    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
+    g++ -shared -flto -O3 -march=native -o ${FS_PREFIX}/lib/freeswitch/mod/mod_aws_transcribe.so \
     mod_aws_transcribe.o aws_transcribe_glue.o audio_pipe.o worker_thread.o aws_client_manager.o async_http.o async_pusher.o \
     -L/usr/local/lib -laws-cpp-sdk-transcribestreaming -laws-cpp-sdk-core \
     -laws-c-event-stream -laws-checksums -laws-c-common \
@@ -263,12 +263,12 @@ check_success "Failed to compile async_pusher.c" "${LOG_DIR}/update_mod_deepgram
 
 echo "  Compiling mod_deepgram_transcribe C++ sources (thread-local contexts, lock-free queues, zero-copy & memory pools)..."
 log_command "mod_deepgram_transcribe C++" "${LOG_DIR}/update_mod_deepgram_transcribe_cpp.log" \
-    g++ -fPIC -c -std=c++17 -O2 -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp dg_session.cpp context_manager.cpp
+    g++ -fPIC -c -std=c++17 -flto -O3 -march=native -I${FS_PREFIX}/include/freeswitch -I/usr/local/include dg_transcribe_glue.cpp audio_pipe.cpp memory_pool.cpp dg_session.cpp context_manager.cpp
 check_success "Failed to compile mod_deepgram_transcribe C++ sources" "${LOG_DIR}/update_mod_deepgram_transcribe_cpp.log"
 
 echo "  Linking mod_deepgram_transcribe..."
 log_command "mod_deepgram_transcribe link" "${LOG_DIR}/update_mod_deepgram_transcribe_link.log" \
-    g++ -shared -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
+    g++ -shared -flto -O3 -march=native -o ${FS_PREFIX}/lib/freeswitch/mod/mod_deepgram_transcribe.so \
     mod_deepgram_transcribe.o async_http.o async_pusher.o dg_transcribe_glue.o audio_pipe.o memory_pool.o dg_session.o context_manager.o \
     -lwebsockets -lcurl -lpthread -lssl -lcrypto
 check_success "Failed to link mod_deepgram_transcribe" "${LOG_DIR}/update_mod_deepgram_transcribe_link.log"

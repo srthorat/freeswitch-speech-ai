@@ -97,11 +97,9 @@ private:
 
 
 AwsPipe::AwsPipe() : m_pimpl(nullptr), m_node(nullptr) {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "AwsPipe::AwsPipe() - Object created at %p\n", this);
 }
 
 AwsPipe::~AwsPipe() {
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "AwsPipe::~AwsPipe() - Object destroyed at %p\n", this);
 }
 
 void AwsPipe::init(switch_core_session_t* session, uint32_t sampleRate, uint32_t channels, const AwsTranscribeOptions& options, const ResponseHandler_t& callback) {
