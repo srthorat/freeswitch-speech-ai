@@ -35,7 +35,7 @@ if [[ -z "$REPO_DIR" ]]; then
 fi
 
 echo "==============================================================="
-echo "Installing Google Speech Service v2"
+echo "Installing Unified Speech Sidecar"
 echo "Repo:        $REPO_DIR"
 echo "Branch:      $BRANCH"
 echo "Install dir: $INSTALL_DIR"

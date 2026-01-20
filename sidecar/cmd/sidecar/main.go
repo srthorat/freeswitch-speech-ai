@@ -11,9 +11,13 @@ import (
 	"time"
 
 	"google-speech-service-v2/internal/config"
-	"google-speech-service-v2/internal/google"
+	"google-speech-service-v2/internal/config"
+	"google-speech-service-v2/internal/interfaces"
 	"google-speech-service-v2/internal/logx"
 	"google-speech-service-v2/internal/metrics"
+	"google-speech-service-v2/internal/providers/aws"
+	"google-speech-service-v2/internal/providers/google_v1"
+	"google-speech-service-v2/internal/providers/google_v2"
 	"google-speech-service-v2/internal/publish"
 	"google-speech-service-v2/internal/wsserver"
 )
@@ -39,6 +43,9 @@ func main() {
 		"gomaxprocs", runtime.GOMAXPROCS(0),
 		"target_sample_rate", cfg.TargetSampleRate,
 		"max_buffer_ms", cfg.MaxBufferMs,
+		"target_sample_rate", cfg.TargetSampleRate,
+		"max_buffer_ms", cfg.MaxBufferMs,
+		"default_provider", cfg.DefaultProvider,
 		"google_project", cfg.GCPProject,
 		"default_location", cfg.GCPDefaultLocation,
 	)
@@ -50,18 +57,51 @@ func main() {
 		logger.Fatal("pusher init failed", "err", err)
 	}
 
-	g, err := google.NewClient(cfg, logger, m)
-	if err != nil {
-		logger.Fatal("google init failed", "err", err)
+	// Provider Factory
+	// In a real high-scale app, we might want to cache clients or use a proper DI container.
+	// For now, simple switch is effective.
+	// Note: internal/providers/* usually have their own internal connection pooling (like gRPC client).
+	
+	// Pre-initialize Google V2 client to share gRPC connection
+	var googleV2Client *google_v2.Client
+	if cfg.GCPProject != "" {
+		var gErr error
+		googleV2Client, gErr = google_v2.NewClient(cfg, logger, m)
+		if gErr != nil {
+			logger.Warn("google-v2 init failed (continuing, but google-v2 will fail)", "err", gErr)
+		} else {
+			defer googleV2Client.Close()
+		}
 	}
-	defer g.Close()
+
+	providerFactory := func(name string) interfaces.Provider {
+		switch name {
+		case "google-v2":
+			if googleV2Client == nil {
+				return nil
+			}
+			return googleV2Client
+		case "aws":
+			returnFunc, _ := aws.NewClient(cfg, logger, m)
+			if returnFunc == nil {
+				logger.Warn("aws provider failed to init (check credentials)")
+				return nil
+			} 
+			return returnFunc
+		case "google-v1":
+			returnFunc, _ := google_v1.NewClient(cfg, logger, m)
+			return returnFunc
+		default:
+			return nil
+		}
+	}
 
 	ws := wsserver.New(wsserver.Dependencies{
-		Cfg:       cfg,
-		Google:    g,
-		Publisher: pub,
-		Metrics:   m,
-		Logger:    logger,
+		Cfg:            cfg,
+		ProviderFactory: providerFactory,
+		Publisher:      pub,
+		Metrics:        m,
+		Logger:         logger,
 	})
 
 	adminMux := http.NewServeMux()

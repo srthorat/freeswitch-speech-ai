@@ -7,7 +7,8 @@ import (
 
 	"google-speech-service-v2/internal/audio"
 	"google-speech-service-v2/internal/config"
-	"google-speech-service-v2/internal/google"
+	"google-speech-service-v2/internal/config"
+	"google-speech-service-v2/internal/interfaces"
 	"google-speech-service-v2/internal/logx"
 	"google-speech-service-v2/internal/metrics"
 	"google-speech-service-v2/internal/publish"
@@ -15,7 +16,7 @@ import (
 
 type SessionDeps struct {
 	Cfg       *config.Config
-	Google    *google.Client
+	Provider  interfaces.Provider
 	Publisher publish.Publisher
 	Metrics   *metrics.Metrics
 	Logger    *logx.Logger
@@ -28,7 +29,7 @@ type SessionDeps struct {
 
 type Session struct {
 	cfg *config.Config
-	g   *google.Client
+	prov interfaces.Provider
 	pub publish.Publisher
 	m   *metrics.Metrics
 	log *logx.Logger
@@ -41,14 +42,15 @@ type Session struct {
 
 	pipeline *audio.AudioPipeline
 
-	stt *google.StreamSession
+	stream interfaces.Stream
 }
 
 func NewSession(dep SessionDeps) *Session {
 	ctx, cancel := context.WithCancel(dep.Ctx)
 	return &Session{
+	return &Session{
 		cfg:      dep.Cfg,
-		g:        dep.Google,
+		prov:     dep.Provider,
 		pub:      dep.Publisher,
 		m:        dep.Metrics,
 		log:      dep.Logger,
@@ -61,23 +63,21 @@ func NewSession(dep SessionDeps) *Session {
 }
 
 func (s *Session) Start() error {
-	stt, err := s.g.StartStream(s.ctx, google.StreamConfig{
+	stt, err := s.prov.StartStream(s.ctx, interfaces.StreamConfig{
 		UUID:       s.meta.UUID,
 		SIPCallID:  s.meta.SIPCallID,
-		Project:    s.cfg.GCPProject,
-		Location:   s.location,
-		Recognizer: s.cfg.GCPRecognizerID,
-		AutoCreate: s.cfg.GCPEnableAutoCreate,
-		Lang:       s.meta.Lang,
+		Location:   s.location, 
+		Language:   s.meta.Lang,
 		SampleRate: s.cfg.TargetSampleRate,
 		Channels:   s.meta.Channels,
-		Model:      s.cfg.GCPModel,
+		Model:      s.cfg.GCPModel, // We can rename this in config later to be generic 'Model'
 		Interim:    s.cfg.GCPInterimResults,
 	})
 	if err != nil {
 		return err
 	}
-	s.stt = stt
+	}
+	s.stream = stt
 
 	go s.senderLoop()
 	go s.receiverLoop()
@@ -96,15 +96,15 @@ func (s *Session) Start() error {
 
 func (s *Session) Stop() {
 	s.cancel()
-	if s.stt != nil {
-		s.stt.Close()
-		s.stt = nil
+	if s.stream != nil {
+		s.stream.Close()
+		s.stream = nil
 	}
 	s.log.Info("session stopped", "uuid", s.meta.UUID, "sip_call_id", s.meta.SIPCallID)
 }
 
 func (s *Session) OnAudio(pcm []byte) error {
-	if s.stt == nil {
+	if s.stream == nil {
 		return errors.New("stt not started")
 	}
 	over, err := s.pipeline.PushPCM16(pcm)
@@ -132,7 +132,7 @@ func (s *Session) senderLoop() {
 		case <-s.ctx.Done():
 			return
 		case <-tick.C:
-			if s.stt == nil {
+			if s.stream == nil {
 				return
 			}
 			n := s.pipeline.Read(buf)
@@ -141,7 +141,7 @@ func (s *Session) senderLoop() {
 			}
 			out := buf[:n]
 			s.m.AudioBytesToGoogle.Add(float64(n))
-			if err := s.stt.SendAudio(out); err != nil {
+			if err := s.stream.SendAudio(out); err != nil {
 				s.log.Warn("SendAudio failed", "uuid", s.meta.UUID, "err", err)
 				return
 			}
@@ -160,14 +160,14 @@ func (s *Session) receiverLoop() {
 		case <-s.ctx.Done():
 			return
 
-		case err := <-s.stt.Errs():
+		case err := <-s.stream.Errs():
 			// stream ended
 			if err != nil {
 				s.log.Warn("google stream ended", "uuid", s.meta.UUID, "err", err)
 			}
 			return
 
-		case res, ok := <-s.stt.Results():
+		case res, ok := <-s.stream.Results():
 			if !ok {
 				return
 			}

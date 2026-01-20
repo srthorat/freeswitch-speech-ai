@@ -13,7 +13,8 @@ import (
 
 	"google-speech-service-v2/internal/audio"
 	"google-speech-service-v2/internal/config"
-	"google-speech-service-v2/internal/google"
+	"google-speech-service-v2/internal/config"
+	"google-speech-service-v2/internal/interfaces"
 	"google-speech-service-v2/internal/logx"
 	"google-speech-service-v2/internal/metrics"
 	"google-speech-service-v2/internal/publish"
@@ -21,7 +22,7 @@ import (
 
 type Dependencies struct {
 	Cfg       *config.Config
-	Google    *google.Client
+	ProviderFactory func(name string) interfaces.Provider
 	Publisher publish.Publisher
 	Metrics   *metrics.Metrics
 	Logger    *logx.Logger
@@ -29,7 +30,7 @@ type Dependencies struct {
 
 type Server struct {
 	cfg *config.Config
-	g   *google.Client
+	factory func(name string) interfaces.Provider
 	pub publish.Publisher
 	m   *metrics.Metrics
 	log *logx.Logger
@@ -42,9 +43,9 @@ type Server struct {
 
 func New(dep Dependencies) *Server {
 	return &Server{
-		cfg: dep.Cfg,
-		g:   dep.Google,
-		pub: dep.Publisher,
+		cfg:     dep.Cfg,
+		factory: dep.ProviderFactory,
+		pub:     dep.Publisher,
 		m:   dep.Metrics,
 		log: dep.Logger,
 		upgrader: websocket.Upgrader{
@@ -62,6 +63,7 @@ type Meta struct {
 	SampleRate int    `json:"sample_rate"`
 	Channels   int    `json:"channels"`
 	Lang       string `json:"lang"`
+	Provider   string `json:"provider"` // "google-v2", "aws", etc.
 	Location   string `json:"location"`
 	StereoSwap bool   `json:"stereo_swap"`
 
@@ -125,9 +127,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer pipeline.Close()
 
+	// Resolve Provider
+	providerName := meta.Provider
+	if providerName == "" {
+		providerName = s.cfg.DefaultProvider
+	}
+	prov := s.factory(providerName)
+	if prov == nil {
+		s.log.Error("provider not found", "uuid", meta.UUID, "provider", providerName)
+		return
+	}
+
 	sess := NewSession(SessionDeps{
 		Cfg:       s.cfg,
-		Google:    s.g,
+		Provider:  prov,
 		Publisher: s.pub,
 		Metrics:   s.m,
 		Logger:    s.log,

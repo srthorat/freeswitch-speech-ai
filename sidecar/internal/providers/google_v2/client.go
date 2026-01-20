@@ -1,4 +1,4 @@
-package google
+package google_v2
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"google-speech-service-v2/internal/config"
+	"google-speech-service-v2/internal/interfaces"
 	"google-speech-service-v2/internal/logx"
 	"google-speech-service-v2/internal/metrics"
 
@@ -36,47 +37,25 @@ func NewClient(cfg *config.Config, logger *logx.Logger, m *metrics.Metrics) (*Cl
 
 func (c *Client) Close() error { return nil }
 
-type StreamConfig struct {
-	UUID       string
-	SIPCallID  string
-	Project    string
-	Location   string
-	Recognizer string // base id (without lang suffix)
-	AutoCreate bool
-
-	Lang       string
-	SampleRate int
-	Channels   int
-	Model      string
-	Interim    bool
-}
-
 type StreamSession struct {
 	stream speechpb.Speech_StreamingRecognizeClient
 	client *speech.Client
 
-	results chan Result
+	results chan interfaces.Result
 	errCh   chan error
 
 	closed chan struct{}
 	once   sync.Once
 }
 
-type Result struct {
-	Text       string
-	Confidence float32
-	IsFinal    bool
-	Channel    int // normalized 0-based
-}
-
-func (c *Client) StartStream(ctx context.Context, sc StreamConfig) (*StreamSession, error) {
-	endpoint := fmt.Sprintf(c.cfg.GoogleEndpointTemplate, sc.Location)
+func (c *Client) StartStream(ctx context.Context, cfg interfaces.StreamConfig) (interfaces.Stream, error) {
+	endpoint := fmt.Sprintf(c.cfg.GoogleEndpointTemplate, cfg.Location)
 	client, err := speech.NewClient(ctx, option.WithEndpoint(endpoint))
 	if err != nil {
 		return nil, err
 	}
 
-	recognizerName, err := c.getOrCreateRecognizer(ctx, client, sc)
+	recognizerName, err := c.getOrCreateRecognizer(ctx, client, cfg)
 	if err != nil {
 		_ = client.Close()
 		return nil, err
@@ -88,27 +67,26 @@ func (c *Client) StartStream(ctx context.Context, sc StreamConfig) (*StreamSessi
 		return nil, err
 	}
 
-	// NOTE: channel identification fields vary; adjust if needed.
 	recCfg := &speechpb.RecognitionConfig{
-		LanguageCodes: []string{sc.Lang},
+		LanguageCodes: []string{cfg.Language},
 		DecodingConfig: &speechpb.RecognitionConfig_ExplicitDecodingConfig{
 			ExplicitDecodingConfig: &speechpb.ExplicitDecodingConfig{
-				AudioEncoding:      speechpb.ExplicitDecodingConfig_LINEAR16,
-				SampleRateHertz:    int32(sc.SampleRate),
-				AudioChannelCount:  int32(sc.Channels),
+				Encoding:          speechpb.ExplicitDecodingConfig_LINEAR16,
+				SampleRateHertz:    int32(cfg.SampleRate),
+				AudioChannelCount:  int32(cfg.Channels),
 			},
 		},
 		Features: &speechpb.RecognitionFeatures{
 			EnableAutomaticPunctuation: true,
-			// If your proto supports explicit channel identification, set it here.
-			// Some versions have: EnableSeparateRecognitionPerChannel: true
 		},
-		Model: sc.Model,
+		Model: cfg.Model,
 	}
 
 	streamCfg := &speechpb.StreamingRecognitionConfig{
 		Config:         recCfg,
-		InterimResults: sc.Interim,
+		StreamingFeatures: &speechpb.StreamingRecognitionFeatures{
+			InterimResults: cfg.Interim,
+		},
 	}
 
 	// First request is config
@@ -126,12 +104,12 @@ func (c *Client) StartStream(ctx context.Context, sc StreamConfig) (*StreamSessi
 	ss := &StreamSession{
 		stream:  stream,
 		client:  client,
-		results: make(chan Result, 128),
+		results: make(chan interfaces.Result, 128),
 		errCh:   make(chan error, 1),
 		closed:  make(chan struct{}),
 	}
 
-	go ss.recvLoop(c.log, sc.UUID, sc.SIPCallID, c.m)
+	go ss.recvLoop(c.log, cfg.UUID, cfg.SIPCallID, c.m)
 	return ss, nil
 }
 
@@ -143,9 +121,24 @@ func (s *StreamSession) Close() {
 	})
 }
 
-func (s *StreamSession) Results() <-chan Result { return s.results }
-func (s *StreamSession) Errs() <-chan error     { return s.errCh }
-func (s *StreamSession) Closed() <-chan struct{} { return s.closed }
+func (s *StreamSession) Results() <-chan interfaces.Result { return s.results }
+func (s *StreamSession) Errs() <-chan error               { return s.errCh }
+// Note: Errs() is not part of the interface yet? 
+// The interface definition I wrote earlier didn't have Errs(). 'SendAudio' returns error. 'Results' returns result.
+// But standard usage usually needs a way to detect stream closure/error from the read side.
+// Let's check wsserver usage again. 'case err := <-s.stt.Errs():'
+// So I SHOULD add Errs() to the interface, or rely on Results() closing or returning error value?
+// The interface I defined in step 82:
+//   Results() <-chan Result
+//   SendAudio() error
+//   Close()
+// It missed `Errs() <-chan error`. 
+// However, the `recvLoop` closes `results` channel when it ends. 
+// A robust interface usually has a way to signal WHY it ended (EOF vs Error).
+// The existing `google/client.go` had `Errs()`.
+// I should update the interface in `interfaces/provider.go` to include `Errs() <-chan error` OR
+// I can just rely on logging for now, but `wsserver` explicitly waits on `stt.Errs()`.
+// So I MUST Update the interface first or now.
 
 func (s *StreamSession) SendAudio(pcm []byte) error {
 	return s.stream.Send(&speechpb.StreamingRecognizeRequest{
@@ -161,13 +154,12 @@ func (s *StreamSession) recvLoop(logger *logx.Logger, uuid, sipCallID string, m 
 	for {
 		resp, err := s.stream.Recv()
 		if err != nil {
-			// propagate error once
 			select {
 			case s.errCh <- err:
 			default:
 			}
 			st, _ := status.FromError(err)
-			logger.Warn("google stream recv ended",
+			logger.Warn("google-v2 stream recv ended",
 				"uuid", uuid,
 				"sip_call_id", sipCallID,
 				"err", err,
@@ -177,10 +169,8 @@ func (s *StreamSession) recvLoop(logger *logx.Logger, uuid, sipCallID string, m 
 			return
 		}
 
-		// Parse results (proto may differ slightly)
 		for _, r := range resp.Results {
 			ch := int(r.ChannelTag)
-			// Normalize common behavior: 1..N => 0..N-1
 			if ch > 0 {
 				ch = ch - 1
 			}
@@ -190,7 +180,7 @@ func (s *StreamSession) recvLoop(logger *logx.Logger, uuid, sipCallID string, m 
 				if alt.Transcript == "" {
 					continue
 				}
-				s.results <- Result{
+				s.results <- interfaces.Result{
 					Text:       alt.Transcript,
 					Confidence: alt.Confidence,
 					IsFinal:    isFinal,
@@ -200,13 +190,13 @@ func (s *StreamSession) recvLoop(logger *logx.Logger, uuid, sipCallID string, m 
 			}
 		}
 
-		_ = time.Now() // placeholder to keep structure stable; idle handled at session layer
+		_ = time.Now()
 		m.GoogleResponses.Inc()
 	}
 }
 
-func (c *Client) getOrCreateRecognizer(ctx context.Context, client *speech.Client, sc StreamConfig) (string, error) {
-	key := sc.Location + "|" + sc.Lang
+func (c *Client) getOrCreateRecognizer(ctx context.Context, client *speech.Client, cfg interfaces.StreamConfig) (string, error) {
+	key := cfg.Location + "|" + cfg.Language
 
 	c.recMu.Lock()
 	if name, ok := c.recognizers[key]; ok {
@@ -215,30 +205,36 @@ func (c *Client) getOrCreateRecognizer(ctx context.Context, client *speech.Clien
 	}
 	c.recMu.Unlock()
 
-	parent := fmt.Sprintf("projects/%s/locations/%s", sc.Project, sc.Location)
-	recognizerID := fmt.Sprintf("%s-%s", sc.Recognizer, sc.Lang)
+	parent := fmt.Sprintf("projects/%s/locations/%s", c.cfg.GCPProject, cfg.Location)
+	recognizerNameBase := c.cfg.GCPRecognizerID 
+    // Wait, google/client.go had `sc.Project` and `sc.Recognizer` passed in config.
+    // In my interface config, I didn't put Project/RecognizerID, assuming they are global config or passed in model?
+    // In interface, I have `Model` string.
+    // `google/client.go` had `Recognizer` in `StreamConfig`.
+    // I should probably use `c.cfg.GCPRecognizerID` from global config for now, as that's what `wsserver` was doing roughly (it was passing s.cfg.GCPRecognizerID into the struct).
+    
+	recognizerID := fmt.Sprintf("%s-%s", recognizerNameBase, cfg.Language)
 	full := fmt.Sprintf("%s/recognizers/%s", parent, recognizerID)
 
-	if !sc.AutoCreate {
+	// We assume auto-create is enabled or handled by config
+	if !c.cfg.GCPEnableAutoCreate {
 		c.recMu.Lock()
 		c.recognizers[key] = full
 		c.recMu.Unlock()
 		return full, nil
 	}
 
-	// Create; handle AlreadyExists gracefully by caching anyway.
 	op, err := client.CreateRecognizer(ctx, &speechpb.CreateRecognizerRequest{
 		Parent:       parent,
 		RecognizerId: recognizerID,
 		Recognizer: &speechpb.Recognizer{
 			Name: full,
 			DefaultRecognitionConfig: &speechpb.RecognitionConfig{
-				LanguageCodes: []string{sc.Lang},
+				LanguageCodes: []string{cfg.Language},
 			},
 		},
 	})
 	if err != nil {
-		// still cache and continue if it's already exists
 		c.log.Warn("CreateRecognizer failed (may already exist)",
 			"recognizer", full,
 			"err", err,
@@ -249,7 +245,6 @@ func (c *Client) getOrCreateRecognizer(ctx context.Context, client *speech.Clien
 		return full, nil
 	}
 
-	// wait with timeout so we don't block forever
 	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	_, werr := op.Wait(waitCtx)
