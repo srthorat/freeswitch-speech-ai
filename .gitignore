@@ -39,3 +39,20 @@ libs/googleapis/
 # OS files
 .DS_Store
 Thumbs.db
+st-stt-v2.json
+
+# Python Virtual Environment
+.venv/
+venv/
+__pycache__/
+
+# Test Artifacts
+test/load_test_results_*.json
+mock_pusher_events.jsonl
+test/*.log
+fs-unified-stt/server.log
+
+# Compiled Binary
+fs-unified-stt/fs-unified-stt
+fs-unified-stt/fs-unified-stt-v2
+fs-unified-stt/fs-unified-stt-test
